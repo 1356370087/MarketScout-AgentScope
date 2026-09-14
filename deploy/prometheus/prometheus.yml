@@ -1,0 +1,26 @@
+# InsightForge Prometheus 抓取配置（compose profile "observability"）
+#
+# 同时抓取应用指标（api:2024，前缀 open_deep_research_*）与 LiteLLM
+# Proxy 指标（litellm-proxy:4000，部署健康/回退/冷却/延迟）。
+# 告警规则沿用 deploy/prometheus/alerts.yml。
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/rules/insightforge-alerts.yml
+
+scrape_configs:
+  - job_name: insightforge
+    metrics_path: /metrics
+    honor_labels: true
+    static_configs:
+      - targets: ["api:2024"]
+
+  - job_name: litellm-gateway
+    metrics_path: /metrics
+    # LiteLLM 的 /metrics 未鉴权；仅在 compose 内网抓取，不要把 4000 端口
+    # 映射到不受信网络（生产建议移除宿主机端口映射）。
+    static_configs:
+      - targets: ["litellm-proxy:4000"]

@@ -1,0 +1,13 @@
+# Grafana 仪表盘自动装配：/var/lib/grafana/dashboards 下的 JSON 由
+# compose 挂载（insightforge.json / litellm.json）。
+apiVersion: 1
+
+providers:
+  - name: insightforge
+    orgId: 1
+    folder: InsightForge
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards

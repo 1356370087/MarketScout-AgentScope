@@ -1,0 +1,418 @@
+# InsightForge LiteLLM Proxy 路由配置
+#
+# 填写步骤：
+# 1. 在 `.env` 中填写下方实际使用部署对应的 Provider API Key。
+# 2. 修改 `litellm_params.model`，格式遵循 LiteLLM Provider规范，例如
+#    `openai/gpt-4.1`、`deepseek/deepseek-chat`、
+#    `anthropic/claude-sonnet-4-5`。
+# 3. `model_name` 是应用调用的逻辑别名，必须与 `.env` 中的模型别名一致。
+#    已被 Run引用的 v1 别名不得原地改变策略；升级时新增 v2。
+# 4. 同一 `model_name` 下可以配置多个部署。Router会按 weight、rpm、tpm
+#    和 max_parallel_requests 使用 simple-shuffle 进行负载均衡。
+# 5. 每个部署必须声明 LiteLLM 已知的 `base_model`。未知或自托管模型必须
+#    按文末模板显式声明 token限制与真实价格。
+# 6. 当前研究与质量评估使用 Z.AI/GLM，回退使用 DeepSeek。
+#    密钥使用 `.env` 中已配置的凭据，并通过 os.environ/ 引用，
+#    禁止将明文密钥写入本文件（有测试守护）。
+
+model_list:
+  # Supervisor：负责研究规划与任务调度。
+  - model_name: if-supervisor-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 8
+      weight: 1
+      rpm: 300
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  # Researcher 主部署。相同逻辑别名下配置多个部署即可启用负载均衡。
+  - model_name: if-research-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 16
+      weight: 2
+      rpm: 600
+      tpm: 600000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  # Researcher 第二部署示例；与上一部署共同形成 2:1 权重。
+  - model_name: if-research-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 8
+      weight: 1
+      rpm: 300
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  # 低成本辅助模型组：摘要、对话压缩、Web重排与证据抽取。
+  - model_name: if-summarization-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 16
+      weight: 1
+      rpm: 600
+      tpm: 600000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-message-summary-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 8
+      weight: 1
+      rpm: 300
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-web-rerank-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 16
+      weight: 1
+      rpm: 600
+      tpm: 600000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-web-evidence-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 16
+      weight: 1
+      rpm: 600
+      tpm: 600000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  # 高质量写作与压缩模型组。
+  - model_name: if-compression-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 8
+      weight: 1
+      rpm: 300
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-final-report-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 4
+      weight: 1
+      rpm: 120
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  # 质量评估与离线评估模型组。
+  - model_name: if-quality-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 8
+      weight: 1
+      rpm: 300
+      tpm: 300000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-report-review-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 4
+      weight: 1
+      rpm: 120
+      tpm: 180000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-evaluation-v1
+    litellm_params:
+      model: zai/glm-5.3-flash
+      api_base: os.environ/ZHIPU_BASE_URL
+      api_key: os.environ/ZHIPU_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 4
+      weight: 1
+      rpm: 120
+      tpm: 200000
+    model_info:
+      base_model: zai/glm-5.3-flash
+      # 部署保守上限（Token）；费用单位为美元/Token，核对日期 2026-09-12。
+      # 价格来源：https://docs.z.ai/guides/overview/pricing
+      max_input_tokens: 131072
+      max_output_tokens: 32768
+      input_cost_per_token: 0.00000015
+      output_cost_per_token: 0.00000050
+
+  - model_name: if-fallback-v1
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+      extra_body:
+        thinking:
+          type: disabled
+      max_parallel_requests: 16
+      weight: 1
+      rpm: 600
+      tpm: 600000
+    model_info:
+      base_model: deepseek/deepseek-v4-flash
+
+  # Local Documents 固定 1536 维嵌入路由。更换维度必须重建文档索引。
+  - model_name: if-embedding-v1
+    litellm_params:
+      model: dashscope/qwen3.7-text-embedding
+      api_key: os.environ/DASHSCOPE_API_KEY
+      dimensions: 1536
+      max_parallel_requests: 16
+      rpm: 600
+      tpm: 1000000
+    model_info:
+      base_model: dashscope/qwen3.7-text-embedding
+      max_input_tokens: 8191
+      input_cost_per_token: 0.00000002
+      output_cost_per_token: 0
+
+  # 以下是可复制的 Provider填写模板，默认全部注释，不会参与路由。
+
+  # DeepSeek 原生路由示例：
+  # - model_name: if-research-v2
+  #   litellm_params:
+  #     model: deepseek/deepseek-chat
+  #     api_key: os.environ/DEEPSEEK_API_KEY
+  #     max_parallel_requests: 8
+  #     weight: 1
+  #     rpm: 300
+  #     tpm: 300000
+  #   model_info:
+  #     base_model: deepseek/deepseek-chat
+
+  # Anthropic 原生路由示例：
+  # - model_name: if-research-v2
+  #   litellm_params:
+  #     model: anthropic/claude-sonnet-4-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+  #     max_parallel_requests: 8
+  #     weight: 1
+  #     rpm: 300
+  #     tpm: 300000
+  #   model_info:
+  #     base_model: anthropic/claude-sonnet-4-5
+
+  # OpenAI 兼容端点示例（DashScope、vLLM、SGLang 等）：
+  # `api_base` 必须是 litellm-proxy 容器可访问的地址，不能使用只在宿主机
+  # 内可达的 localhost。Docker Desktop访问宿主机服务可使用 host.docker.internal。
+  # - model_name: if-quality-v2
+  #   litellm_params:
+  #     model: openai/请填写上游模型名称
+  #     api_key: os.environ/DASHSCOPE_API_KEY
+  #     api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+  #     max_parallel_requests: 4
+  #     weight: 1
+  #     rpm: 120
+  #     tpm: 200000
+  #   model_info:
+  #     # 未知模型必须填写以下限制和价格。价格单位为“每 token美元”，
+  #     # 下列数字只演示字段格式，不能直接作为生产价格使用。
+  #     base_model: openai/请填写用于能力识别的基础模型
+  #     max_input_tokens: 128000
+  #     max_output_tokens: 8192
+  #     input_cost_per_token: 0.000001
+  #     output_cost_per_token: 0.000004
+  #     cache_read_input_token_cost: 0.00000025
+
+  # 嵌入模型模板（供 Mem0 OSS embedder 等经网关统一路由）。DeepSeek 无
+  # embeddings API，需另行配置提供方；必须显式声明 token 上限与真实价格。
+  # - model_name: if-embedding-v1
+  #   litellm_params:
+  #     model: openai/text-embedding-3-small
+  #     api_key: os.environ/OPENAI_API_KEY
+  #     # api_base: https://your-openai-compatible-endpoint/v1
+  #   model_info:
+  #     base_model: openai/text-embedding-3-small
+  #     max_input_tokens: 8191
+  #     max_output_tokens: 8191
+  #     input_cost_per_token: 0.00000002
+  #     output_cost_per_token: 0
+
+router_settings:
+  # 通用负载均衡策略；Redis用于多 Proxy实例共享状态。
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
+  redis_host: os.environ/LITELLM_REDIS_HOST
+  redis_port: os.environ/LITELLM_REDIS_PORT
+
+litellm_settings:
+  # prometheus callback 挂载 /metrics；鉴权默认开启，这里显式关闭以便
+  # compose 内网的 Prometheus 免凭据抓取。生产环境不要把 4000 端口映射
+  # 到不受信网络，或删掉下面这行走带凭据抓取。
+  callbacks: ["prometheus"]
+  require_auth_for_metrics_endpoint: false
+  # 初始请求失败后最多再执行两次物理重试。应用 SDK自身不重试。
+  num_retries: 2
+  # 单次请求超时，单位为秒。
+  request_timeout: 180
+  # 同一部署在失败窗口达到阈值后进入 cooldown。
+  allowed_fails: 5
+  cooldown_time: 60
+  # 跨逻辑模型组 fallback。升级策略时新增版本别名，不要改写冻结别名。
+  fallbacks:
+    - if-supervisor-v1: [if-fallback-v1]
+    - if-research-v1: [if-fallback-v1]
+    - if-summarization-v1: [if-fallback-v1]
+    - if-message-summary-v1: [if-fallback-v1]
+    - if-web-rerank-v1: [if-fallback-v1]
+    - if-web-evidence-v1: [if-fallback-v1]
+    - if-compression-v1: [if-fallback-v1]
+    - if-final-report-v1: [if-fallback-v1]
+    - if-quality-v1: [if-fallback-v1]
+    - if-report-review-v1: [if-fallback-v1]
+    - if-evaluation-v1: [if-fallback-v1]
+  # 上下文窗口不足时使用容量更大的模型组。
+  context_window_fallbacks:
+    - if-summarization-v1: [if-research-v1]
+    - if-message-summary-v1: [if-research-v1]
+    - if-web-rerank-v1: [if-research-v1]
+    - if-web-evidence-v1: [if-research-v1]
+    - if-compression-v1: [if-research-v1]
+    - if-final-report-v1: [if-research-v1]
+  # 当前 Compose 未部署 OTLP collector，也未安装 LiteLLM 的 OTel 可选依赖。
+  # 启用采集时应先安装依赖、部署 collector，再在单独配置版本中添加 callback。
+  turn_off_message_logging: true
+
+general_settings:
+  # Master Key只供控制面使用；普通调用使用 Run Key或受限 Service Key。
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # PostgreSQL保存 Key、Budget和 Spend Logs。
+  database_url: os.environ/LITELLM_DATABASE_URL
+  disable_spend_logs: false

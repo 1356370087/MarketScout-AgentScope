@@ -1,0 +1,15 @@
+[project]
+name = "marketscout-agentscope"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "agentscope>=2.0.8",
+    "docker>=7.2.0",
+    "fastapi>=0.141.1",
+    "langfuse>=4.15.2",
+    "mcp>=1.30.0",
+    "mem0ai>=2.0.20",
+    "mypy>=2.3.1",
+]

@@ -1,0 +1,33 @@
+FROM python:3.12-slim AS runtime
+
+WORKDIR /app
+
+# The Prisma CLI bootstraps a prebuilt Node runtime which depends on libatomic.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# LiteLLM keeps the database-backed proxy runtime in the `extra_proxy` dependency
+# group in its source distribution. That group is not published as part of the
+# PyPI `proxy` extra, so install Prisma explicitly for virtual keys/spend tracking.
+# The OTLP exporter backs the optional `otel` callback (config/litellm.otel.yaml);
+# prometheus-client backs the `prometheus` callback that mounts /metrics.
+RUN pip install --no-cache-dir \
+    "litellm[proxy]==1.98.0" \
+    "prisma>=0.11.0,<1.0" \
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0" \
+    "prometheus-client>=0.20.0" \
+    && prisma generate \
+       --schema /usr/local/lib/python3.12/site-packages/litellm/proxy/schema.prisma
+
+COPY config/litellm.yaml /app/config/litellm.yaml
+COPY config/litellm.otel.yaml /app/config/litellm.otel.yaml
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=6 \
+    CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=3)"
+
+# LITELLM_CONFIG_PATH switches the proxy to the OTel-callback variant
+# (/app/config/litellm.otel.yaml) when gateway-side tracing is enabled.
+ENTRYPOINT ["sh", "-c", "exec litellm --config \"${LITELLM_CONFIG_PATH:-/app/config/litellm.yaml}\" --host 0.0.0.0 --port 4000"]

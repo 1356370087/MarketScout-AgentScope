@@ -1,0 +1,299 @@
+# 本文件与 litellm.yaml 同步，仅保留 OTel 回调配置差异。
+model_list:
+- model_name: if-supervisor-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 8
+    weight: 1
+    rpm: 300
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-research-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 16
+    weight: 2
+    rpm: 600
+    tpm: 600000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-research-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 8
+    weight: 1
+    rpm: 300
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-summarization-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 16
+    weight: 1
+    rpm: 600
+    tpm: 600000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-message-summary-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 8
+    weight: 1
+    rpm: 300
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-web-rerank-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 16
+    weight: 1
+    rpm: 600
+    tpm: 600000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-web-evidence-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 16
+    weight: 1
+    rpm: 600
+    tpm: 600000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-compression-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 8
+    weight: 1
+    rpm: 300
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-final-report-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 4
+    weight: 1
+    rpm: 120
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-quality-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 8
+    weight: 1
+    rpm: 300
+    tpm: 300000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-report-review-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 4
+    weight: 1
+    rpm: 120
+    tpm: 180000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-evaluation-v1
+  litellm_params:
+    model: zai/glm-5.3-flash
+    api_base: os.environ/ZHIPU_BASE_URL
+    api_key: os.environ/ZHIPU_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 4
+    weight: 1
+    rpm: 120
+    tpm: 200000
+  model_info:
+    base_model: zai/glm-5.3-flash
+    max_input_tokens: 131072
+    max_output_tokens: 32768
+    input_cost_per_token: 1.5e-07
+    output_cost_per_token: 5.0e-07
+- model_name: if-fallback-v1
+  litellm_params:
+    model: deepseek/deepseek-v4-flash
+    api_key: os.environ/DEEPSEEK_API_KEY
+    extra_body:
+      thinking:
+        type: disabled
+    max_parallel_requests: 16
+    weight: 1
+    rpm: 600
+    tpm: 600000
+  model_info:
+    base_model: deepseek/deepseek-v4-flash
+- model_name: if-embedding-v1
+  litellm_params:
+    model: dashscope/qwen3.7-text-embedding
+    api_key: os.environ/DASHSCOPE_API_KEY
+    dimensions: 1536
+    max_parallel_requests: 16
+    rpm: 600
+    tpm: 1000000
+  model_info:
+    base_model: dashscope/qwen3.7-text-embedding
+    max_input_tokens: 8191
+    input_cost_per_token: 2.0e-08
+    output_cost_per_token: 0
+router_settings:
+  routing_strategy: simple-shuffle
+  enable_pre_call_checks: true
+  redis_host: os.environ/LITELLM_REDIS_HOST
+  redis_port: os.environ/LITELLM_REDIS_PORT
+litellm_settings:
+  callbacks:
+  - otel
+  - prometheus
+  require_auth_for_metrics_endpoint: false
+  num_retries: 2
+  request_timeout: 180
+  allowed_fails: 5
+  cooldown_time: 60
+  fallbacks:
+  - if-supervisor-v1:
+    - if-fallback-v1
+  - if-research-v1:
+    - if-fallback-v1
+  - if-summarization-v1:
+    - if-fallback-v1
+  - if-message-summary-v1:
+    - if-fallback-v1
+  - if-web-rerank-v1:
+    - if-fallback-v1
+  - if-web-evidence-v1:
+    - if-fallback-v1
+  - if-compression-v1:
+    - if-fallback-v1
+  - if-final-report-v1:
+    - if-fallback-v1
+  - if-quality-v1:
+    - if-fallback-v1
+  - if-report-review-v1:
+    - if-fallback-v1
+  - if-evaluation-v1:
+    - if-fallback-v1
+  context_window_fallbacks:
+  - if-summarization-v1:
+    - if-research-v1
+  - if-message-summary-v1:
+    - if-research-v1
+  - if-web-rerank-v1:
+    - if-research-v1
+  - if-web-evidence-v1:
+    - if-research-v1
+  - if-compression-v1:
+    - if-research-v1
+  - if-final-report-v1:
+    - if-research-v1
+  turn_off_message_logging: true
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+  disable_spend_logs: false

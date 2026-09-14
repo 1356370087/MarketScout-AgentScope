@@ -1,0 +1,475 @@
+services:
+  app-db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: insightforge
+      POSTGRES_USER: insightforge
+      POSTGRES_PASSWORD: ${APP_DATABASE_PASSWORD:-insightforge-local-only}
+    volumes:
+      - app-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U insightforge -d insightforge"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - document-internal
+    restart: unless-stopped
+
+  litellm-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${LITELLM_DATABASE_PASSWORD:-litellm-local-only}
+    volumes:
+      - litellm-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  litellm-redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  litellm-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.litellm
+    env_file: .env
+    environment:
+      LITELLM_DATABASE_URL: postgresql://litellm:${LITELLM_DATABASE_PASSWORD:-litellm-local-only}@litellm-db:5432/litellm
+      LITELLM_REDIS_HOST: litellm-redis
+      LITELLM_REDIS_PORT: "6379"
+      # 网关侧 OTel 默认关闭；启用 trace 时设置：
+      #   LITELLM_CONFIG_PATH=/app/config/litellm.otel.yaml
+      #   LITELLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      # 并随 profile observability 部署 collector（见 deploy/README.md）。
+      LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/app/config/litellm.yaml}
+      LITELLM_OTEL_V2: ${LITELLM_OTEL_V2:-false}
+      LITELLM_OTEL_INTEGRATION_ENABLE_METRICS: ${LITELLM_OTEL_INTEGRATION_ENABLE_METRICS:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${LITELLM_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      # 固定网关 trace 服务名，避免 .env 中面向 api 的 OTEL_SERVICE_NAME
+      # 经 env_file 注入后与应用 span 撞名。
+      OTEL_SERVICE_NAME: litellm-gateway
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: no_content
+    # 宿主机可达：离线评测/Judge 等使用 .env.example 默认的
+    # LITELLM_BASE_URL=http://localhost:4000/v1 直连网关。
+    ports:
+      - "${LITELLM_PROXY_HOST_PORT:-4000}:4000"
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+      litellm-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - default
+      - document-internal
+
+  document-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      IAM_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+    command: ["alembic", "upgrade", "head"]
+    networks:
+      - document-internal
+    depends_on:
+      app-db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      RUNS_DIR: /data/runs
+      # 用量/追踪 SQLite 落在共享卷上，容器重建后历史 run 的用量面板仍然可用
+      # （写入者只有 api 进程，不违反多 worker SQLite 写入告诫）。
+      TRACE_STORE_PATH: /data/runs/traces.sqlite3
+      FRONTEND_ALLOWED_ORIGINS: http://localhost:8080
+      # 本地部署免 IAM：跳过自托管认证（无需 IAM_DATABASE_URL）。
+      # 如需完整认证，改为 "false" 并提供 Postgres 的 IAM_DATABASE_URL。
+      LOCAL_DEV_AUTH_BYPASS: "true"
+      IAM_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_RESEARCH_ENABLED: ${DOCUMENT_RESEARCH_ENABLED:-true}
+      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_STORAGE_DIR: /data/documents
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-false}
+      ENABLE_ASYNC_RESEARCH: ${ENABLE_ASYNC_RESEARCH:-false}
+      # 异步团队与 IAM 共用 PostgreSQL 实例；凭据仅注入 API，不进入 Researcher 容器。
+      COORDINATION_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      ROCKETMQ_ENDPOINT: ${ROCKETMQ_ENDPOINT:-}
+      ROCKETMQ_TOPIC_PREFIX: ${ROCKETMQ_TOPIC_PREFIX:-insightforge}
+      ROCKETMQ_TLS: ${ROCKETMQ_TLS:-false}
+      ROCKETMQ_ACCESS_KEY: ${ROCKETMQ_ACCESS_KEY:-}
+      ROCKETMQ_SECRET_KEY: ${ROCKETMQ_SECRET_KEY:-}
+      ALLOW_CLARIFICATION: ${ALLOW_CLARIFICATION:-true}
+      WEB_PIPELINE_MODE: ${WEB_PIPELINE_MODE:-enforced}
+      QUALITY_EVALUATION_ENABLED: ${QUALITY_EVALUATION_ENABLED:-true}
+      SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
+      SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
+      SANDBOX_CONTROLLER_SOCKET: /run/insightforge/sandbox-controller.sock
+      SANDBOX_GATEWAY_URL: http://sandbox-gateway:8081
+      SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
+      MODEL_BACKEND: ${MODEL_BACKEND:-litellm}
+      LITELLM_BASE_URL: http://litellm-proxy:4000/v1
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      LITELLM_SERVICE_KEY: ${LITELLM_SERVICE_KEY:-}
+      LITELLM_RUN_TEAM_ID: ${LITELLM_RUN_TEAM_ID:-insightforge-runs}
+      LITELLM_RUN_KEY_ENCRYPTION_KEY: ${LITELLM_RUN_KEY_ENCRYPTION_KEY:-}
+      LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD: ${LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD:-}
+      LITELLM_RUN_BUDGET_MAX_MICRO_USD: ${LITELLM_RUN_BUDGET_MAX_MICRO_USD:-}
+      LITELLM_RUN_KEY_TTL_SECONDS: ${LITELLM_RUN_KEY_TTL_SECONDS:-86400}
+      LITELLM_POLICY_REVISION: ${LITELLM_POLICY_REVISION:-v1}
+      # 使用迁移专用变量，防止旧 `.env` 中的 Provider 模型值进入 LiteLLM Run允许列表。
+      SUPERVISOR_MODEL: ${LITELLM_SUPERVISOR_MODEL:-if-supervisor-v1}
+      RESEARCH_MODEL: ${LITELLM_RESEARCH_MODEL:-if-research-v1}
+      SUMMARIZATION_MODEL: ${LITELLM_SUMMARIZATION_MODEL:-if-summarization-v1}
+      MESSAGE_SUMMARY_MODEL: ${LITELLM_MESSAGE_SUMMARY_MODEL:-if-message-summary-v1}
+      WEB_RERANK_MODEL: ${LITELLM_WEB_RERANK_MODEL:-if-web-rerank-v1}
+      WEB_EVIDENCE_MODEL: ${LITELLM_WEB_EVIDENCE_MODEL:-if-web-evidence-v1}
+      COMPRESSION_MODEL: ${LITELLM_COMPRESSION_MODEL:-if-compression-v1}
+      FINAL_REPORT_MODEL: ${LITELLM_FINAL_REPORT_MODEL:-if-final-report-v1}
+      QUALITY_EVALUATION_MODEL: ${LITELLM_QUALITY_EVALUATION_MODEL:-if-quality-v1}
+      REPORT_REVIEW_MODEL: ${LITELLM_REPORT_REVIEW_MODEL:-if-report-review-v1}
+      EVALUATION_MODEL: ${LITELLM_EVALUATION_MODEL:-if-evaluation-v1}
+      # 可观测性：指标默认开启（compose 内网抓取）；应用侧 OTel trace
+      # 默认关闭，启用见 deploy/README.md（profile observability）。
+      OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
+      PROMETHEUS_ENABLED: ${PROMETHEUS_ENABLED:-true}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      - research-runs:/data/runs
+      - document-data:/data/documents
+      - sandbox-control:/run/insightforge
+    networks:
+      - default
+      - sandbox-control
+      - document-internal
+    depends_on:
+      litellm-proxy:
+        condition: service_healthy
+      document-migrate:
+        condition: service_completed_successfully
+
+  document-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.document-worker
+    env_file: .env
+    environment:
+      DOCUMENT_RESEARCH_ENABLED: "true"
+      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_STORAGE_DIR: /data/documents
+      LITELLM_BASE_URL: http://litellm-proxy:4000/v1
+      LITELLM_SERVICE_KEY: ${LITELLM_SERVICE_KEY:-}
+      DOCLING_SERVE_URL: ${DOCLING_SERVE_URL:-}
+      DOCLING_SERVE_API_KEY: ${DOCLING_SERVE_API_KEY:-}
+      DOCLING_TIMEOUT_SECONDS: ${DOCLING_TIMEOUT_SECONDS:-600}
+      DOCLING_MAX_CONCURRENT_TASKS: ${DOCLING_MAX_CONCURRENT_TASKS:-2}
+      OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
+      PROMETHEUS_ENABLED: ${PROMETHEUS_ENABLED:-true}
+      DOCUMENT_WORKER_METRICS_PORT: ${DOCUMENT_WORKER_METRICS_PORT:-9109}
+    expose: ["9109"]
+    volumes:
+      - document-data:/data/documents
+    # Remote PaddleOCR runs on the configured LAN endpoint. The default
+    # network provides that egress; document-internal remains the DB network.
+    networks:
+      - default
+      - document-internal
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+      litellm-proxy:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,noexec,nosuid,nodev
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 4g
+    pids_limit: 512
+    restart: unless-stopped
+
+  knowledge-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DOCUMENT_RESEARCH_ENABLED: "true"
+      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_STORAGE_DIR: /data/documents
+    command: ["python", "-m", "open_deep_research.knowledge.maintenance"]
+    healthcheck:
+      disable: true
+    volumes:
+      - document-data:/data/documents
+    networks:
+      - document-internal
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  knowledge-backup:
+    profiles: ["backup"]
+    build:
+      context: .
+      dockerfile: Dockerfile.knowledge-backup
+    environment:
+      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_STORAGE_DIR: /data/documents
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      KNOWLEDGE_BACKUP_INTERVAL_HOURS: ${KNOWLEDGE_BACKUP_INTERVAL_HOURS:-24}
+      KNOWLEDGE_BACKUP_KEEP_DAILY: ${KNOWLEDGE_BACKUP_KEEP_DAILY:-30}
+      KNOWLEDGE_RESTORE_DATABASE_URL: ${KNOWLEDGE_RESTORE_DATABASE_URL:-}
+    volumes:
+      - document-data:/data/documents:ro
+      - knowledge-backup-restore:/restore
+    networks:
+      - default
+      - document-internal
+    depends_on:
+      app-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  publisher-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.publisher-worker
+    environment:
+      RUNS_DIR: /data/runs
+      PUBLISHER_ENABLED: ${PUBLISHER_ENABLED:-true}
+      PUBLISHER_POLL_INTERVAL_SECONDS: ${PUBLISHER_POLL_INTERVAL_SECONDS:-1}
+      PUBLISHER_LEASE_SECONDS: ${PUBLISHER_LEASE_SECONDS:-180}
+      PUBLISHER_MAX_CONCURRENT_JOBS: ${PUBLISHER_MAX_CONCURRENT_JOBS:-2}
+      PUBLISHER_MAX_ATTEMPTS: ${PUBLISHER_MAX_ATTEMPTS:-3}
+      PUBLISHER_MAX_INPUT_CHARS: ${PUBLISHER_MAX_INPUT_CHARS:-500000}
+      PUBLISHER_MAX_OUTPUT_BYTES: ${PUBLISHER_MAX_OUTPUT_BYTES:-52428800}
+      PUBLISHER_MAX_PDF_PAGES: ${PUBLISHER_MAX_PDF_PAGES:-100}
+      PUBLISHER_MAX_PPTX_SLIDES: ${PUBLISHER_MAX_PPTX_SLIDES:-64}
+      PUBLISHER_SSE_IDLE_SECONDS: ${PUBLISHER_SSE_IDLE_SECONDS:-60}
+      PUBLISHER_HEARTBEAT_INTERVAL_SECONDS: ${PUBLISHER_HEARTBEAT_INTERVAL_SECONDS:-10}
+      PUBLISHER_HEARTBEAT_STALE_SECONDS: ${PUBLISHER_HEARTBEAT_STALE_SECONDS:-45}
+    volumes:
+      - research-runs:/data/runs
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid,nodev
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    cpus: "1.0"
+    mem_limit: 1g
+    pids_limit: 256
+    restart: unless-stopped
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: frontend
+      args:
+        NEXT_PUBLIC_RESEARCH_API_BASE: /api/research
+        # 与 api 服务的 LOCAL_DEV_AUTH_BYPASS 保持一致，前端跳过登录页。
+        NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS: "true"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(3000,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+
+  proxy:
+    image: nginx:1.29-alpine
+    ports: ["8080:80"]
+    volumes:
+      - ./deploy/research-console.nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  sandbox-controller:
+    profiles: ["sandbox"]
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-controller
+    environment:
+      SANDBOX_ENABLED: "true"
+      ENABLE_ASYNC_RESEARCH: "true"
+      SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
+      SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
+      SANDBOX_CONTROLLER_SOCKET: /run/insightforge/sandbox-controller.sock
+      SANDBOX_GATEWAY_CONTAINER: insightforge-sandbox-gateway
+      SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
+    network_mode: none
+    depends_on:
+      sandbox-gateway:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox-control:/run/insightforge
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  sandbox-gateway:
+    profiles: ["sandbox"]
+    container_name: insightforge-sandbox-gateway
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-gateway
+    environment:
+      SANDBOX_ENABLED: "true"
+      ENABLE_ASYNC_RESEARCH: "true"
+      SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
+      SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
+      SANDBOX_GATEWAY_PORT: "8081"
+      SANDBOX_GATEWAY_PROXY_PORT: "8080"
+      SANDBOX_API_INTERNAL_URL: http://api:2024
+      SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
+      SANDBOX_GATEWAY_PHYSICAL_PROCESS: "true"
+      SANDBOX_GATEWAY_FAKE_PROVIDER: ${SANDBOX_GATEWAY_FAKE_PROVIDER:-false}
+      APP_ENV: ${APP_ENV:-production}
+      LITELLM_BASE_URL: http://litellm-proxy:4000/v1
+    networks:
+      - default
+      - sandbox-control
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid,nodev
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  sandbox-worker-image:
+    profiles: ["sandbox-build"]
+    image: insightforge-sandbox-worker:local
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox-worker
+    command: ["python", "-c", "raise SystemExit('build-only image')"]
+
+  # 可选：启用高级记忆后，取消注释以每天执行一次维护。
+  # memory-maintenance:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.api
+  #   env_file: .env
+  #   environment:
+  #     RUNS_DIR: /data/runs
+  #   volumes:
+  #     - research-runs:/data/runs
+  #   command: ["python", "-m", "open_deep_research.memory.maintenance", "daily", "--loop", "--interval-hours", "24"]
+  #   restart: unless-stopped
+
+  # 可观测性栈：默认不启用，`docker compose --profile observability up` 开启。
+  # Prometheus 抓取应用与 LiteLLM 网关指标；Grafana 预装现有面板与网关面板；
+  # OTel Collector + Jaeger 承接应用与网关侧 trace（同一 trace 关联）。
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/rules/insightforge-alerts.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    profiles: ["observability"]
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboard.json:/var/lib/grafana/dashboards/insightforge.json:ro
+      - ./deploy/grafana/litellm-dashboard.json:/var/lib/grafana/dashboards/litellm.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_HOST_PORT:-3001}:3000"
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${OTEL_COLLECTOR_HOST_PORT:-4318}:4318"
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["observability"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "${JAEGER_HOST_PORT:-16686}:16686"
+    restart: unless-stopped
+
+volumes:
+  knowledge-backup-restore:
+  app-db-data:
+  document-data:
+  research-runs:
+  sandbox-control:
+  litellm-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  document-internal:
+    internal: true
+  sandbox-control:
+    internal: true
+    ipam:
+      config:
+        # Avoid covering the LAN Docling endpoint at 172.22.208.30.
+        - subnet: ${SANDBOX_CONTROL_SUBNET:-172.22.0.0/24}

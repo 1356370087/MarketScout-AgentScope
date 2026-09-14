@@ -1,0 +1,32 @@
+# OTel Collector（compose profile "observability"）
+#
+# 接收应用（api，OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318）
+# 与 LiteLLM Proxy（callbacks: ["otel"]）的 OTLP trace，统一导出到 Jaeger。
+# 应用侧 span 通过请求头 traceparent 与网关 span 落在同一 trace。
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlphttp/jaeger:
+    endpoint: http://jaeger:4318
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/jaeger]
+  telemetry:
+    logs:
+      level: info

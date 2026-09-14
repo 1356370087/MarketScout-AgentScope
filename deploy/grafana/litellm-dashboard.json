@@ -1,0 +1,67 @@
+{
+  "title": "LiteLLM Gateway",
+  "uid": "litellm-gateway",
+  "tags": ["litellm", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "请求速率（按部署）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (deployment) (rate(litellm_deployment_success_responses[5m]))",
+          "legendFormat": "{{deployment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "失败请求速率",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (deployment) (rate(litellm_failed_requests_total[5m]))",
+          "legendFormat": "{{deployment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "冷却事件（deployment cooldown）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (deployment) (increase(litellm_cooldown_events_total[15m]))",
+          "legendFormat": "{{deployment}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "总请求速率（按模型组）",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (requested_model) (rate(litellm_total_requests_total[5m]))",
+          "legendFormat": "{{requested_model}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    }
+  ]
+}
