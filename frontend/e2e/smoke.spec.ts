@@ -1,0 +1,21 @@
+import { expect, test } from "@playwright/test";
+
+test.skip(
+  process.env.NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS !== "true",
+  "This scenario only applies when the explicit local authentication bypass is enabled.",
+);
+
+test("local bypass opens the research intake at all breakpoints", async ({ page }) => {
+  await page.goto("/research/new");
+  await expect(page.getByRole("heading", { name: /把一个竞争问题/ })).toBeVisible();
+  await expect(page.getByLabel("研究问题")).toBeVisible();
+});
+
+test("interface theme defaults to light and persists an explicit dark choice", async ({ page }) => {
+  await page.goto("/research/new");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "切换到深色模式" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+});
