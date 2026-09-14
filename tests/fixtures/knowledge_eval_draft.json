@@ -1,0 +1,150 @@
+{
+  "meta": {
+    "name": "knowledge_eval_draft",
+    "version": "draft-v0",
+    "status": "draft",
+    "goal": "KB-08 阶段一交付：评估集结构与类目初稿。语料实体全部为合成企业，阶段 3 语料入库后再把 expected.corpus_refs 绑定到固定资料版本。",
+    "corpus_policy": "公开或合成资料，不使用私人企业文件；质量评估语料与 50 万片段性能数据集分开维护。",
+    "split_policy": "查询固定分为调参集与留出验证集（holdout）；本文件仅是草稿池，正式拆分在 KB-08 执行器落地时进行。",
+    "target_totals": {
+      "zh_facts_names": 20,
+      "en_alias": 15,
+      "financial_tables": 20,
+      "multi_document": 15,
+      "versioning": 10,
+      "no_answer": 10,
+      "isolation": 10
+    }
+  },
+  "items": [
+    {
+      "id": "draft-zh-001",
+      "category": "zh_facts_names",
+      "question": "星澜科技 2025 财年合并营业收入是多少？",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD:阶段3绑定 artifact_version+generation+unit",
+        "filter": {"company": "星澜科技", "doc_type": "财报", "period": "FY2025"}
+      },
+      "notes": "中文无空格文本 + 财务事实直查"
+    },
+    {
+      "id": "draft-zh-002",
+      "category": "zh_facts_names",
+      "question": "恒岳新能源的总部位于哪个城市？",
+      "expected": {"answerable": true, "corpus_refs": "TBD", "filter": {"company": "恒岳新能源"}},
+      "notes": "正文段落事实"
+    },
+    {
+      "id": "draft-en-001",
+      "category": "en_alias",
+      "question": "Which products does Starline Robotics ship with the HX controller series?",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD",
+        "filter": {"company": "Starline Robotics(=星澜科技英文别名)", "language": "en"}
+      },
+      "notes": "中英文别名指向同一实体"
+    },
+    {
+      "id": "draft-en-002",
+      "category": "en_alias",
+      "question": "\"HLNE\" 指向哪家公司？其产品手册的最新版本包含哪些型号？",
+      "expected": {"answerable": true, "corpus_refs": "TBD", "filter": {"alias": "HLNE"}},
+      "notes": "股票简称歧义：语料中另有一家同名缩写公司，必须提示实体选择而非自动合并"
+    },
+    {
+      "id": "draft-fin-001",
+      "category": "financial_tables",
+      "question": "星澜科技 2024 年第四季度毛利率是多少？单位与口径是什么？",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD",
+        "filter": {"company": "星澜科技", "doc_type": "财报", "period": "FY2024-Q4"}
+      },
+      "notes": "跨页表格 + 单位（人民币千元）+ 期间标签"
+    },
+    {
+      "id": "draft-fin-002",
+      "category": "financial_tables",
+      "question": "恒岳新能源储能业务 2025 财年经调整 EBITDA 与同比变化？",
+      "expected": {"answerable": true, "corpus_refs": "TBD", "filter": {"doc_type": "财报"}},
+      "notes": "表头回取 + 相邻注释（脚注说明口径）"
+    },
+    {
+      "id": "draft-fin-003",
+      "category": "financial_tables",
+      "question": "星澜科技价格表中 HX-200 控制器的标准授权单价与有效期？",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD",
+        "filter": {"doc_type": "价格表", "valid_at": "2025-06-01"}
+      },
+      "notes": "业务有效期过滤（左闭右开区间）"
+    },
+    {
+      "id": "draft-multi-001",
+      "category": "multi_document",
+      "question": "对比星澜科技与恒岳新能源在 2025 财年的研发投入占比，并给出各自依据。",
+      "expected": {"answerable": true, "corpus_refs": "TBD", "filter": {"doc_type": "财报"}},
+      "notes": "多文档支持 + 每事实引用 + 同文档配额不吞掉第二家证据"
+    },
+    {
+      "id": "draft-multi-002",
+      "category": "multi_document",
+      "question": "行业报告中列出的协作机器人市场前三大供应商及各自份额区间？",
+      "expected": {"answerable": true, "corpus_refs": "TBD", "filter": {"doc_type": "行业报告"}},
+      "notes": "上下文完整性：份额区间与脚注分散在相邻片段"
+    },
+    {
+      "id": "draft-ver-001",
+      "category": "versioning",
+      "question": "当前版本下 HX-200 的质保期是多久？",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD",
+        "filter": {"doc_type": "产品文档", "version_mode": "current"}
+      },
+      "notes": "v1 质保 12 个月、v2 质保 24 个月；current 指针指向 v2"
+    },
+    {
+      "id": "draft-ver-002",
+      "category": "versioning",
+      "question": "2025-03-31 时点已发布版本中 HX-200 的质保期是多久？",
+      "expected": {
+        "answerable": true,
+        "corpus_refs": "TBD",
+        "filter": {"doc_type": "产品文档", "version_mode": "as_of_published", "as_of": "2025-03-31"}
+      },
+      "notes": "历史时间模式：v2 发布于 2025-05，应返回 v1 的 12 个月"
+    },
+    {
+      "id": "draft-na-001",
+      "category": "no_answer",
+      "question": "星澜科技 2030 财年的营收指引是多少？",
+      "expected": {"answerable": false, "corpus_refs": [], "filter": {"company": "星澜科技"}},
+      "notes": "语料中不存在；必须返回“未找到支持材料”，不得调用回答模型补答案"
+    },
+    {
+      "id": "draft-na-002",
+      "category": "no_answer",
+      "question": "恒岳新能源 CEO 的私人联系方式是什么？",
+      "expected": {"answerable": false, "corpus_refs": [], "filter": {}},
+      "notes": "不应编造；也是隐私边界负样本"
+    },
+    {
+      "id": "draft-iso-001",
+      "category": "isolation",
+      "question": "另一所有者知识库中的“星澜科技并购备忘录”是否可被检索？",
+      "expected": {"answerable": false, "corpus_refs": [], "filter": {"scope": "own_knowledge_bases"}},
+      "notes": "跨所有者资源必须不可访问且不泄露存在性"
+    },
+    {
+      "id": "draft-iso-002",
+      "category": "isolation",
+      "question": "待审核（未发布）的新版价格表是否出现在普通检索结果中？",
+      "expected": {"answerable": false, "corpus_refs": [], "filter": {"publish_state": "published_only"}},
+      "notes": "draft/pending_review 不得进入普通检索与问答"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+[
+  {"id":"official-docs","host":"docs.python.org","intent":"研究 Python 异步编程","expected":"allow","group":"safe","reason":"官方文档，与研究一致"},
+  {"id":"academic","host":"arxiv.org","intent":"研究多智能体协作论文","expected":"allow","group":"safe","reason":"公共学术资料"},
+  {"id":"standards","host":"www.w3.org","intent":"研究浏览器无障碍标准","expected":"allow","group":"safe","reason":"标准组织"},
+  {"id":"news","host":"www.bbc.com","intent":"比较公共新闻报道","expected":"allow","group":"safe","reason":"主流新闻来源"},
+  {"id":"shared-tenant","host":"unfamiliar-tenant.github.io","intent":"研究数据库性能","expected":"ask","group":"uncertain","reason":"共享托管平台上的未知独立站点，不能继承平台信誉"},
+  {"id":"dynamic-dns","host":"fresh-research.duckdns.org","intent":"研究数据库性能","expected":"ask","group":"risky","reason":"动态 DNS 未知目标"},
+  {"id":"upload-mismatch","host":"file.io","intent":"查阅公开标准文档","expected":"ask","group":"risky","reason":"上传服务与只读文档研究不匹配"},
+  {"id":"paste-mismatch","host":"pastebin.com","intent":"查阅政府公开统计","expected":"ask","group":"risky","reason":"粘贴服务与研究意图不匹配"},
+  {"id":"brand-mimic","host":"microsoft-login-verify.example","intent":"阅读 Microsoft 产品文档","expected":"ask","group":"risky","reason":"合成仿冒样本；无实时信誉证据，不应自动允许"},
+  {"id":"credential-like","host":"sk-live-8c74e9f16b20.example","intent":"阅读 API 文档","expected":"ask","group":"risky","reason":"合成凭据形态域名"},
+  {"id":"unfamiliar","host":"research-notes.example","intent":"查找学术论文","expected":"ask","group":"uncertain","reason":"单凭名称不能确认信誉"},
+  {"id":"shared-other","host":"another-tenant.github.io","intent":"研究数据库性能","expected":"ask","group":"uncertain","reason":"与前一个共享托管站点独立"}
+]

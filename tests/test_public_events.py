@@ -1,0 +1,392 @@
+import asyncio
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from open_deep_research.agents.query_engine import QueryEngine
+from open_deep_research.events.public import (
+    PublicEventLogCorrupted,
+    RunEventStore,
+    canonical_local_source,
+    canonical_public_source,
+    extract_public_sources,
+    project_public_events,
+    sanitize_public_payload,
+)
+from open_deep_research.run_context import RunContextStore
+from open_deep_research.run_control import RunControlStore
+
+
+@pytest.mark.asyncio
+async def test_cancelled_public_event_preserves_lease_lost_reason(tmp_path):
+    engine = QueryEngine({
+        "configurable": {"runs_dir": str(tmp_path)},
+        "metadata": {"run_id": "lease-lost-public-event"},
+    })
+    captured: dict = {}
+
+    async def capture(event_type, *, payload, **_kwargs):
+        captured["event_type"] = event_type
+        captured["payload"] = payload
+
+    engine._publish_public = capture
+    engine.cancellation_scope.request("lease_lost")
+
+    await engine._publish_public_cancelled()
+
+    assert captured["event_type"] == "run.cancelled"
+    assert captured["payload"]["termination_reason"] == "lease_lost"
+
+
+@pytest.mark.asyncio
+async def test_public_event_store_is_ordered_and_idempotent(tmp_path):
+    store = RunEventStore("run-1", runs_dir=str(tmp_path))
+
+    first = await store.append(
+        "run.created",
+        payload={"status": "pending"},
+        dedupe_key="run:created",
+    )
+    duplicate = await store.append(
+        "run.created",
+        payload={"status": "different"},
+        dedupe_key="run:created",
+    )
+    second = await store.append(
+        "run.started",
+        payload={"status": "running"},
+        dedupe_key="run:started",
+    )
+
+    assert first.sequence == duplicate.sequence == 1
+    assert first.event_id == duplicate.event_id
+    assert second.sequence == 2
+    assert [event.sequence for event in store.read()] == [1, 2]
+
+
+def test_public_terminal_payload_exposes_safe_outcome_fields():
+    payload = sanitize_public_payload(
+        "run.completed",
+        {
+            "status": "completed",
+            "result_ref": "/runs/run-1",
+            "termination_reason": "budget_exhausted",
+            "result_status": "partial",
+            "permission_denial_count": 2,
+            "permission_denials": [{"tool_name": "secret_tool"}],
+        },
+    )
+
+    assert payload == {
+        "status": "completed",
+        "result_ref": "/runs/run-1",
+        "termination_reason": "budget_exhausted",
+        "result_status": "partial",
+        "permission_denial_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_report_review_events_expose_only_bounded_progress(tmp_path) -> None:
+    store = RunEventStore("report-review-public", runs_dir=str(tmp_path))
+
+    event = await store.append(
+        "report.review.completed",
+        stage="writing",
+        payload={
+            "status": "degraded",
+            "decision": "revise",
+            "attempt": 2,
+            "revision_count": 1,
+            "issue_count": 3,
+            "critical_issue_count": 0,
+            "draft_sha256": "abc123",
+            "issues": [{"description": "PRIVATE_ISSUE"}],
+            "evidence_ids": ["EV-SECRET"],
+            "reviewer_prompt": "PRIVATE_PROMPT",
+            "draft_markdown": "PRIVATE_DRAFT",
+        },
+        dedupe_key="report:review:2:completed",
+    )
+
+    assert event.payload == {
+        "status": "degraded",
+        "decision": "revise",
+        "attempt": 2,
+        "revision_count": 1,
+        "issue_count": 3,
+        "critical_issue_count": 0,
+        "draft_sha256": "abc123",
+    }
+    projection = project_public_events(store.read())
+    assert projection.report_review == {
+        **event.payload,
+        "phase": "reviewing",
+    }
+    assert "PRIVATE" not in json.dumps(projection.model_dump(mode="json"))
+    assert "EV-SECRET" not in json.dumps(projection.model_dump(mode="json"))
+
+
+@pytest.mark.asyncio
+async def test_public_event_store_serializes_concurrent_publishers(tmp_path):
+    stores = [RunEventStore("run-concurrent", runs_dir=str(tmp_path)) for _ in range(4)]
+
+    events = await asyncio.gather(
+        *[
+            stores[index % len(stores)].append(
+                "research.task.progress",
+                stage="researching",
+                payload={"task_id": f"task-{index}", "iteration": index},
+                dedupe_key=f"task:{index}:progress",
+            )
+            for index in range(40)
+        ]
+    )
+
+    assert sorted(event.sequence for event in events) == list(range(1, 41))
+    assert [event.sequence for event in stores[0].read()] == list(range(1, 41))
+    assert len({event.event_id for event in events}) == 40
+
+
+@pytest.mark.asyncio
+async def test_public_event_store_allows_only_one_terminal_outcome(tmp_path):
+    store = RunEventStore("run-terminal", runs_dir=str(tmp_path))
+
+    completed = await store.append(
+        "run.completed",
+        payload={"status": "completed"},
+        dedupe_key="run:terminal",
+    )
+    duplicate = await store.append(
+        "run.completed",
+        payload={"status": "completed"},
+        dedupe_key="run:terminal",
+    )
+
+    assert duplicate == completed
+    with pytest.raises(RuntimeError, match="terminal_event_conflict"):
+        await store.append(
+            "run.cancelled",
+            payload={"status": "cancelled"},
+            dedupe_key="run:terminal",
+        )
+    with pytest.raises(RuntimeError, match="run_already_terminal"):
+        await store.append(
+            "research.task.progress",
+            payload={"task_id": "late", "status": "running"},
+            dedupe_key="late:progress",
+        )
+
+
+@pytest.mark.asyncio
+async def test_event_store_repairs_only_a_truncated_tail(tmp_path):
+    store = RunEventStore("run-tail", runs_dir=str(tmp_path))
+    await store.append(
+        "run.created",
+        payload={"status": "pending"},
+        dedupe_key="run:created",
+    )
+    with store.path.open("ab") as handle:
+        handle.write(b'{"partial":')
+
+    records = store.read()
+
+    assert len(records) == 1
+    assert store.path.read_bytes().endswith(b"\n")
+
+
+@pytest.mark.asyncio
+async def test_event_store_rejects_middle_corruption_and_marks_manifest_failed(tmp_path):
+    context = RunContextStore("run-corrupt", runs_dir=str(tmp_path))
+    context.initialize("user-1", {"metadata": {"run_id": "run-corrupt"}})
+    store = RunEventStore("run-corrupt", runs_dir=str(tmp_path))
+    await store.append("run.created", payload={"status": "pending"}, dedupe_key="run:created")
+    await store.append("run.started", payload={"status": "running"}, dedupe_key="run:started")
+    lines = store.path.read_bytes().splitlines()
+    store.path.write_bytes(lines[0] + b"\n{not-json}\n" + lines[1] + b"\n")
+
+    with pytest.raises(PublicEventLogCorrupted):
+        store.read()
+
+    manifest = context.load_manifest()
+    assert manifest.status == "failed"
+    assert manifest.persistence_degraded is True
+    assert manifest.persistence_error.startswith("event_persistence_failed")
+
+
+@pytest.mark.asyncio
+async def test_run_control_commands_are_idempotent_and_path_safe(tmp_path):
+    store = RunControlStore("run-control", runs_dir=str(tmp_path))
+
+    first = await store.enqueue("feedback", {"message": "one"}, command_id="feedback-1")
+    duplicate = await store.enqueue("feedback", {"message": "two"}, command_id="feedback-1")
+
+    assert first == duplicate
+    assert len(await store.pending()) == 1
+    await store.ack(first)
+    assert await store.pending() == []
+    assert (await store.enqueue("feedback", {}, command_id="feedback-1")) == first
+    with pytest.raises(ValueError, match="Invalid command_id"):
+        await store.enqueue("cancel", {}, command_id="../escape")
+
+
+def test_public_sanitizer_and_source_canonicalization():
+    payload = sanitize_public_payload(
+        "research.task.progress",
+        {
+            "task_id": "task-1",
+            "phase": "researching",
+            "api_key": "secret",
+            "tool_result": "raw body",
+            "unknown": "not allowed",
+        },
+    )
+    source = canonical_public_source(
+        "https://user:password@example.com/path?q=secret#fragment",
+        "Example",
+    )
+
+    assert payload == {"task_id": "task-1", "phase": "researching"}
+    assert source is not None
+    assert source["url"] == "https://example.com/path"
+    assert "password" not in json.dumps(source)
+
+
+def test_public_sources_are_extracted_from_compressed_text_without_leaking_body():
+    sources = extract_public_sources({
+        "compressed_research": (
+            "Finding with [official source](https://user:secret@example.com/docs?q=private#part) "
+            "and duplicate https://example.com/docs?other=value."
+        ),
+        "raw_notes": ["Also see https://numpy.org/devdocs/reference/thread_safety.html)."],
+    })
+
+    assert [source["url"] for source in sources] == [
+        "https://example.com/docs",
+        "https://numpy.org/devdocs/reference/thread_safety.html",
+    ]
+    assert all("private" not in json.dumps(source) for source in sources)
+
+
+def test_local_public_source_preserves_controlled_provenance() -> None:
+    source = canonical_local_source(
+        "/documents/doc-1?chunk=chunk-1",
+        "Internal report",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        locator="page:2",
+    )
+    assert source is not None
+    assert source["source_type"] == "local_document"
+    assert source["document_id"] == "doc-1"
+    assert source["chunk_id"] == "chunk-1"
+    assert source["locator"] == "page:2"
+
+
+def test_extract_public_sources_includes_explicit_local_records() -> None:
+    sources = extract_public_sources({
+        "evidence_registry": [{
+            "source_type": "local_document",
+            "source_uri": "/documents/doc-1/chunks/chunk-1",
+            "document_id": "doc-1",
+            "chunk_id": "chunk-1",
+            "source_title": "Internal report",
+        }]
+    })
+    assert len(sources) == 1
+    assert sources[0]["source_type"] == "local_document"
+
+
+@pytest.mark.asyncio
+async def test_projection_reduces_plan_tasks_waves_and_findings(tmp_path):
+    store = RunEventStore("run-projection", runs_dir=str(tmp_path))
+    await store.append(
+        "plan.created",
+        stage="planning",
+        payload={"plan_id": "plan-1", "revision": 1, "objective": "Test", "stages": []},
+        dedupe_key="plan:created",
+    )
+    await store.append(
+        "plan.task.added",
+        stage="researching",
+        payload={"task_id": "task-1", "wave_id": "wave-1", "title": "Task", "mode": "sync", "status": "pending"},
+        dedupe_key="plan:task:1",
+    )
+    await store.append(
+        "research.wave.started",
+        stage="researching",
+        payload={"wave_id": "wave-1", "mode": "sync", "task_ids": ["task-1"], "task_count": 1},
+        dedupe_key="wave:1:started",
+    )
+    await store.append(
+        "research.task.progress",
+        stage="researching",
+        payload={"task_id": "task-1", "status": "running", "phase": "researching", "iteration": 8, "source_count": 10},
+        dedupe_key="task:1:progress",
+    )
+    await store.append(
+        "research.task.completed",
+        stage="researching",
+        payload={"task_id": "task-1", "status": "completed", "phase": "completed", "mode": "sync", "source_count": 0},
+        dedupe_key="task:1:completed",
+    )
+    await store.append(
+        "findings.updated",
+        stage="researching",
+        payload={"task_id": "task-1", "summary": "Finding", "sources": [], "source_count": 0},
+        dedupe_key="task:1:findings",
+    )
+    await store.append(
+        "research.wave.completed",
+        stage="researching",
+        payload={"wave_id": "wave-1", "mode": "sync", "task_ids": ["task-1"], "task_count": 1, "completed": 1, "failed": 0, "rejected": 0},
+        dedupe_key="wave:1:completed",
+    )
+
+    projection = project_public_events(store.read())
+
+    assert projection.tasks == {
+        "total": 1,
+        "pending": 0,
+        "running": 0,
+        "completed": 1,
+        "failed": 0,
+        "cancelled": 0,
+        "timed_out": 0,
+    }
+    assert projection.waves == {"total": 1, "completed": 1}
+    assert projection.task_items["task-1"]["iteration"] == 8
+    assert projection.task_items["task-1"]["source_count"] == 10
+    assert projection.latest_findings[0]["summary"] == "Finding"
+
+
+def test_sse_replays_after_last_event_id(monkeypatch, tmp_path):
+    from open_deep_research import server
+    from security.auth import get_current_user
+
+    monkeypatch.setenv("RUNS_DIR", str(tmp_path))
+    run_id = "run-sse"
+    context = RunContextStore(run_id, runs_dir=str(tmp_path))
+    context.initialize("user-1", {"configurable": {"runs_dir": str(tmp_path)}, "metadata": {"run_id": run_id}})
+    store = RunEventStore(run_id, runs_dir=str(tmp_path))
+    asyncio.run(store.append("run.created", payload={"status": "pending"}, dedupe_key="run:created"))
+    asyncio.run(store.append("run.completed", payload={"status": "completed", "result_ref": f"/runs/{run_id}"}, dedupe_key="run:completed"))
+    from tests.auth_helpers import research_principal
+
+    server.app.dependency_overrides[get_current_user] = lambda: research_principal("user-1")
+    try:
+        client = TestClient(server.app)
+        response = client.get(
+            f"/runs/{run_id}/events?after=0",
+            headers={"Last-Event-ID": "1"},
+        )
+    finally:
+        server.app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200
+    assert "id: 1" not in response.text
+    assert "id: 2" in response.text
+    assert "event: run.completed" in response.text
+    data_line = next(line for line in response.text.splitlines() if line.startswith("data: "))
+    assert "dedupe_key" not in data_line
