@@ -11,8 +11,8 @@ import pytest
 from pydantic import SecretStr
 from agentscope.model import ChatModelBase, OpenAIChatModel
 from open_deep_research.configuration import Configuration, freeze_run_config
-from open_deep_research.as_runtime.run_config import FIELD_MAP, RunConfig
-from open_deep_research.as_runtime.models import (
+from open_deep_research.agentscope_runtime.run_config import FIELD_MAP, RunConfig
+from open_deep_research.agentscope_runtime.models import (
     CredentialBinding,
     ModelFactory,
     ROLES,
@@ -240,7 +240,7 @@ async def test_frozen_catalog_gateway_binding_and_limits():
 
 
 def test_no_langchain_imported_by_native_config_and_factory():
-    code = 'import sys; from open_deep_research.as_runtime.run_config import RunConfig; from open_deep_research.as_runtime.models import ModelFactory; RunConfig.compile(); assert not any(k.startswith("langchain") for k in sys.modules)'
+    code = 'import sys; from open_deep_research.agentscope_runtime.run_config import RunConfig; from open_deep_research.agentscope_runtime.models import ModelFactory; RunConfig.compile(); assert not any(k.startswith("langchain") for k in sys.modules)'
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -291,8 +291,8 @@ def test_each_core_role_credential_override(role, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runtime_owns_model_factory_close():
-    from open_deep_research.as_runtime.app import ASRuntime
-    from open_deep_research.as_runtime.settings import ASRuntimeSettings
+    from open_deep_research.agentscope_runtime.app import ASRuntime
+    from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 
     runtime = ASRuntime(ASRuntimeSettings(None, "unused", True, "test_"), None, None)
     factory = runtime.create_model_factory(

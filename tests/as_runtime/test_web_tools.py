@@ -7,8 +7,8 @@ from datetime import UTC
 
 import pytest
 
-from open_deep_research.as_runtime.models import ModelFactory
-from open_deep_research.as_runtime.web_tools import (
+from open_deep_research.agentscope_runtime.models import ModelFactory
+from open_deep_research.agentscope_runtime.web_tools import (
     NativeEvidenceExtractor,
     NativeWebReranker,
     WebFetchLedger,
@@ -613,7 +613,7 @@ async def test_compaction_sheds_audit_before_evidence():
 
 
 async def test_tavily_external_extractor(monkeypatch):
-    from open_deep_research.as_runtime.web_tools import _tavily_extract
+    from open_deep_research.agentscope_runtime.web_tools import _tavily_extract
 
     class FakeTavily:
         async def extract(self, urls, format):
@@ -642,7 +642,7 @@ async def test_tavily_external_extractor(monkeypatch):
 
 
 async def test_native_web_tools_pair_and_enabled_gates():
-    from open_deep_research.as_runtime.web_tools import native_web_tools
+    from open_deep_research.agentscope_runtime.web_tools import native_web_tools
 
     cfg = _config()
     tools = native_web_tools(lambda: cfg, _StubFactory())

@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast
 
-from langchain_core.messages import BaseMessage
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from open_deep_research.report.coverage import (

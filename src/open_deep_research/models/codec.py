@@ -19,8 +19,7 @@ from pydantic import BaseModel
 STRUCTURED_OUTPUT_TOOL_NAME = "__insightforge_structured_output"
 
 
-class MessageCodecError(ValueError):
-    """Raised when a message cannot be represented by Gateway Wire V2."""
+from open_deep_research.models.protocol_errors import MessageCodecError
 
 
 def _json_arguments(value: Any) -> str:

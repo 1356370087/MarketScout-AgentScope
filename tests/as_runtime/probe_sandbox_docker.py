@@ -24,7 +24,7 @@ from dotenv import dotenv_values
 from fastapi import FastAPI
 from pydantic import BaseModel, SecretStr
 from agentscope.message import UserMsg
-from open_deep_research.as_runtime.gateway import (
+from open_deep_research.agentscope_runtime.gateway import (
     SandboxChatModel,
     SandboxServiceBinding,
     SandboxBinding,

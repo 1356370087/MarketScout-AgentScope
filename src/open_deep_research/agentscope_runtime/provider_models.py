@@ -4,7 +4,7 @@ from copy import copy
 from contextlib import aclosing
 
 from agentscope.model import AnthropicChatModel, GeminiChatModel, DeepSeekChatModel
-from open_deep_research.as_runtime.gateway import GovernedModelMixin
+from open_deep_research.agentscope_runtime.gateway import GovernedModelMixin
 
 
 class GovernedAnthropicChatModel(GovernedModelMixin, AnthropicChatModel):

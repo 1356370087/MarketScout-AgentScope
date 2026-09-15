@@ -12,8 +12,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from open_deep_research.as_runtime.app import ASRuntime
-from open_deep_research.as_runtime.settings import ASRuntimeSettings
+from open_deep_research.agentscope_runtime.app import ASRuntime
+from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 
 pytestmark = pytest.mark.asyncio
 

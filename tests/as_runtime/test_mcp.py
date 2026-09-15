@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from mcp.types import Tool as McpToolDescriptor
 
-from open_deep_research.as_runtime.mcp import (
+from open_deep_research.agentscope_runtime.mcp import (
     MCPInteractionRequired,
     NativeMcpServer,
     NativeMcpToolError,
@@ -280,7 +280,7 @@ async def test_interaction_url_validation_rejects_untrusted_targets():
 
 
 async def test_token_cache_expiry_and_refresh_isolation(monkeypatch):
-    import open_deep_research.as_runtime.mcp as native_mcp
+    import open_deep_research.agentscope_runtime.mcp as native_mcp
     from open_deep_research.tools.token_store import MemoryTokenStore
 
     config = {
@@ -324,7 +324,7 @@ async def test_token_cache_expiry_and_refresh_isolation(monkeypatch):
 async def test_exchange_failure_logs_are_redacted(caplog):
     from aiohttp import web
 
-    from open_deep_research.as_runtime.mcp import exchange_mcp_subject_token
+    from open_deep_research.agentscope_runtime.mcp import exchange_mcp_subject_token
 
     async def handler(request):
         return web.Response(
@@ -340,7 +340,7 @@ async def test_exchange_failure_logs_are_redacted(caplog):
     await site.start()
     port = runner.addresses[0][1]
     try:
-        with caplog.at_level("WARNING", logger="open_deep_research.as_runtime.mcp"):
+        with caplog.at_level("WARNING", logger="open_deep_research.agentscope_runtime.mcp"):
             result = await exchange_mcp_subject_token("subj", f"http://127.0.0.1:{port}")
         assert result is None
         joined = "\n".join(record.getMessage() for record in caplog.records)
@@ -398,7 +398,7 @@ def _patch_discovery(monkeypatch, descriptors, captured=None):
             captured.append(connection)
         return server, list(descriptors)
 
-    import open_deep_research.as_runtime.mcp as native_mcp
+    import open_deep_research.agentscope_runtime.mcp as native_mcp
 
     monkeypatch.setattr(native_mcp, "_discover_via_server", fake)
 
@@ -473,7 +473,7 @@ async def test_loader_maps_policy_and_auth_headers(monkeypatch):
     )
     assert tools[0].retryable is False
     captured.clear()
-    import open_deep_research.as_runtime.mcp as native_mcp
+    import open_deep_research.agentscope_runtime.mcp as native_mcp
 
     async def fake_fetch(config):
         return {"access_token": "tok-1"}
@@ -575,7 +575,7 @@ async def test_skills_are_context_only_and_never_widen_permissions():
 
 async def test_disabled_and_trimmed_tools_stay_out_of_guidance(monkeypatch):
     """AS-A028: 禁用/权限裁剪后，提示词与实际可用工具保持一致。"""
-    from open_deep_research.as_runtime.tools import prepare_toolkit
+    from open_deep_research.agentscope_runtime.tools import prepare_toolkit
 
     _patch_discovery(monkeypatch, [_descriptor("browser_navigate", "Navigate.")])
     cfg = _config(

@@ -20,7 +20,7 @@ from agentscope.message import (
 )
 from agentscope.types import ErrorInfo, ErrorType, ReplyFinishedReason
 
-from open_deep_research.as_runtime.messages import (
+from open_deep_research.agentscope_runtime.messages import (
     MessageCompatibilityError,
     dump_messages,
     load_messages,
@@ -206,7 +206,7 @@ def test_raw_provider_tool_arguments_and_thinking_signature_preserved():
 
 
 def test_codec_does_not_import_langchain():
-    source = 'import sys; from open_deep_research.as_runtime.messages import read_legacy_messages; assert not any(k.startswith("langchain") for k in sys.modules)'
+    source = 'import sys; from open_deep_research.agentscope_runtime.messages import read_legacy_messages; assert not any(k.startswith("langchain") for k in sys.modules)'
     result = subprocess.run(
         [sys.executable, "-c", source],
         env={**os.environ, "PYTHONPATH": "src"},

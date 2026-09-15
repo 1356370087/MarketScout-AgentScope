@@ -11,13 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from open_deep_research.as_runtime.sandbox_policy import (
+from open_deep_research.agentscope_runtime.sandbox_policy import (
     CapabilityTokenIssuer,
     EgressAuthority,
     EgressModeBridge,
     assert_worker_secret_scope,
 )
-from open_deep_research.as_runtime.sandbox_workspace import (
+from open_deep_research.agentscope_runtime.sandbox_workspace import (
     WORKSPACE_ROOT,
     ControllerBackend,
     ControllerWorkspace,
@@ -195,6 +195,23 @@ async def test_offloader_roundtrip():
         await workspace.recall("workspace://other/x")
 
 
+async def test_native_offloader_keyword_protocol():
+    from agentscope.message import ToolResultBlock, UserMsg
+
+    backend, _ = _backend_hooks()
+    workspace = ControllerWorkspace(workspace_id="ws-native", controller=FakeController(), spec=_spec(), backend=backend)
+    message = UserMsg("user", "保留证据与需求")
+    reference = await workspace.offload_context(session_id="session", msgs=[message])
+    stored = (await workspace.recall(reference))["payload"]
+    assert stored["session_id"] == "session"
+    assert stored["messages"][0]["id"] == message.id
+    result = ToolResultBlock(id="call", name="search", output="evidence")
+    reference = await workspace.offload_tool_result(session_id="session", tool_result=result)
+    stored = (await workspace.recall(reference))["payload"]
+    assert stored["result"]["id"] == "call"
+    assert stored["session_id"] == "session"
+
+
 async def test_no_host_tool_bypass():
     """Backend 三原语只经受治理分发；缺失即拒绝，无宿主回退。"""
     bare = ControllerBackend()
@@ -213,7 +230,7 @@ async def test_no_host_tool_bypass():
 
 def test_workspace_modules_do_not_import_docker_or_subprocess():
     """架构守卫：工作区适配层不直接触碰 Docker 或宿主进程。"""
-    import open_deep_research.as_runtime.sandbox_workspace as module
+    import open_deep_research.agentscope_runtime.sandbox_workspace as module
 
     tree = ast.parse(pathlib.Path(module.__file__).read_text(encoding="utf-8"))
     imported = set()

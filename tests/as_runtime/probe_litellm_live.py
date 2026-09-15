@@ -14,8 +14,8 @@ from dotenv import dotenv_values
 from pydantic import BaseModel
 from agentscope.credential import OpenAICredential
 from agentscope.message import UserMsg
-from open_deep_research.as_runtime.gateway import LiteLLMChatModel
-from open_deep_research.as_runtime.model_policy import recover_output, ModelCallPolicy
+from open_deep_research.agentscope_runtime.gateway import LiteLLMChatModel
+from open_deep_research.agentscope_runtime.model_policy import recover_output, ModelCallPolicy
 
 
 class Answer(BaseModel):

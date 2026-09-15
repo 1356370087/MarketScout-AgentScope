@@ -13,16 +13,16 @@ from agentscope.credential import (
     DeepSeekCredential,
 )
 from agentscope.message import UserMsg
-from open_deep_research.as_runtime.provider_models import (
+from open_deep_research.agentscope_runtime.provider_models import (
     GovernedAnthropicChatModel,
     GovernedGeminiChatModel,
     GovernedDeepSeekChatModel,
 )
-from open_deep_research.as_runtime.gateway import (
+from open_deep_research.agentscope_runtime.gateway import (
     SandboxChatModel,
     SandboxServiceBinding,
 )
-from open_deep_research.as_runtime.model_policy import (
+from open_deep_research.agentscope_runtime.model_policy import (
     ModelCallPolicy,
     retryable,
     recover_output,
@@ -65,7 +65,7 @@ async def test_thinking_truncation_can_escalate_without_replaying_thinking():
 
 async def test_native_stream_close_releases_http_response_immediately():
     from agentscope.credential import OpenAICredential
-    from open_deep_research.as_runtime.gateway import LiteLLMChatModel
+    from open_deep_research.agentscope_runtime.gateway import LiteLLMChatModel
 
     closed = []
 
@@ -106,7 +106,7 @@ async def test_native_stream_close_releases_http_response_immediately():
 @pytest.mark.parametrize("override", [None, 512])
 async def test_openai_and_litellm_emit_one_output_limit(gateway, override):
     from agentscope.credential import OpenAICredential
-    from open_deep_research.as_runtime.gateway import (
+    from open_deep_research.agentscope_runtime.gateway import (
         GovernedOpenAIChatModel,
         LiteLLMChatModel,
     )
@@ -568,8 +568,8 @@ async def test_compact_context_survives_escalation_and_restore():
 
 async def test_native_compactor_preserves_authority_and_tool_groups():
     from agentscope.message import Msg, ToolCallBlock, ToolResultBlock
-    from open_deep_research.as_runtime.context import NativeContextCompactor
-    from open_deep_research.as_runtime.messages import validate_tool_pairs
+    from open_deep_research.agentscope_runtime.context import NativeContextCompactor
+    from open_deep_research.agentscope_runtime.messages import validate_tool_pairs
 
     question = UserMsg("u", "question")
     evidence = UserMsg("domain", "coverage and evidence references")

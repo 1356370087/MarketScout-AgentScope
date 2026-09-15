@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from open_deep_research.as_runtime.settings import ASRuntimeSettings
+from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 
 RUNTIME_REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -91,8 +91,8 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
         engine_kwargs=build_engine_kwargs(settings),
     )
     async with storage:
-        from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
-        from open_deep_research.as_runtime.durable import DurableCommandBridge
+        from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
+        from open_deep_research.agentscope_runtime.durable import DurableCommandBridge
         async with PostgreSQLMessageBus(
             settings.database_url, table_prefix=settings.bus_table_prefix,
             engine_kwargs=build_engine_kwargs(settings),

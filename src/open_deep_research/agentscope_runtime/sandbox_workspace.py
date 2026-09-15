@@ -32,7 +32,7 @@ from agentscope.app.workspace_manager._base import (
 from agentscope.tool._builtin._backend import BackendBase, ExecResult
 from agentscope.workspace import WorkspaceBase
 
-from open_deep_research.as_runtime.mcp import NativeMcpServer
+from open_deep_research.agentscope_runtime.mcp import NativeMcpServer
 from open_deep_research.sandbox.schema import runtime_digest
 from open_deep_research.sandbox.wire import SandboxTaskPayloadV1
 
@@ -141,7 +141,7 @@ class ControllerWorkspace(WorkspaceBase):
 
     async def initialize(self) -> None:
         """经控制器 create/start 建立任务容器（资源限额由 profile 准入）。"""
-        from open_deep_research.as_runtime.sandbox_policy import CapabilityTokenIssuer
+        from open_deep_research.agentscope_runtime.sandbox_policy import CapabilityTokenIssuer
 
         issuer = CapabilityTokenIssuer.for_controller(self.controller)
         token, _claims = issuer.issue(
@@ -229,13 +229,39 @@ class ControllerWorkspace(WorkspaceBase):
         await self.backend.write_file(reference, body)
         return f"workspace://{self.workspace_id}{reference}"
 
-    async def offload_context(self, context: Any) -> str:
-        return await self._offload("context", context)
+    async def offload_context(self, session_id: Any, msgs: Any = None) -> str:
+        """Implement native Offloader while retaining the earlier one-argument API."""
+        payload = session_id if msgs is None else {
+            "session_id": session_id,
+            "messages": [message.model_dump(mode="json") for message in msgs],
+        }
+        return await self._offload("context", payload)
 
-    async def offload_tool_result(self, tool_name: str, result: Any) -> str:
-        return await self._offload("tool_result", {"tool": tool_name, "result": result})
+    async def offload_tool_result(self, session_id: str, tool_result: Any) -> str:
+        from agentscope.message import ToolResultBlock
 
-    async def offload_data_block(self, block: Any) -> str:
+        if isinstance(tool_result, ToolResultBlock):
+            return await self._offload("tool_result", {
+                "session_id": session_id, "result": tool_result.model_dump(mode="json"),
+            })
+        return await self._offload("tool_result", {"tool": session_id, "result": tool_result})
+
+    async def offload_data_block(self, block: Any) -> Any:
+        import base64
+        from agentscope.message import Base64Source, DataBlock, URLSource
+
+        if isinstance(block, DataBlock):
+            if not isinstance(block.source, Base64Source):
+                return block
+            body = base64.b64decode(block.source.data, validate=True)
+            path = f"{OFFLOAD_ROOT}/data-{uuid.uuid4().hex}"
+            await self.backend.write_file(path, body)
+            copied = block.model_copy(deep=True)
+            copied.source = URLSource(
+                url=f"workspace://{self.workspace_id}{path}",
+                media_type=block.source.media_type,
+            )
+            return copied
         digest = hashlib.sha256(str(block).encode("utf-8")).hexdigest()[:16]
         return await self._offload(f"block-{digest}", block)
 

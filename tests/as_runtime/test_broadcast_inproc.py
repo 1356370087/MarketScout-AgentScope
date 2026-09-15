@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from open_deep_research.as_runtime.broadcast import RocketMQBroadcast
+from open_deep_research.agentscope_runtime.broadcast import RocketMQBroadcast
 
 pytestmark = pytest.mark.asyncio
 

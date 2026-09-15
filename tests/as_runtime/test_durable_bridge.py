@@ -15,8 +15,8 @@ import secrets
 import pytest
 import pytest_asyncio
 
-from open_deep_research.as_runtime.durable import DurableCommandBridge
-from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
+from open_deep_research.agentscope_runtime.durable import DurableCommandBridge
+from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
 
 pytestmark = pytest.mark.asyncio
 

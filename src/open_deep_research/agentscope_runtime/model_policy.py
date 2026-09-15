@@ -96,7 +96,7 @@ class ModelCallPolicy:
                 "messages": safe_fallback_messages(original) if index else original,
             }
             # 沙箱服务拥有其内部重试和账本；客户端不重放结果未知的操作。
-            from open_deep_research.as_runtime.gateway import SandboxChatModel
+            from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
 
             gateway_owned = getattr(model, "retry_owner", None) == "gateway"
             budget = (
@@ -244,7 +244,7 @@ async def recover_output(
         or state["context_attempts"] > context_attempts
     ):
         raise RecoveryExhausted("restored recovery budget exceeds configured limits")
-    from open_deep_research.as_runtime.messages import dump_messages, load_messages
+    from open_deep_research.agentscope_runtime.messages import dump_messages, load_messages
 
     original = (
         load_messages(state["compacted_context"])
@@ -279,7 +279,7 @@ async def recover_output(
                 raise
             state["context_attempts"] += 1
             original = await compact(deepcopy(original))
-            from open_deep_research.as_runtime.messages import validate_tool_pairs
+            from open_deep_research.agentscope_runtime.messages import validate_tool_pairs
 
             validate_tool_pairs(original, complete=False)
             state["compacted_context"] = dump_messages(original)

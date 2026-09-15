@@ -18,7 +18,7 @@ import asyncio
 import pytest
 import pytest_asyncio
 
-from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
+from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
 
 # pg_url 由 conftest.py 提供（session 级一次性容器）
 

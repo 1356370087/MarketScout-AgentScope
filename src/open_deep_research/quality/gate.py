@@ -8,16 +8,15 @@ import logging
 import re
 from collections.abc import Callable, Mapping
 from datetime import date
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
-from open_deep_research.events.task_activity import publish_task_activity
 from open_deep_research.evidence import (
     SourceScopeStatus,
     classify_evidence_source,
@@ -26,17 +25,13 @@ from open_deep_research.evidence import (
     is_evidence_eligible,
     source_scoped_evidence_records,
 )
-from open_deep_research.models.codec import MessageCodecError
-from open_deep_research.models.fallback import invoke_with_model_fallback
-from open_deep_research.models.gateway import ModelGatewayError
-from open_deep_research.models.invocation import complete_model
+from open_deep_research.models.protocol_errors import (
+    MessageCodecError,
+    ModelGatewayError,
+)
 from open_deep_research.models.resolution import (
     build_model_config,
     is_dashscope_qwen,
-)
-from open_deep_research.observability import (
-    get_trace_recorder,
-    invoke_model_with_retry_observability,
 )
 from open_deep_research.quality.contract import (
     AdmissionStatus,
@@ -55,6 +50,30 @@ from open_deep_research.quality.policy import (
 )
 from open_deep_research.tool_taxonomy import classify_tool_name
 from open_deep_research.tools.governance import classify_llm_retryable_error
+
+
+def get_trace_recorder(*args, **kwargs):
+    from open_deep_research.observability import get_trace_recorder as legacy
+    return legacy(*args, **kwargs)
+
+async def publish_task_activity(*args, **kwargs):
+    from open_deep_research.events.task_activity import publish_task_activity as legacy
+    return await legacy(*args, **kwargs)
+
+async def complete_model(*args, **kwargs):
+    from open_deep_research.models.invocation import complete_model as legacy
+    return await legacy(*args, **kwargs)
+
+async def invoke_with_model_fallback(*args, **kwargs):
+    from open_deep_research.models.fallback import invoke_with_model_fallback as legacy
+    return await legacy(*args, **kwargs)
+
+async def invoke_model_with_retry_observability(*args, **kwargs):
+    from open_deep_research.observability import (
+        invoke_model_with_retry_observability as legacy,
+    )
+    return await legacy(*args, **kwargs)
+
 
 _URL_RE = re.compile(r"https?://[^\s\]\[()<>\"']+", re.IGNORECASE)
 logger = logging.getLogger(__name__)
@@ -617,6 +636,8 @@ async def _evaluate_json(
     span_name: str,
     protocol_validator: Callable[[BaseModel], list[str]] | None = None,
 ) -> BaseModel:
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
     configurable = Configuration.from_runnable_config(config)
     messages = [
         SystemMessage(content=system_prompt),
@@ -2050,6 +2071,7 @@ async def evaluate_tool_results(
     evidence_registry: list[dict[str, Any]] | None = None,
     coverage_contract: ResearchCoverageContract | dict[str, Any] | None = None,
     requirement_ids: list[str] | tuple[str, ...] | None = None,
+    evaluator=None,
 ) -> ToolResultAssessment:
     """Evaluate one tool batch and apply deterministic overrides."""
     configurable = Configuration.from_runnable_config(config)
@@ -2155,7 +2177,7 @@ async def evaluate_tool_results(
     try:
         if evaluation_input_error is not None:
             raise ValueError(evaluation_input_error)
-        result = await _evaluate_json(
+        result = await (evaluator or _evaluate_json)(
             ToolResultAssessment,
             TOOL_RESULT_EVALUATION_PROMPT,
             payload,
@@ -2229,52 +2251,54 @@ async def evaluate_tool_results(
         ):
             result.decision = "retry"
     _attach_quality_provenance(result, configurable, config)
-    _record_quality_scores("tool_result", result, config)
-    await publish_task_activity(
-        config,
-        "quality.completed" if result.evaluator_error is None else "quality.failed",
-        kind="quality" if result.evaluator_error is None else "error",
-        phase="quality_check",
-        status=(
-            "success" if result.decision == "complete" and result.evaluator_error is None
-            else "warning" if result.evaluator_error is None
-            else "error"
-        ),
-        title=(
-            "证据质量通过"
-            if result.decision == "complete" and result.evaluator_error is None
-            else "需要继续补证"
-            if result.evaluator_error is None
-            else "质量评估不可用"
-        ),
-        summary=(
-            "当前证据达到完成条件。"
-            if result.decision == "complete" and result.evaluator_error is None
-            else "质量门禁发现缺口，Subagent 将继续研究。"
-            if result.evaluator_error is None
-            else "质量评估请求失败，已按运行策略处理。"
-        ),
-        iteration=None,
-        duration_ms=None,
-        payload={
-            "evaluation_type": "tool_result",
-            "decision": result.decision,
-            **failure_diagnostics,
-            "scores": {
-                "relevance": result.relevance,
-                "source_quality": result.source_quality,
-                "evidence_coverage": result.evidence_coverage,
-                "corroboration": result.corroboration,
-            },
-            "gap_count": len(result.missing_information),
-        },
-        dedupe_key=_quality_activity_dedupe_key(
-            research_topic,
-            tool_results,
+    if evaluator is None:
+        _record_quality_scores("tool_result", result, config)
+    if evaluator is None:
+        await publish_task_activity(
             config,
-        ),
-        update_run_summary=True,
-    )
+            "quality.completed" if result.evaluator_error is None else "quality.failed",
+            kind="quality" if result.evaluator_error is None else "error",
+            phase="quality_check",
+            status=(
+                "success" if result.decision == "complete" and result.evaluator_error is None
+                else "warning" if result.evaluator_error is None
+                else "error"
+            ),
+            title=(
+                "证据质量通过"
+                if result.decision == "complete" and result.evaluator_error is None
+                else "需要继续补证"
+                if result.evaluator_error is None
+                else "质量评估不可用"
+            ),
+            summary=(
+                "当前证据达到完成条件。"
+                if result.decision == "complete" and result.evaluator_error is None
+                else "质量门禁发现缺口，Subagent 将继续研究。"
+                if result.evaluator_error is None
+                else "质量评估请求失败，已按运行策略处理。"
+            ),
+            iteration=None,
+            duration_ms=None,
+            payload={
+                "evaluation_type": "tool_result",
+                "decision": result.decision,
+                **failure_diagnostics,
+                "scores": {
+                    "relevance": result.relevance,
+                    "source_quality": result.source_quality,
+                    "evidence_coverage": result.evidence_coverage,
+                    "corroboration": result.corroboration,
+                },
+                "gap_count": len(result.missing_information),
+            },
+            dedupe_key=_quality_activity_dedupe_key(
+                research_topic,
+                tool_results,
+                config,
+            ),
+            update_run_summary=True,
+        )
     return result
 
 
@@ -2356,6 +2380,7 @@ async def evaluate_subagent_handoff(
     coverage_contract: ResearchCoverageContract | dict[str, Any] | None = None,
     requirement_ids: list[str] | tuple[str, ...] | None = None,
     risk_profile: ResearchRiskProfile | None = None,
+    evaluator=None,
 ) -> HandoffAssessment:
     """Run the Supervisor handoff gate over one completed subagent result."""
     configurable = Configuration.from_runnable_config(config)
@@ -2394,7 +2419,7 @@ async def evaluate_subagent_handoff(
         for requirement_id in owned_requirement_ids
         if requirement_id not in evidence_optional_requirement_ids
     )
-    exclusive_requirement_ids = await _exclusive_requirement_ids(
+    exclusive_requirement_ids = owned_requirement_ids if evaluator is not None else await _exclusive_requirement_ids(
         owned_requirement_ids,
         config=config,
         configurable=configurable,
@@ -2534,7 +2559,7 @@ async def evaluate_subagent_handoff(
     try:
         if evaluation_input_error is not None:
             raise ValueError(evaluation_input_error)
-        result = await _evaluate_json(
+        result = await (evaluator or _evaluate_json)(
             HandoffAssessment,
             (
                 HANDOFF_EVALUATION_PROMPT_V4
@@ -2736,5 +2761,6 @@ async def evaluate_subagent_handoff(
                 resolved_contract=resolved_contract,
             )
     _attach_quality_provenance(result, configurable, config)
-    _record_quality_scores("handoff", result, config)
+    if evaluator is None:
+        _record_quality_scores("handoff", result, config)
     return result

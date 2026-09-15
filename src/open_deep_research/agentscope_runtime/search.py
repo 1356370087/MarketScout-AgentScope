@@ -22,7 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from open_deep_research.as_runtime.models import ModelFactory
+from open_deep_research.agentscope_runtime.models import ModelFactory
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.sandbox.policy import network_policy_mode

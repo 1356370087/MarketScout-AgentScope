@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from open_deep_research.as_runtime.app import ASRuntime
-from open_deep_research.as_runtime.lifecycle import (
+from open_deep_research.agentscope_runtime.app import ASRuntime
+from open_deep_research.agentscope_runtime.lifecycle import (
     ShutdownGate,
     ShutdownStack,
     run_shutdown_sequence,
 )
-from open_deep_research.as_runtime.settings import ASRuntimeSettings
+from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 
 pytestmark = pytest.mark.asyncio
 
@@ -85,7 +85,7 @@ async def test_runtime_gate_and_concurrent_close(monkeypatch):
 async def test_start_failure_closes_storage(monkeypatch):
     storage = AsyncMock()
     monkeypatch.setattr(
-        "open_deep_research.as_runtime.app.build_storage", lambda _: storage
+        "open_deep_research.agentscope_runtime.app.build_storage", lambda _: storage
     )
     monkeypatch.setattr(
         ASRuntime, "_start_bus", AsyncMock(side_effect=RuntimeError("startup"))

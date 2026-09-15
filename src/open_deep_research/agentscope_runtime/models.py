@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import SecretStr
 from agentscope import credential as credentials
 from agentscope.agent import ModelConfig
-from open_deep_research.as_runtime.run_config import RunConfig
+from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.models.resolution import (
     build_model_config,
     parse_model_spec,
@@ -204,7 +204,7 @@ class ModelFactory:
         credential = credential_class(**args)
         model_class = credential.get_chat_model_class()
         if provider == "openai":
-            from open_deep_research.as_runtime.gateway import (
+            from open_deep_research.agentscope_runtime.gateway import (
                 GovernedOpenAIChatModel,
                 LiteLLMChatModel,
             )
@@ -213,7 +213,7 @@ class ModelFactory:
                 LiteLLMChatModel if binding.gateway else GovernedOpenAIChatModel
             )
         else:
-            from open_deep_research.as_runtime.provider_models import (
+            from open_deep_research.agentscope_runtime.provider_models import (
                 GovernedAnthropicChatModel,
                 GovernedGeminiChatModel,
                 GovernedDeepSeekChatModel,
@@ -267,7 +267,7 @@ class ModelFactory:
         return ModelConfig(max_retries=0)
 
     def build_sandbox(self, role, binding, *, client=None):
-        from open_deep_research.as_runtime.gateway import SandboxChatModel
+        from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
 
         if (
             self._closed
@@ -288,7 +288,7 @@ class ModelFactory:
         return self._models[key]
 
     def policy_middleware(self, role, candidates=None):
-        from open_deep_research.as_runtime.model_policy import (
+        from open_deep_research.agentscope_runtime.model_policy import (
             ModelCallPolicy,
             ModelPolicyMiddleware,
         )
@@ -331,12 +331,12 @@ class ModelFactory:
             self._policies[role] = middleware
         return middleware
 
-    async def complete_with_recovery(self, role, messages, *, state, compact=None):
+    async def complete_with_recovery(self, role, messages, *, state, compact=None, candidates=None):
         """写作/摘要完整响应路径；模型尝试仍通过统一策略，恢复状态可写入 AgentState。"""
-        from open_deep_research.as_runtime.model_policy import recover_output
+        from open_deep_research.agentscope_runtime.model_policy import recover_output
         from agentscope.model import ChatResponse
 
-        middleware = self.policy_middleware(role)
+        middleware = self.policy_middleware(role, candidates=candidates)
         descriptor = self.descriptor(role)
 
         async def call(current, limit):
@@ -386,7 +386,7 @@ class ModelFactory:
         self._policies.clear()
         models, self._models = self._models, {}
         for model in models.values():
-            from open_deep_research.as_runtime.gateway import SandboxChatModel
+            from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
 
             if isinstance(model, SandboxChatModel):
                 await model.aclose()

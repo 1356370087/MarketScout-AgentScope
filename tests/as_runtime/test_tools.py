@@ -13,7 +13,7 @@ from agentscope.state import AgentState
 from agentscope.tool import ToolResponse
 from pydantic import BaseModel, ConfigDict
 
-from open_deep_research.as_runtime.tools import (
+from open_deep_research.agentscope_runtime.tools import (
     ToolGovernanceMiddleware,
     prepare_toolkit,
 )
@@ -83,7 +83,7 @@ async def test_no_langchain_required_for_native_tool_import():
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         "-c",
-        "import sys; from open_deep_research.as_runtime.tools import prepare_toolkit; assert 'langchain_core' not in sys.modules",
+        "import sys; from open_deep_research.agentscope_runtime.tools import prepare_toolkit; assert 'langchain_core' not in sys.modules",
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -335,7 +335,7 @@ async def test_native_agent_uses_toolkit_and_permission_middleware(structured):
     from agentscope.formatter import OpenAIChatFormatter
     from agentscope.model import ChatModelBase, ChatResponse
 
-    from open_deep_research.as_runtime.gateway import SandboxChatModel
+    from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
 
     class Fake(ChatModelBase):
         def __init__(self):

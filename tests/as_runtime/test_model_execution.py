@@ -9,13 +9,13 @@ from pydantic import BaseModel, SecretStr
 from agentscope.message import UserMsg, TextBlock, ToolCallBlock
 from agentscope.model import ChatResponse
 from agentscope.state import AgentState
-from open_deep_research.as_runtime.gateway import (
+from open_deep_research.agentscope_runtime.gateway import (
     SandboxBinding,
     SandboxChatModel,
     GatewayCallError,
     GovernedOpenAIChatModel,
 )
-from open_deep_research.as_runtime.model_policy import (
+from open_deep_research.agentscope_runtime.model_policy import (
     ModelCallPolicy,
     ModelPolicyMiddleware,
     recover_output,
@@ -540,8 +540,8 @@ async def test_exhausted_recovery_does_not_call_again_on_restore():
 
 
 async def test_factory_complete_recovery_is_wired(monkeypatch):
-    from open_deep_research.as_runtime.models import ModelFactory, CredentialBinding
-    from open_deep_research.as_runtime.run_config import RunConfig
+    from open_deep_research.agentscope_runtime.models import ModelFactory, CredentialBinding
+    from open_deep_research.agentscope_runtime.run_config import RunConfig
 
     spec = "openai:fixture"
     run = RunConfig.compile(

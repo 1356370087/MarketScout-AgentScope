@@ -9,8 +9,8 @@ _broadcast_wake_v1 / _broadcast_control_v1，以及 as-m2-acceptance-reader 消�
 import asyncio
 import os
 import pytest
-from open_deep_research.as_runtime.broadcast import RocketMQBroadcast
-from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
+from open_deep_research.agentscope_runtime.broadcast import RocketMQBroadcast
+from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
 
 pytestmark = [
     pytest.mark.asyncio,

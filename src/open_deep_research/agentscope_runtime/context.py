@@ -1,7 +1,9 @@
 """原生消息的有限上下文裁剪；领域层显式指定必须保留的消息。"""
 
 from agentscope.message import ToolCallBlock, ToolResultBlock
-from open_deep_research.as_runtime.messages import validate_tool_pairs
+from open_deep_research.agentscope_runtime.messages import validate_tool_pairs
+from agentscope.middleware import MiddlewareBase
+from uuid import uuid4
 
 
 class NativeContextCompactor:
@@ -60,3 +62,35 @@ class NativeContextCompactor:
         ]
         validate_tool_pairs(result, complete=False)
         return result
+
+
+class ResearchContextMiddleware(MiddlewareBase):
+    """Bound native research context while preserving domain messages and pairs."""
+
+    def __init__(self, *, max_chars: int, offloader=None):
+        self.max_chars = max_chars
+        self.offloader = offloader
+
+    async def on_compress_context(self, agent, input_kwargs, next_handler):
+        messages = agent.state.context
+        if sum(len(m.model_dump_json()) for m in messages) <= self.max_chars:
+            return
+        protected = {m.id for m in messages if m.metadata.get("research_protected")}
+        # Native Agent coalesces successive tool rounds into one assistant Msg.
+        # Split that envelope before selecting complete call/result groups.
+        candidates = []
+        for message in messages:
+            if message.role == "assistant" and len(message.content) > 1 and message.id not in protected:
+                candidates.extend(message.model_copy(deep=True, update={"id": uuid4().hex, "content": [block.model_copy(deep=True)], "usage": None}) for block in message.content)
+            else:
+                candidates.append(message)
+        compact = NativeContextCompactor(max_chars=self.max_chars, protected_ids=protected)
+        kept = await compact(candidates)
+        if sum(len(m.model_dump_json()) for m in kept) >= sum(len(m.model_dump_json()) for m in messages):
+            raise ValueError("research context cannot shrink within its protected budget")
+        if self.offloader is None:
+            raise ValueError("research context requires an authorized offloader")
+        reference = await self.offloader.offload_context(agent.state.session_id, messages)
+        # Commit the replacement only after externalization has succeeded.
+        agent.state.context = kept
+        agent.state.middle_context.setdefault("research_context_refs", []).append(reference)

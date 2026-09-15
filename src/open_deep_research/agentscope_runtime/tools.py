@@ -197,6 +197,8 @@ class GovernedTool(ToolBase):
                 base_delay=self.owner.retry_delay,
                 recorder=trace,
             )
+            if self.owner.result_observer is not None:
+                await self.owner.result_observer(self.name, identity.call_id, result)
             error_type = result.error.error_type.value if result.error else None
             denied = error_type in {
                 "permission_denied",
@@ -248,6 +250,9 @@ class GovernedToolkit(Toolkit):
         self.dispatcher = dispatcher
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        # Domain evidence consumers see typed results before the model-facing
+        # output budget truncates them. This hook cannot bypass execution policy.
+        self.result_observer = None
         self.identity: ContextVar[_CallIdentity | None] = ContextVar(
             "tool_identity", default=None
         )

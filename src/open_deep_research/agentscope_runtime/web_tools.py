@@ -24,8 +24,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
-from open_deep_research.as_runtime.models import ModelFactory
-from open_deep_research.as_runtime.search import (
+from open_deep_research.agentscope_runtime.models import ModelFactory
+from open_deep_research.agentscope_runtime.search import (
     deduplicate_sources,
     parse_anthropic_search,
     parse_openai_search,

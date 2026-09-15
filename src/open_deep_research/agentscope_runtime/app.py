@@ -27,9 +27,9 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any
 
-from open_deep_research.as_runtime.settings import ASRuntimeSettings
-from open_deep_research.as_runtime.storage import build_storage
-from open_deep_research.as_runtime.lifecycle import (
+from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
+from open_deep_research.agentscope_runtime.storage import build_storage
+from open_deep_research.agentscope_runtime.lifecycle import (
     AdmissionMiddleware,
     BorrowedResource,
     ShutdownGate,
@@ -76,8 +76,8 @@ class ASRuntime:
 
             bus = InMemoryMessageBus()
         else:
-            from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
-            from open_deep_research.as_runtime.storage import build_engine_kwargs
+            from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
+            from open_deep_research.agentscope_runtime.storage import build_engine_kwargs
 
             bus = PostgreSQLMessageBus(
                 settings.database_url,
@@ -87,7 +87,7 @@ class ASRuntime:
             )
             self.shutdown_stack.push_base("message_bus", bus.aclose)
             await bus.__aenter__()
-            from open_deep_research.as_runtime.durable import DurableCommandBridge
+            from open_deep_research.agentscope_runtime.durable import DurableCommandBridge
 
             self.commands = DurableCommandBridge(
                 settings.database_url,
@@ -104,7 +104,7 @@ class ASRuntime:
                     raise ValueError(
                         "AS_ROCKETMQ_GROUP must be unique per running instance"
                     )
-                from open_deep_research.as_runtime.broadcast import RocketMQBroadcast
+                from open_deep_research.agentscope_runtime.broadcast import RocketMQBroadcast
 
                 self.broadcast = RocketMQBroadcast(
                     settings.rocketmq_endpoint,
@@ -125,7 +125,7 @@ class ASRuntime:
         """装配框架子应用并安装 IAM 身份覆盖。"""
         from agentscope.app import create_app
 
-        from open_deep_research.as_runtime.identity import install_identity_overrides
+        from open_deep_research.agentscope_runtime.identity import install_identity_overrides
 
         kwargs: dict[str, Any] = {
             "storage": BorrowedResource(self.storage),
@@ -199,12 +199,29 @@ class ASRuntime:
 
     def create_model_factory(self, run, *, scope, owner, bindings):
         """装配原生角色模型；客户端生命周期纳入运行时关闭顺序。"""
-        from open_deep_research.as_runtime.models import ModelFactory
+        from open_deep_research.agentscope_runtime.models import ModelFactory
 
         if self.gate.closed:
             raise RuntimeError("runtime_shutting_down")
         factory = ModelFactory(run, scope=scope, owner=owner, bindings=bindings)
         self.shutdown_stack.push_drain(f"models:{scope}:{owner}", factory.aclose)
+        return factory
+
+    def research_middleware_factory(self, resolve_authorized_pipeline):
+        """Build the public service extension after application ownership checks.
+
+        Pass the returned factory as ``extra_agent_middlewares`` to ``build_app``.
+        The resolver receives the authenticated user and session, not an identity
+        supplied in a model message or tool argument.
+        """
+        from open_deep_research.agentscope_runtime.research_pipeline import ResearchPipelineMiddleware
+
+        async def factory(user_id, agent_id, session_id, workspace):
+            if self.gate.closed:
+                raise RuntimeError("runtime_shutting_down")
+            pipeline = await resolve_authorized_pipeline(user_id, agent_id, session_id, workspace)
+            return [ResearchPipelineMiddleware(pipeline, self.gate)]
+
         return factory
 
     async def aclose(self) -> None:

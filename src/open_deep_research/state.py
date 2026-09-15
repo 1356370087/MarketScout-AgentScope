@@ -1,9 +1,12 @@
 """Graph state definitions and data structures for the Deep Research agent."""
 
 import operator
-from typing import Annotated, Optional
+from typing import Annotated, Optional, TYPE_CHECKING, Any
 
-from langchain_core.messages import MessageLikeRepresentation
+if TYPE_CHECKING:
+    from langchain_core.messages import MessageLikeRepresentation
+else:
+    MessageLikeRepresentation = Any
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 

@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from open_deep_research.as_runtime.models import ModelFactory
-from open_deep_research.as_runtime.search import (
+from open_deep_research.agentscope_runtime.models import ModelFactory
+from open_deep_research.agentscope_runtime.search import (
     NativeSummarizer,
     deduplicate_sources,
     parse_anthropic_search,
@@ -64,7 +64,7 @@ async def test_four_search_api_branches():
 
 
 async def test_offline_network_disables_search(monkeypatch):
-    import open_deep_research.as_runtime.search as search_mod
+    import open_deep_research.agentscope_runtime.search as search_mod
 
     monkeypatch.setattr(search_mod, "network_policy_mode", lambda configurable: "offline")
     cfg = _config(search_api=SearchAPI.TAVILY, web_pipeline_mode="legacy")

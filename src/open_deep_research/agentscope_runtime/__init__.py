@@ -12,7 +12,7 @@
 LangChain 路径；旧 ``server:app`` 入口在 M11 前保持不变（AS-T010 兼容外壳）。
 """
 
-from open_deep_research.as_runtime.settings import ASRuntimeSettings
-from open_deep_research.as_runtime.storage import build_storage
+from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
+from open_deep_research.agentscope_runtime.storage import build_storage
 
 __all__ = ["ASRuntimeSettings", "build_storage"]
