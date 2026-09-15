@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Iterable, cast
+from typing import TYPE_CHECKING, Any, Iterable, cast
 
-from langchain_core.runnables import RunnableConfig
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+else:
+    RunnableConfig = dict[str, Any]
 
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.documents.contracts import SourceMode, selection_from_config
-from open_deep_research.skills import load_skill_tools
-from open_deep_research.tools.adapters import adapt_langchain_tool
-from open_deep_research.tools.anthropic_web_search import anthropic_web_search
 from open_deep_research.tools.base import (
     Tool,
     ToolEffect,
@@ -20,34 +20,52 @@ from open_deep_research.tools.base import (
     build_tool_registry,
     tools_to_model_definitions,
 )
-from open_deep_research.tools.fetch_url import fetch_url
-from open_deep_research.tools.fetch_webpage import fetch_webpage
 from open_deep_research.tools.governance import AgentRole, filter_tools_by_permission
-from open_deep_research.tools.mcp import load_browser_mcp_tools, load_mcp_tools
-from open_deep_research.tools.openai_web_search import openai_web_search
-from open_deep_research.tools.read_file import read_file
-from open_deep_research.tools.research_complete import research_complete
-from open_deep_research.tools.search_documents import search_documents
-from open_deep_research.tools.shell_exec import shell_exec
-from open_deep_research.tools.tavily_search import tavily_search
-from open_deep_research.tools.think_tool import think_tool
-from open_deep_research.tools.web_research import web_research
-from open_deep_research.tools.write_file import write_file
 
-_RESEARCHER_BUILTINS: tuple[Tool, ...] = (
-    research_complete,
-    think_tool,
-    tavily_search,
-    openai_web_search,
-    anthropic_web_search,
-    web_research,
-    fetch_url,
-    fetch_webpage,
-    shell_exec,
-    read_file,
-    write_file,
-    search_documents,
-)
+
+def _researcher_builtins() -> tuple[Tool, ...]:
+    """Load transitional built-ins only when their catalog is requested."""
+    from open_deep_research.tools.anthropic_web_search import anthropic_web_search
+    from open_deep_research.tools.fetch_url import fetch_url
+    from open_deep_research.tools.fetch_webpage import fetch_webpage
+    from open_deep_research.tools.openai_web_search import openai_web_search
+    from open_deep_research.tools.read_file import read_file
+    from open_deep_research.tools.research_complete import research_complete
+    from open_deep_research.tools.search_documents import search_documents
+    from open_deep_research.tools.shell_exec import shell_exec
+    from open_deep_research.tools.tavily_search import tavily_search
+    from open_deep_research.tools.think_tool import think_tool
+    from open_deep_research.tools.web_research import web_research
+    from open_deep_research.tools.write_file import write_file
+
+    return (
+        research_complete,
+        think_tool,
+        tavily_search,
+        openai_web_search,
+        anthropic_web_search,
+        web_research,
+        fetch_url,
+        fetch_webpage,
+        shell_exec,
+        read_file,
+        write_file,
+        search_documents,
+    )
+
+
+async def load_mcp_tools(*args, **kwargs):
+    """Load the transitional MCP adapter on demand."""
+    from open_deep_research.tools.mcp import load_mcp_tools as load
+
+    return await load(*args, **kwargs)
+
+
+async def load_browser_mcp_tools(*args, **kwargs):
+    """Load the transitional browser adapter on demand."""
+    from open_deep_research.tools.mcp import load_browser_mcp_tools as load
+
+    return await load(*args, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +89,10 @@ def render_tool_guidance(tools: Iterable[Tool], config: RunnableConfig) -> str:
 
 async def get_search_tool(search_api: SearchAPI) -> list[Tool]:
     """Return the folder-owned provider search tool for compatibility callers."""
+    from open_deep_research.tools.anthropic_web_search import anthropic_web_search
+    from open_deep_research.tools.openai_web_search import openai_web_search
+    from open_deep_research.tools.tavily_search import tavily_search
+
     provider_tools: dict[SearchAPI, Tool] = {
         SearchAPI.TAVILY: tavily_search,
         SearchAPI.OPENAI: openai_web_search,
@@ -87,11 +109,14 @@ async def assemble_toolset(
     supervisor_tools: Iterable[Tool] | None = None,
 ) -> list[Tool]:
     """Assemble enabled static and dynamic tools, then enforce uniqueness."""
+    from open_deep_research.skills import load_skill_tools
+    from open_deep_research.tools.adapters import adapt_langchain_tool
+
     configurable = Configuration.from_runnable_config(config)
     if role is AgentRole.SUPERVISOR:
         tools = list(supervisor_tools or [])
     else:
-        tools = [tool for tool in _RESEARCHER_BUILTINS if tool.is_enabled(config)]
+        tools = [tool for tool in _researcher_builtins() if tool.is_enabled(config)]
         selection = selection_from_config(config)
         if selection.mode is SourceMode.DOCUMENTS:
             tools = [
@@ -249,6 +274,8 @@ async def prepare_existing_toolset(
 ) -> ToolAssembly:
     """Permission-filter and project an already assembled toolset."""
     candidate_tools = list(tools)
+    build_tool_registry(candidate_tools)
+    candidate_tools = [tool for tool in candidate_tools if tool.is_enabled(config)]
     permitted_tools = cast(
         list[Tool],
         filter_tools_by_permission(candidate_tools, role, config),

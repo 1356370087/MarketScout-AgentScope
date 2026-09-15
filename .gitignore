@@ -170,3 +170,4 @@ tests/local_eval_results/
 # 临时目录（测试运行时等）
 tmp/
 
+.venv-legacy/

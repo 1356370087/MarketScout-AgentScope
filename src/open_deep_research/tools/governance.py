@@ -22,20 +22,22 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import aiohttp
-from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import ToolException
+
+if TYPE_CHECKING:
+    from langchain_core.messages import ToolMessage
+    from langchain_core.runnables import RunnableConfig
+else:
+    RunnableConfig = dict[str, Any]
 from pydantic import BaseModel, Field, ValidationError
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.documents.contracts import selection_from_config
-from open_deep_research.observability import get_trace_recorder
 from open_deep_research.sandbox.policy import (
     allowed_domains,
     egress_host_from_url,
@@ -69,6 +71,28 @@ logger = logging.getLogger(__name__)
 ##########################
 # Enums
 ##########################
+
+
+def get_trace_recorder(config: RunnableConfig):
+    """Load the legacy trace adapter only for legacy callers."""
+    from open_deep_research.observability import get_trace_recorder as get_recorder
+
+    return get_recorder(config)
+
+
+def _legacy_exception(exc: BaseException, module: str, name: str) -> bool:
+    """Recognize already loaded legacy exceptions without importing LangChain."""
+    exception_type = getattr(sys.modules.get(module), name, None)
+    return exception_type is not None and isinstance(exc, exception_type)
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutcomeMessage:
+    """Framework-neutral, rendered tool outcome used by both transports."""
+
+    content: str
+    name: str
+    tool_call_id: str
 
 
 class AgentRole(str, Enum):
@@ -158,6 +182,8 @@ class ToolError(BaseModel):
 
     def to_tool_message(self, tool_call_id: str) -> ToolMessage:
         """Render this error as a ``ToolMessage`` whose content is the JSON payload."""
+        from langchain_core.messages import ToolMessage
+
         return ToolMessage(
             content=self.model_dump_json(),
             name=self.tool_name,
@@ -169,7 +195,7 @@ class ToolError(BaseModel):
 class GovernedToolCallResult:
     """Transport message plus the original typed result of one invocation."""
 
-    message: ToolMessage
+    message: ToolOutcomeMessage | ToolMessage
     result: Optional[ToolResult[Any]] = None
     error: Optional[ToolError] = None
 
@@ -177,7 +203,7 @@ class GovernedToolCallResult:
 def _error_result(error: ToolError, tool_call_id: str) -> GovernedToolCallResult:
     """Build a governed outcome for a structured failure."""
     return GovernedToolCallResult(
-        message=error.to_tool_message(tool_call_id),
+        message=ToolOutcomeMessage(error.model_dump_json(), error.tool_name, tool_call_id),
         error=error,
     )
 
@@ -268,10 +294,14 @@ def classify_retryable_error(exc: BaseException) -> tuple[ToolErrorType, bool]:
     if isinstance(exc, aiohttp.ClientError | ConnectionError | OSError):
         return ToolErrorType.network_error, True
 
-    # 4. LangChain ToolException carrying HTTP hints in its message.
-    if isinstance(exc, ToolException):
-        if getattr(exc, "interaction_url", None):
-            return ToolErrorType.interaction_required, False
+    # 4. Interaction requests (legacy ToolException or the native MCP adapter's
+    # project-owned exception) carry a validated URL for the approval layer;
+    # they are never retried in-process.
+    if getattr(exc, "interaction_url", None):
+        return ToolErrorType.interaction_required, False
+
+    # 5. LangChain ToolException carrying HTTP hints in its message.
+    if _legacy_exception(exc, "langchain_core.tools", "ToolException"):
         msg = str(exc).lower()
         if "429" in msg or "rate" in msg:
             return ToolErrorType.rate_limited, True
@@ -281,12 +311,12 @@ def classify_retryable_error(exc: BaseException) -> tuple[ToolErrorType, bool]:
             return ToolErrorType.timeout, True
         return ToolErrorType.unknown, False
 
-    # 5. Recurse into the cause chain (errors wrapped by libraries).
+    # 6. Recurse into the cause chain (errors wrapped by libraries).
     cause = exc.__cause__ or exc.__context__
     if cause is not None and cause is not exc:
         return classify_retryable_error(cause)
 
-    # 6. ExceptionGroup (Python 3.11+) -- check each sub-exception.
+    # 7. ExceptionGroup (Python 3.11+) -- check each sub-exception.
     if hasattr(exc, "exceptions"):
         for sub in exc.exceptions:
             et, retryable = classify_retryable_error(sub)
@@ -313,7 +343,7 @@ def _is_llm_parse_failure(exc: BaseException) -> bool:
     """Return whether a non-transient schema or parse failure occurred."""
     if isinstance(exc, ValidationError):
         return True
-    if isinstance(exc, OutputParserException):
+    if _legacy_exception(exc, "langchain_core.exceptions", "OutputParserException"):
         return True
     return False
 
@@ -603,6 +633,7 @@ async def invoke_tool_with_retry(
     base_delay: float = 1.0,
     max_delay: float = 30.0,
     sleeper: Optional[Callable[[float], Any]] = None,
+    recorder: Any = None,
 ) -> ToolResult[Any]:
     """Invoke ``Tool.call`` with exponential backoff on retryable errors.
 
@@ -619,7 +650,7 @@ async def invoke_tool_with_retry(
     attempt = 0
     while True:
         try:
-            return await tool.call(input, context)
+            return await tool.call(input, replace(context, attempt=context.attempt + attempt))
         except Exception as exc:  # noqa: BLE001 -- classify then decide
             error_type, retryable = classify_retryable_error(exc)
             if not retryable or attempt >= max_retries:
@@ -636,7 +667,7 @@ async def invoke_tool_with_retry(
             )
             # Record this retry on the span opened by observe_tool_call (noop if
             # observability is disabled or no span is active).
-            get_trace_recorder(context.config).active_span().record_retry(
+            (recorder if recorder is not None else get_trace_recorder(context.config)).active_span().record_retry(
                 attempt=attempt + 1,
                 error_type=error_type.value,
                 http_status=_safe_status(exc),
@@ -918,12 +949,12 @@ def _serialize_governed_output(
     return f"{content[:limit]}\n[truncated {omitted} chars]"
 
 
-async def check_egress_domain(
+async def check_egress_domain_native(
     tool_call: dict[str, Any],
     tool: Tool,
     args: dict[str, Any],
     config: RunnableConfig,
-) -> Optional[ToolMessage]:
+) -> Optional[ToolOutcomeMessage]:
     """Enforce the V7 egress allowlist, denying unknown hosts during M1."""
     tool_call_id = tool_call["id"]
     configurable = Configuration.from_runnable_config(config)
@@ -945,7 +976,7 @@ async def check_egress_domain(
     mode = network_policy_mode(configurable)
     if mode == "offline":
         host = unapproved_hosts[0]
-        return ToolError(
+        error = ToolError(
             error_type=ToolErrorType.egress_domain_denied,
             tool_name=getattr(tool, "name", "unknown"),
             message="Network access is disabled for this run.",
@@ -954,7 +985,8 @@ async def check_egress_domain(
                 "domains": unapproved_hosts,
                 "network_mode": mode,
             },
-        ).to_tool_message(tool_call_id)
+        )
+        return ToolOutcomeMessage(error.model_dump_json(), error.tool_name, tool_call_id)
     configured_domains = set(allowed_domains(configurable))
     denied_hosts = [host for host in unapproved_hosts if host not in configured_domains]
     if not denied_hosts:
@@ -962,7 +994,7 @@ async def check_egress_domain(
 
     host = denied_hosts[0]
     run_id = str(config.get("metadata", {}).get("run_id", "default"))
-    return ToolError(
+    error = ToolError(
         error_type=ToolErrorType.egress_domain_denied,
         tool_name=getattr(tool, "name", "unknown"),
         message=(
@@ -977,7 +1009,8 @@ async def check_egress_domain(
             "profile_id": configurable.sandbox_profile_id,
             "denied": True,
         },
-    ).to_tool_message(tool_call_id)
+    )
+    return ToolOutcomeMessage(error.model_dump_json(), error.tool_name, tool_call_id)
 
 
 def _is_preapproved_local_document_read(
@@ -998,7 +1031,7 @@ def _is_preapproved_local_document_read(
         return False
 
 
-async def execute_governed_tool_call(
+async def execute_governed_tool_call_native(
     tool_call: dict[str, Any],
     tools_by_name: dict[str, Tool],
     role: AgentRole,
@@ -1012,6 +1045,7 @@ async def execute_governed_tool_call(
     sleeper: Optional[Callable[[float], Any]] = None,
     operation_id: str = "",
     operation_attempt: int = 1,
+    recorder: Any = None,
 ) -> GovernedToolCallResult:
     """Execute a single tool call under full governance.
 
@@ -1022,12 +1056,13 @@ async def execute_governed_tool_call(
     4. Egress policy.
     5. ``Tool.call`` with optional retry and stable result rendering.
     """
+    recorder = recorder if recorder is not None else get_trace_recorder(config)
     name = tool_call["name"]
     tool_call_id = tool_call["id"]
     args = tool_call.get("args", {}) or {}
 
     def observed_error(error: ToolError) -> GovernedToolCallResult:
-        get_trace_recorder(config).active_span().record_outcome(
+        recorder.active_span().record_outcome(
             error_type=error.error_type.value,
             http_status=error.detail.get("status") if isinstance(error.detail, dict) else None,
         )
@@ -1081,7 +1116,7 @@ async def execute_governed_tool_call(
         and tool_call_id not in approved_call_ids
         and not _is_preapproved_local_document_read(tool, effect, config)
     ):
-        get_trace_recorder(config).active_span().score(
+        recorder.active_span().score(
             "security.sensitive_tool_blocked", True, effect.value
         )
         if configurable.event_log_enabled:
@@ -1114,7 +1149,7 @@ async def execute_governed_tool_call(
 
     # Egress domain allowlist for URL-bearing tools. May
     # block inline (in-process) until a supervisor decision arrives.
-    egress_err = await check_egress_domain(tool_call, tool, args, config)
+    egress_err = await check_egress_domain_native(tool_call, tool, args, config)
     if egress_err is not None:
         try:
             egress_error = ToolError.model_validate_json(str(egress_err.content))
@@ -1124,7 +1159,7 @@ async def execute_governed_tool_call(
                 tool_name=name,
                 message="Tool egress policy denied this call.",
             )
-        get_trace_recorder(config).active_span().record_outcome(
+        recorder.active_span().record_outcome(
             error_type=egress_error.error_type.value,
         )
         return GovernedToolCallResult(
@@ -1143,14 +1178,14 @@ async def execute_governed_tool_call(
     # Automatic retries are safe for reads and for effectful tools that promise
     # to reuse the stable operation id supplied through ToolContext.
     retry_is_safe = effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ} or (
-        get_tool_supports_idempotency(tool)
+        get_tool_supports_idempotency(tool) and bool(operation_id)
     )
     effective_retry = apply_retry and get_tool_retryable(tool) and retry_is_safe
     if not effective_retry:
         try:
             result = await tool.call(validated_input, context)
             return GovernedToolCallResult(
-                message=ToolMessage(
+                message=ToolOutcomeMessage(
                     content=_serialize_governed_output(tool, result.output, configurable),
                     name=name,
                     tool_call_id=tool_call_id,
@@ -1159,7 +1194,7 @@ async def execute_governed_tool_call(
             )
         except Exception as exc:  # noqa: BLE001
             error_type, _ = classify_retryable_error(exc)
-            get_trace_recorder(config).active_span().record_outcome(
+            recorder.active_span().record_outcome(
                 error_type=error_type.value,
                 http_status=_safe_status(exc),
             )
@@ -1173,10 +1208,10 @@ async def execute_governed_tool_call(
     try:
         result = await invoke_tool_with_retry(
             tool, validated_input, context,
-            max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, sleeper=sleeper,
+            max_retries=max_retries, base_delay=base_delay, max_delay=max_delay, sleeper=sleeper, recorder=recorder,
         )
         return GovernedToolCallResult(
-            message=ToolMessage(
+            message=ToolOutcomeMessage(
                 content=_serialize_governed_output(tool, result.output, configurable),
                 name=name,
                 tool_call_id=tool_call_id,
@@ -1184,7 +1219,7 @@ async def execute_governed_tool_call(
             result=result,
         )
     except ToolExecutionFailure as failure:
-        get_trace_recorder(config).active_span().record_outcome(
+        recorder.active_span().record_outcome(
             error_type=failure.error_type.value,
             http_status=_safe_status(failure.inner),
             retry_count=failure.attempts - 1,
@@ -1202,7 +1237,7 @@ async def execute_governed_tool_call(
         ), tool_call_id)
     except Exception as exc:  # noqa: BLE001 -- non-retryable, surfaced directly
         error_type, _ = classify_retryable_error(exc)
-        get_trace_recorder(config).active_span().record_outcome(
+        recorder.active_span().record_outcome(
             error_type=error_type.value,
             http_status=_safe_status(exc),
         )
@@ -1212,3 +1247,26 @@ async def execute_governed_tool_call(
             message=f"Tool execution failed: {_safe_exc_str(exc)}",
             detail={"status": _safe_status(exc)},
         ), tool_call_id)
+
+
+async def check_egress_domain(*args: Any, **kwargs: Any) -> Optional[ToolMessage]:
+    """Preserve the legacy egress result transport."""
+    from langchain_core.messages import ToolMessage
+
+    message = await check_egress_domain_native(*args, **kwargs)
+    if message is None:
+        return None
+    return ToolMessage(content=message.content, name=message.name, tool_call_id=message.tool_call_id)
+
+
+async def execute_governed_tool_call(*args: Any, **kwargs: Any) -> GovernedToolCallResult:
+    """Preserve the legacy transport while sharing the native governance core."""
+    from langchain_core.messages import ToolMessage
+
+    outcome = await execute_governed_tool_call_native(*args, **kwargs)
+    message = outcome.message
+    return GovernedToolCallResult(
+        message=ToolMessage(content=message.content, name=message.name, tool_call_id=message.tool_call_id),
+        result=outcome.result,
+        error=outcome.error,
+    )

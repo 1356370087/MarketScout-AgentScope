@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
+    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
@@ -18,7 +19,10 @@ from typing import (
     runtime_checkable,
 )
 
-from langchain_core.runnables import RunnableConfig
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+else:
+    RunnableConfig = dict[str, Any]
 from pydantic import BaseModel
 
 InputT = TypeVar("InputT", bound=BaseModel)

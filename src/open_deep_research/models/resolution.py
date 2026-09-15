@@ -14,7 +14,10 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
 
-from langchain.chat_models import init_chat_model
+def init_chat_model(*args: Any, **kwargs: Any) -> Any:
+    """Legacy-only lazy constructor; native configuration must not load LangChain."""
+    from langchain.chat_models import init_chat_model as legacy_init
+    return legacy_init(*args, **kwargs)
 
 from open_deep_research.models.capabilities import (
     dashscope_qwen_enable_thinking,

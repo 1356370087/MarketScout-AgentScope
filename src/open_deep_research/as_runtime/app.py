@@ -1,0 +1,234 @@
+"""AgentScope 应用组合入口（M2/AS-T010）。
+
+把框架服务组件装配为可在现有进程内挂载的 FastAPI 子应用：
+
+- 存储：``build_storage``（PG 独立 schema / 演示 SQLite）。
+- 总线：``AS_DATABASE_URL`` 存在时用持久 ``PostgreSQLMessageBus``，
+  演示模式退回 ``InMemoryMessageBus``（锁 TTL 缺口 AS-R021 已知）。
+- 身份：安装 IAM JWT 覆盖（AS-T015），伪造 ``X-User-ID`` 无效。
+- 暴露策略：子应用默认**不挂载到对外路由**（最小暴露，AS-T015）；
+  兼容 API 外壳由旧 ``server:app`` 继续承担（M11 前不变），本入口供
+  进程内服务组合与测试使用。
+
+用法（进程内组合）::
+
+    runtime = await ASRuntime.create()      # 打开存储与总线
+    app = runtime.build_app()               # 框架子应用（已覆盖身份）
+    try:
+        ...                                 # ASGI 挂载 / TestClient
+    finally:
+        await runtime.aclose()              # T016 顺序：先停接收再释放
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Any
+
+from open_deep_research.as_runtime.settings import ASRuntimeSettings
+from open_deep_research.as_runtime.storage import build_storage
+from open_deep_research.as_runtime.lifecycle import (
+    AdmissionMiddleware,
+    BorrowedResource,
+    ShutdownGate,
+    ShutdownStack,
+    run_shutdown_sequence,
+)
+
+
+@dataclass
+class ASRuntime:
+    """持有框架服务组件的组合根；生命周期由调用方显式管理（AS-T016）。"""
+
+    settings: ASRuntimeSettings
+    storage: Any
+    message_bus: Any
+    workspace_manager: Any | None = None
+    _owns: list[str] = field(default_factory=list)
+    gate: ShutdownGate = field(default_factory=ShutdownGate)
+    shutdown_stack: ShutdownStack = field(default_factory=ShutdownStack)
+    commands: Any | None = None
+    broadcast: Any | None = None
+    _close_task: Any | None = None
+
+    @classmethod
+    async def create(cls, settings: ASRuntimeSettings | None = None) -> ASRuntime:
+        settings = settings or ASRuntimeSettings.from_env()
+        storage = build_storage(settings)
+        runtime = cls(settings=settings, storage=storage, message_bus=None)
+        runtime.shutdown_stack.push_base(
+            "storage", lambda: storage.__aexit__(None, None, None)
+        )
+        try:
+            await storage.__aenter__()
+            await runtime._start_bus()
+        except BaseException:
+            await runtime.aclose()
+            raise
+        return runtime
+
+    async def _start_bus(self) -> None:
+        settings = self.settings
+        if settings.is_demo:
+            from agentscope.app.message_bus import InMemoryMessageBus
+
+            bus = InMemoryMessageBus()
+        else:
+            from open_deep_research.as_runtime.pgbus import PostgreSQLMessageBus
+            from open_deep_research.as_runtime.storage import build_engine_kwargs
+
+            bus = PostgreSQLMessageBus(
+                settings.database_url,
+                table_prefix=settings.bus_table_prefix,
+                engine_kwargs=build_engine_kwargs(settings),
+                auto_create=settings.storage_auto_create,
+            )
+            self.shutdown_stack.push_base("message_bus", bus.aclose)
+            await bus.__aenter__()
+            from open_deep_research.as_runtime.durable import DurableCommandBridge
+
+            self.commands = DurableCommandBridge(
+                settings.database_url,
+                table_prefix=settings.bus_table_prefix,
+                engine_kwargs=build_engine_kwargs(settings),
+                signal_queue=bus,
+                auto_create=settings.storage_auto_create,
+                gate=self.gate,
+            )
+            self.shutdown_stack.push_base("commands", lambda: self.commands.__aexit__())
+            await self.commands.__aenter__()
+            if settings.rocketmq_endpoint:
+                if not settings.rocketmq_group:
+                    raise ValueError(
+                        "AS_ROCKETMQ_GROUP must be unique per running instance"
+                    )
+                from open_deep_research.as_runtime.broadcast import RocketMQBroadcast
+
+                self.broadcast = RocketMQBroadcast(
+                    settings.rocketmq_endpoint,
+                    topic_prefix=settings.rocketmq_topic_prefix,
+                    access_key=settings.rocketmq_access_key,
+                    secret_key=settings.rocketmq_secret_key,
+                    tls=settings.rocketmq_tls,
+                )
+                self.shutdown_stack.push_base("broadcast", self.broadcast.aclose)
+                await self.broadcast.start()
+                await self.broadcast.start_consumer(
+                    settings.rocketmq_group, channels=["wake"]
+                )
+                bus.broadcast = self.broadcast
+        self.message_bus = bus
+
+    def build_app(self, **create_kwargs: Any):
+        """装配框架子应用并安装 IAM 身份覆盖。"""
+        from agentscope.app import create_app
+
+        from open_deep_research.as_runtime.identity import install_identity_overrides
+
+        kwargs: dict[str, Any] = {
+            "storage": BorrowedResource(self.storage),
+            "message_bus": BorrowedResource(self.message_bus),
+            "enable_channel_worker": False,
+            "enable_scheduler": False,
+        }
+        if self.workspace_manager is not None:
+            kwargs["workspace_manager"] = self.workspace_manager
+        else:
+            from agentscope.app.workspace_manager import LocalWorkspaceManager
+
+            kwargs["workspace_manager"] = LocalWorkspaceManager(
+                str(_default_workspace_dir())
+            )
+        kwargs.update(create_kwargs)
+        app = create_app(**kwargs)
+        install_identity_overrides(app)
+        app.add_middleware(AdmissionMiddleware, gate=self.gate)
+        native_lifespan = app.router.lifespan_context
+
+        @asynccontextmanager
+        async def lifespan(application):
+            context = native_lifespan(application)
+            try:
+                await context.__aenter__()
+                self.shutdown_stack.push_drain(
+                    "agentscope_services", lambda: context.__aexit__(None, None, None)
+                )
+                yield
+            finally:
+                await self.aclose()
+
+        app.router.lifespan_context = lifespan
+        return app
+
+    def start_command_consumer(
+        self, command_key: str, applier: Any, *, poll_seconds: float = 1.0
+    ) -> None:
+        """定期扫描持久事实，广播全丢也能恢复；每个业务键注册一个消费者。
+
+        applier 必须按 command_id 幂等。非幂等外部操作的结果不明情况
+        进入隔离，业务核对/操作账本由 M6 接入。
+        """
+        if self.gate.closed or self.commands is None:
+            raise RuntimeError("durable consumer unavailable")
+        stopped = asyncio.Event()
+
+        async def consume():
+            while not stopped.is_set() and not self.gate.closed:
+                await self.commands.apply_pending(command_key, applier)
+                await self.message_bus.queue_drain(f"durable:{command_key}")
+                try:
+                    await asyncio.wait_for(stopped.wait(), poll_seconds)
+                except TimeoutError:
+                    pass
+
+        task = asyncio.create_task(consume())
+
+        async def stop():
+            stopped.set()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), self.settings.drain_timeout
+                )
+            except TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        self.shutdown_stack.push_drain(f"commands:{command_key}", stop)
+
+    def create_model_factory(self, run, *, scope, owner, bindings):
+        """装配原生角色模型；客户端生命周期纳入运行时关闭顺序。"""
+        from open_deep_research.as_runtime.models import ModelFactory
+
+        if self.gate.closed:
+            raise RuntimeError("runtime_shutting_down")
+        factory = ModelFactory(run, scope=scope, owner=owner, bindings=bindings)
+        self.shutdown_stack.push_drain(f"models:{scope}:{owner}", factory.aclose)
+        return factory
+
+    async def aclose(self) -> None:
+        """先拒绝新工作并保存/释放运行资源，再关闭总线和存储连接池。"""
+        if self._close_task is None:
+            self.gate.close()
+            self._close_task = asyncio.create_task(
+                run_shutdown_sequence(
+                    self.gate,
+                    self.shutdown_stack,
+                    drain_timeout=self.settings.drain_timeout,
+                )
+            )
+        # 调用者取消不能打断状态保存和清理；等待同一个关闭任务，避免重复释放。
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            await self._close_task
+            raise
+
+
+def _default_workspace_dir():
+    from pathlib import Path
+
+    d = Path(__file__).resolve().parents[3] / ".runs" / "as-workspaces"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

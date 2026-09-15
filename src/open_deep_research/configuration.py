@@ -5,9 +5,12 @@ import json
 import os
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
 
-from langchain_core.runnables import RunnableConfig
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+else:
+    RunnableConfig = dict[str, Any]
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from open_deep_research.quality.policy import (

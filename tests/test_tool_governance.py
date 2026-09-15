@@ -769,7 +769,8 @@ class TestExecuteGovernedToolCall:
         sleeper.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_effectful_tool_can_retry_with_idempotency_support(self):
+    @pytest.mark.parametrize("operation_id, expected", [("run:write-idempotent", 2), ("", 1)])
+    async def test_effectful_tool_can_retry_with_idempotency_support(self, operation_id, expected):
         attempts = 0
 
         async def idempotent_external_write() -> str:
@@ -792,13 +793,15 @@ class TestExecuteGovernedToolCall:
             {effectful.name: effectful},
             AgentRole.SUPERVISOR,
             _config(),
+            operation_id=operation_id,
             max_retries=1,
             sleeper=sleeper,
         )
 
-        assert json.loads(msg.content)["error_type"] == "max_retries_exceeded"
-        assert attempts == 2
-        assert sleeper.await_count == 1
+        error_type = "max_retries_exceeded" if operation_id else "service_unavailable"
+        assert json.loads(msg.content)["error_type"] == error_type
+        assert attempts == expected
+        assert sleeper.await_count == expected - 1
 
     @pytest.mark.asyncio
     async def test_selected_local_document_read_uses_frozen_source_approval(self):

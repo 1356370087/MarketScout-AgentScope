@@ -1,0 +1,1222 @@
+{
+  "max_structured_output_retries": {
+    "group": "models",
+    "target": "StructuredOutputPolicy.max_retries",
+    "handling": "原生扩展"
+  },
+  "model_transport_max_attempts": {
+    "group": "models",
+    "target": "ModelCallPolicy.transport_attempts",
+    "handling": "原生扩展"
+  },
+  "model_circuit_breaker_enabled": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_breaker_enabled",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_failure_threshold": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_failure_threshold",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_failure_window_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_failure_window_seconds",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_open_cooldown_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_open_cooldown_seconds",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_max_cooldown_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_max_cooldown_seconds",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_slow_ratio_threshold": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_slow_ratio_threshold",
+    "handling": "业务保留并接入"
+  },
+  "model_circuit_slow_min_samples": {
+    "group": "models",
+    "target": "RunConfig.models.model_circuit_slow_min_samples",
+    "handling": "业务保留并接入"
+  },
+  "model_first_packet_probe": {
+    "group": "models",
+    "target": "RunConfig.models.model_first_packet_probe",
+    "handling": "业务保留并接入"
+  },
+  "model_first_packet_timeout_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_first_packet_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "model_slow_first_packet_threshold_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_slow_first_packet_threshold_seconds",
+    "handling": "业务保留并接入"
+  },
+  "context_recovery_max_attempts": {
+    "group": "models",
+    "target": "RunConfig.models.context_recovery_max_attempts",
+    "handling": "业务保留并接入"
+  },
+  "output_token_escalation_enabled": {
+    "group": "models",
+    "target": "RunConfig.models.output_token_escalation_enabled",
+    "handling": "业务保留并接入"
+  },
+  "output_continuation_max_attempts": {
+    "group": "models",
+    "target": "RunConfig.models.output_continuation_max_attempts",
+    "handling": "业务保留并接入"
+  },
+  "model_fallbacks": {
+    "group": "models",
+    "target": "RoleModelPolicy.candidates",
+    "handling": "原生扩展"
+  },
+  "model_context_window_overrides": {
+    "group": "models",
+    "target": "RunConfig.models.model_context_window_overrides",
+    "handling": "业务保留并接入"
+  },
+  "model_max_output_tokens_overrides": {
+    "group": "models",
+    "target": "RunConfig.models.model_max_output_tokens_overrides",
+    "handling": "业务保留并接入"
+  },
+  "unknown_model_context_window_tokens": {
+    "group": "models",
+    "target": "RunConfig.models.unknown_model_context_window_tokens",
+    "handling": "业务保留并接入"
+  },
+  "run_deadline_seconds": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.run_deadline_seconds",
+    "handling": "业务保留并接入"
+  },
+  "max_run_model_calls": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.max_run_model_calls",
+    "handling": "业务保留并接入"
+  },
+  "max_run_tool_calls": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.max_run_tool_calls",
+    "handling": "业务保留并接入"
+  },
+  "max_run_input_tokens": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.max_run_input_tokens",
+    "handling": "业务保留并接入"
+  },
+  "max_run_output_tokens": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.max_run_output_tokens",
+    "handling": "业务保留并接入"
+  },
+  "max_run_cost_micro_usd": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.max_run_cost_micro_usd",
+    "handling": "业务保留并接入"
+  },
+  "max_concurrent_tool_calls": {
+    "group": "tools",
+    "target": "RunConfig.tools.max_concurrent_tool_calls",
+    "handling": "业务保留并接入"
+  },
+  "max_tool_batch_size": {
+    "group": "tools",
+    "target": "RunConfig.tools.max_tool_batch_size",
+    "handling": "业务保留并接入"
+  },
+  "gateway_tool_model_max_concurrency": {
+    "group": "tools",
+    "target": "RunConfig.tools.gateway_tool_model_max_concurrency",
+    "handling": "业务保留并接入"
+  },
+  "model_call_timeout_seconds": {
+    "group": "models",
+    "target": "RunConfig.models.model_call_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "tool_call_timeout_seconds": {
+    "group": "tools",
+    "target": "RunConfig.tools.tool_call_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "research_tool_call_timeout_seconds": {
+    "group": "tools",
+    "target": "RunConfig.tools.research_tool_call_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "hook_timeout_seconds": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.hook_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "allow_clarification": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.allow_clarification",
+    "handling": "业务保留并接入"
+  },
+  "token_usage_accounting_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.token_usage_accounting_enabled",
+    "handling": "业务保留并接入"
+  },
+  "token_usage_estimation_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.token_usage_estimation_enabled",
+    "handling": "业务保留并接入"
+  },
+  "observability_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.observability_enabled",
+    "handling": "业务保留并接入"
+  },
+  "sqlite_observability_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.sqlite_observability_enabled",
+    "handling": "业务保留并接入"
+  },
+  "trace_store_path": {
+    "group": "observability",
+    "target": "RunConfig.observability.trace_store_path",
+    "handling": "业务保留并接入"
+  },
+  "trace_payload_mode": {
+    "group": "observability",
+    "target": "RunConfig.observability.trace_payload_mode",
+    "handling": "业务保留并接入"
+  },
+  "trace_preview_chars": {
+    "group": "observability",
+    "target": "RunConfig.observability.trace_preview_chars",
+    "handling": "业务保留并接入"
+  },
+  "trace_redaction_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.trace_redaction_enabled",
+    "handling": "业务保留并接入"
+  },
+  "model_costs_per_million": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.model_costs_per_million",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_enabled",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_public_key": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_public_key",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_secret_key": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_secret_key",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_base_url": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_base_url",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_environment": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_environment",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_release": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_release",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_sample_rate": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_sample_rate",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_flush_on_run_end": {
+    "group": "observability",
+    "target": "RunConfig.observability.langfuse_flush_on_run_end",
+    "handling": "业务保留并接入"
+  },
+  "langfuse_langchain_callback_enabled": {
+    "group": "observability",
+    "target": "原生 TracingMiddleware 的 Langfuse 导出开关别名",
+    "handling": "兼容别名"
+  },
+  "otel_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.otel_enabled",
+    "handling": "业务保留并接入"
+  },
+  "otel_service_name": {
+    "group": "observability",
+    "target": "RunConfig.observability.otel_service_name",
+    "handling": "业务保留并接入"
+  },
+  "otel_exporter_otlp_endpoint": {
+    "group": "observability",
+    "target": "RunConfig.observability.otel_exporter_otlp_endpoint",
+    "handling": "业务保留并接入"
+  },
+  "prometheus_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.prometheus_enabled",
+    "handling": "业务保留并接入"
+  },
+  "prometheus_metrics_path": {
+    "group": "observability",
+    "target": "RunConfig.observability.prometheus_metrics_path",
+    "handling": "业务保留并接入"
+  },
+  "prometheus_namespace": {
+    "group": "observability",
+    "target": "RunConfig.observability.prometheus_namespace",
+    "handling": "业务保留并接入"
+  },
+  "helicone_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.helicone_enabled",
+    "handling": "业务保留并接入"
+  },
+  "helicone_api_key": {
+    "group": "observability",
+    "target": "RunConfig.observability.helicone_api_key",
+    "handling": "业务保留并接入"
+  },
+  "helicone_base_url": {
+    "group": "observability",
+    "target": "RunConfig.observability.helicone_base_url",
+    "handling": "业务保留并接入"
+  },
+  "helicone_headers_enabled": {
+    "group": "observability",
+    "target": "RunConfig.observability.helicone_headers_enabled",
+    "handling": "业务保留并接入"
+  },
+  "max_concurrent_research_units": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.max_concurrent_research_units",
+    "handling": "业务保留并接入"
+  },
+  "search_api": {
+    "group": "web",
+    "target": "RunConfig.web.search_api",
+    "handling": "业务保留并接入"
+  },
+  "max_researcher_iterations": {
+    "group": "runtime",
+    "target": "Supervisor.ReActConfig.max_iters + 完成策略",
+    "handling": "原生转换"
+  },
+  "max_react_tool_calls": {
+    "group": "tools",
+    "target": "Researcher.ReActConfig.max_iters + 工具批次限额",
+    "handling": "原生转换"
+  },
+  "enable_human_in_loop": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.enable_human_in_loop",
+    "handling": "业务保留并接入"
+  },
+  "hitl_require_plan_approval": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.hitl_require_plan_approval",
+    "handling": "业务保留并接入"
+  },
+  "hitl_require_outline_approval": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.hitl_require_outline_approval",
+    "handling": "业务保留并接入"
+  },
+  "hitl_max_plan_revisions": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.hitl_max_plan_revisions",
+    "handling": "业务保留并接入"
+  },
+  "hitl_feedback_mode": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.hitl_feedback_mode",
+    "handling": "业务保留并接入"
+  },
+  "model_backend": {
+    "group": "models",
+    "target": "RoleModelPolicy.transport",
+    "handling": "兼容别名"
+  },
+  "litellm_policy_revision": {
+    "group": "models",
+    "target": "RunConfig.models.litellm_policy_revision",
+    "handling": "业务保留并接入"
+  },
+  "model_catalog_snapshot": {
+    "group": "models",
+    "target": "RunConfig.models.model_catalog_snapshot",
+    "handling": "业务保留并接入"
+  },
+  "summarization_model": {
+    "group": "models",
+    "target": "RunConfig.models.summarization_model",
+    "handling": "业务保留并接入"
+  },
+  "summarization_model_max_tokens": {
+    "group": "models",
+    "target": "RunConfig.models.summarization_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "max_content_length": {
+    "group": "web",
+    "target": "RunConfig.web.max_content_length",
+    "handling": "业务保留并接入"
+  },
+  "research_model": {
+    "group": "models",
+    "target": "RunConfig.models.research_model",
+    "handling": "业务保留并接入"
+  },
+  "supervisor_model": {
+    "group": "models",
+    "target": "RunConfig.models.supervisor_model",
+    "handling": "业务保留并接入"
+  },
+  "research_model_max_tokens": {
+    "group": "models",
+    "target": "RunConfig.models.research_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "compression_model": {
+    "group": "models",
+    "target": "RunConfig.models.compression_model",
+    "handling": "业务保留并接入"
+  },
+  "compression_model_max_tokens": {
+    "group": "models",
+    "target": "RunConfig.models.compression_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "final_report_model": {
+    "group": "models",
+    "target": "RunConfig.models.final_report_model",
+    "handling": "业务保留并接入"
+  },
+  "final_report_model_max_tokens": {
+    "group": "models",
+    "target": "RunConfig.models.final_report_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "final_report_stream_enabled": {
+    "group": "report",
+    "target": "RunConfig.report.final_report_stream_enabled",
+    "handling": "业务保留并接入"
+  },
+  "report_section_concurrency": {
+    "group": "report",
+    "target": "RunConfig.report.report_section_concurrency",
+    "handling": "业务保留并接入"
+  },
+  "report_type": {
+    "group": "report",
+    "target": "RunConfig.report.report_type",
+    "handling": "业务保留并接入"
+  },
+  "output_format": {
+    "group": "report",
+    "target": "RunConfig.report.output_format",
+    "handling": "业务保留并接入"
+  },
+  "reference_style": {
+    "group": "report",
+    "target": "RunConfig.report.reference_style",
+    "handling": "业务保留并接入"
+  },
+  "mcp_config": {
+    "group": "integrations",
+    "target": "StdioMCPConfig/HttpMCPConfig/SSE 扩展",
+    "handling": "原生转换"
+  },
+  "mcp_prompt": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.mcp_prompt",
+    "handling": "业务保留并接入"
+  },
+  "browser_mcp_enabled": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.browser_mcp_enabled",
+    "handling": "业务保留并接入"
+  },
+  "browser_mcp_config": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.browser_mcp_config",
+    "handling": "业务保留并接入"
+  },
+  "browser_mcp_prompt": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.browser_mcp_prompt",
+    "handling": "业务保留并接入"
+  },
+  "skills": {
+    "group": "integrations",
+    "target": "Toolkit/Workspace Skills 选择",
+    "handling": "原生转换"
+  },
+  "supervisor_tool_whitelist": {
+    "group": "tools",
+    "target": "RunConfig.tools.supervisor_tool_whitelist",
+    "handling": "业务保留并接入"
+  },
+  "researcher_tool_whitelist": {
+    "group": "tools",
+    "target": "RunConfig.tools.researcher_tool_whitelist",
+    "handling": "业务保留并接入"
+  },
+  "supervisor_blocked_origins": {
+    "group": "tools",
+    "target": "RunConfig.tools.supervisor_blocked_origins",
+    "handling": "业务保留并接入"
+  },
+  "researcher_blocked_origins": {
+    "group": "tools",
+    "target": "RunConfig.tools.researcher_blocked_origins",
+    "handling": "业务保留并接入"
+  },
+  "max_tool_retries": {
+    "group": "tools",
+    "target": "ToolMiddleware 重试策略",
+    "handling": "业务保留"
+  },
+  "tool_retry_base_delay": {
+    "group": "tools",
+    "target": "RunConfig.tools.tool_retry_base_delay",
+    "handling": "业务保留并接入"
+  },
+  "tool_retry_max_delay": {
+    "group": "tools",
+    "target": "RunConfig.tools.tool_retry_max_delay",
+    "handling": "业务保留并接入"
+  },
+  "tool_param_constraints": {
+    "group": "tools",
+    "target": "RunConfig.tools.tool_param_constraints",
+    "handling": "业务保留并接入"
+  },
+  "role_tool_blacklist": {
+    "group": "tools",
+    "target": "RunConfig.tools.role_tool_blacklist",
+    "handling": "业务保留并接入"
+  },
+  "role_blocked_origins": {
+    "group": "tools",
+    "target": "RunConfig.tools.role_blocked_origins",
+    "handling": "业务保留并接入"
+  },
+  "enable_async_research": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.enable_async_research",
+    "handling": "业务保留并接入"
+  },
+  "runs_dir": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.runs_dir",
+    "handling": "业务保留并接入"
+  },
+  "inflight_run_memory_retention_seconds": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.inflight_run_memory_retention_seconds",
+    "handling": "业务保留并接入"
+  },
+  "max_inflight_runs_in_memory": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.max_inflight_runs_in_memory",
+    "handling": "业务保留并接入"
+  },
+  "inflight_event_buffer_size": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.inflight_event_buffer_size",
+    "handling": "业务保留并接入"
+  },
+  "shutdown_drain_timeout_seconds": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.shutdown_drain_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "run_recovery_sweep_on_startup": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.run_recovery_sweep_on_startup",
+    "handling": "业务保留并接入"
+  },
+  "runs_dir_max_bytes": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.runs_dir_max_bytes",
+    "handling": "业务保留并接入"
+  },
+  "retention_sweep_interval_seconds": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.retention_sweep_interval_seconds",
+    "handling": "业务保留并接入"
+  },
+  "run_retention_days": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.run_retention_days",
+    "handling": "业务保留并接入"
+  },
+  "trace_retention_days": {
+    "group": "observability",
+    "target": "RunConfig.observability.trace_retention_days",
+    "handling": "业务保留并接入"
+  },
+  "api_run_create_per_minute": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.api_run_create_per_minute",
+    "handling": "业务保留并接入"
+  },
+  "max_concurrent_runs_per_user": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.max_concurrent_runs_per_user",
+    "handling": "业务保留并接入"
+  },
+  "max_concurrent_sse_connections": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.max_concurrent_sse_connections",
+    "handling": "业务保留并接入"
+  },
+  "max_request_body_bytes": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.max_request_body_bytes",
+    "handling": "业务保留并接入"
+  },
+  "task_timeout_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.task_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "max_in_flight_tasks": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.max_in_flight_tasks",
+    "handling": "业务保留并接入"
+  },
+  "task_checkpoint_enabled": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.task_checkpoint_enabled",
+    "handling": "业务保留并接入"
+  },
+  "event_log_enabled": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.event_log_enabled",
+    "handling": "业务保留并接入"
+  },
+  "public_event_summary_max_chars": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.public_event_summary_max_chars",
+    "handling": "业务保留并接入"
+  },
+  "public_event_source_limit": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.public_event_source_limit",
+    "handling": "业务保留并接入"
+  },
+  "sse_heartbeat_seconds": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.sse_heartbeat_seconds",
+    "handling": "业务保留并接入"
+  },
+  "sse_poll_interval_ms": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.sse_poll_interval_ms",
+    "handling": "业务保留并接入"
+  },
+  "task_state_backend": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.task_state_backend",
+    "handling": "业务保留并接入"
+  },
+  "web_pipeline_mode": {
+    "group": "web",
+    "target": "RunConfig.web.web_pipeline_mode",
+    "handling": "业务保留并接入"
+  },
+  "web_pipeline_shadow_sample_rate": {
+    "group": "web",
+    "target": "RunConfig.web.web_pipeline_shadow_sample_rate",
+    "handling": "业务保留并接入"
+  },
+  "fetch_backend_order": {
+    "group": "web",
+    "target": "RunConfig.web.fetch_backend_order",
+    "handling": "业务保留并接入"
+  },
+  "external_extract_backends": {
+    "group": "web",
+    "target": "RunConfig.web.external_extract_backends",
+    "handling": "业务保留并接入"
+  },
+  "fetch_top_k": {
+    "group": "web",
+    "target": "RunConfig.web.fetch_top_k",
+    "handling": "业务保留并接入"
+  },
+  "web_min_source_authority": {
+    "group": "web",
+    "target": "RunConfig.web.web_min_source_authority",
+    "handling": "业务保留并接入"
+  },
+  "search_candidate_limit": {
+    "group": "web",
+    "target": "RunConfig.web.search_candidate_limit",
+    "handling": "业务保留并接入"
+  },
+  "max_fetches_per_researcher": {
+    "group": "web",
+    "target": "RunConfig.web.max_fetches_per_researcher",
+    "handling": "业务保留并接入"
+  },
+  "max_fetches_per_run": {
+    "group": "web",
+    "target": "RunConfig.web.max_fetches_per_run",
+    "handling": "业务保留并接入"
+  },
+  "fetch_budget_followup_reserve": {
+    "group": "web",
+    "target": "RunConfig.web.fetch_budget_followup_reserve",
+    "handling": "业务保留并接入"
+  },
+  "fetch_global_concurrency": {
+    "group": "web",
+    "target": "RunConfig.web.fetch_global_concurrency",
+    "handling": "业务保留并接入"
+  },
+  "fetch_per_host_concurrency": {
+    "group": "web",
+    "target": "RunConfig.web.fetch_per_host_concurrency",
+    "handling": "业务保留并接入"
+  },
+  "web_rerank_model": {
+    "group": "web",
+    "target": "RunConfig.web.web_rerank_model",
+    "handling": "业务保留并接入"
+  },
+  "web_evidence_model": {
+    "group": "web",
+    "target": "RunConfig.web.web_evidence_model",
+    "handling": "业务保留并接入"
+  },
+  "html_max_bytes": {
+    "group": "web",
+    "target": "RunConfig.web.html_max_bytes",
+    "handling": "业务保留并接入"
+  },
+  "pdf_max_bytes": {
+    "group": "web",
+    "target": "RunConfig.web.pdf_max_bytes",
+    "handling": "业务保留并接入"
+  },
+  "pdf_max_pages": {
+    "group": "web",
+    "target": "RunConfig.web.pdf_max_pages",
+    "handling": "业务保留并接入"
+  },
+  "respect_robots_txt": {
+    "group": "web",
+    "target": "RunConfig.web.respect_robots_txt",
+    "handling": "业务保留并接入"
+  },
+  "browser_render_fallback_enabled": {
+    "group": "web",
+    "target": "RunConfig.web.browser_render_fallback_enabled",
+    "handling": "业务保留并接入"
+  },
+  "max_persistent_teammates": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.max_persistent_teammates",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_poll_interval_ms": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_poll_interval_ms",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_lock_timeout_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_lock_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_claim_lease_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_claim_lease_seconds",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_max_delivery_attempts": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_max_delivery_attempts",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_acked_retention_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_acked_retention_seconds",
+    "handling": "业务保留并接入"
+  },
+  "mailbox_compaction_threshold": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.mailbox_compaction_threshold",
+    "handling": "业务保留并接入"
+  },
+  "leader_heartbeat_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.leader_heartbeat_seconds",
+    "handling": "业务保留并接入"
+  },
+  "leader_lease_seconds": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.leader_lease_seconds",
+    "handling": "业务保留并接入"
+  },
+  "enable_message_summarization": {
+    "group": "context",
+    "target": "RunConfig.context.enable_message_summarization",
+    "handling": "业务保留并接入"
+  },
+  "message_summary_trigger_tokens": {
+    "group": "context",
+    "target": "RunConfig.context.message_summary_trigger_tokens",
+    "handling": "业务保留并接入"
+  },
+  "message_summary_keep_last": {
+    "group": "context",
+    "target": "RunConfig.context.message_summary_keep_last",
+    "handling": "业务保留并接入"
+  },
+  "message_summary_model": {
+    "group": "context",
+    "target": "RunConfig.context.message_summary_model",
+    "handling": "业务保留并接入"
+  },
+  "message_summary_model_max_tokens": {
+    "group": "context",
+    "target": "RunConfig.context.message_summary_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_enabled": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_enabled",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_model": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_model",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_model_max_tokens": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_temperature": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_temperature",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_base_url": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_base_url",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_fail_open": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_fail_open",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_rigor": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_rigor",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_min_sources": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_min_sources",
+    "handling": "业务保留并接入"
+  },
+  "quality_evaluation_max_input_chars": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_evaluation_max_input_chars",
+    "handling": "业务保留并接入"
+  },
+  "report_review_enabled": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_enabled",
+    "handling": "业务保留并接入"
+  },
+  "report_review_model": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_model",
+    "handling": "业务保留并接入"
+  },
+  "report_review_model_max_tokens": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_model_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "report_review_temperature": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_temperature",
+    "handling": "业务保留并接入"
+  },
+  "report_review_max_input_chars": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_max_input_chars",
+    "handling": "业务保留并接入"
+  },
+  "report_review_max_revisions": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_max_revisions",
+    "handling": "业务保留并接入"
+  },
+  "report_review_fail_open": {
+    "group": "report",
+    "target": "RunConfig.report.report_review_fail_open",
+    "handling": "业务保留并接入"
+  },
+  "quality_risk_mode": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_risk_mode",
+    "handling": "业务保留并接入"
+  },
+  "quality_caveat_admission_enabled": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_caveat_admission_enabled",
+    "handling": "业务保留并接入"
+  },
+  "quality_gap_recovery_max_attempts": {
+    "group": "quality",
+    "target": "RunConfig.quality.quality_gap_recovery_max_attempts",
+    "handling": "业务保留并接入"
+  },
+  "egress_classifier_model": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.egress_classifier_model",
+    "handling": "业务保留并接入"
+  },
+  "egress_classifier_stages": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.egress_classifier_stages",
+    "handling": "业务保留并接入"
+  },
+  "egress_classifier_timeout_seconds": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.egress_classifier_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "egress_classifier_max_calls_per_run": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.egress_classifier_max_calls_per_run",
+    "handling": "业务保留并接入"
+  },
+  "egress_classifier_max_consecutive_failures": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.egress_classifier_max_consecutive_failures",
+    "handling": "业务保留并接入"
+  },
+  "query_session_persistence_enabled": {
+    "group": "runtime",
+    "target": "RunConfig.runtime.query_session_persistence_enabled",
+    "handling": "业务保留并接入"
+  },
+  "query_context_compaction_enabled": {
+    "group": "context",
+    "target": "RunConfig.context.query_context_compaction_enabled",
+    "handling": "业务保留并接入"
+  },
+  "query_context_trigger_ratio": {
+    "group": "context",
+    "target": "ContextConfig.trigger_ratio",
+    "handling": "原生转换"
+  },
+  "query_context_recent_window_ratio": {
+    "group": "context",
+    "target": "ContextConfig.reserve_ratio + 领域保留策略",
+    "handling": "原生扩展"
+  },
+  "query_context_summary_max_tokens": {
+    "group": "context",
+    "target": "RunConfig.context.query_context_summary_max_tokens",
+    "handling": "业务保留并接入"
+  },
+  "query_journal_inline_content_max_chars": {
+    "group": "context",
+    "target": "RunConfig.context.query_journal_inline_content_max_chars",
+    "handling": "业务保留并接入"
+  },
+  "prompt_injection_protection_enabled": {
+    "group": "tools",
+    "target": "RunConfig.tools.prompt_injection_protection_enabled",
+    "handling": "业务保留并接入"
+  },
+  "external_content_fail_closed": {
+    "group": "tools",
+    "target": "RunConfig.tools.external_content_fail_closed",
+    "handling": "业务保留并接入"
+  },
+  "allow_http_stdio_mcp": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.allow_http_stdio_mcp",
+    "handling": "业务保留并接入"
+  },
+  "require_sensitive_tool_approval": {
+    "group": "tools",
+    "target": "RunConfig.tools.require_sensitive_tool_approval",
+    "handling": "业务保留并接入"
+  },
+  "max_external_content_bytes": {
+    "group": "tools",
+    "target": "RunConfig.tools.max_external_content_bytes",
+    "handling": "业务保留并接入"
+  },
+  "max_mcp_description_chars": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.max_mcp_description_chars",
+    "handling": "业务保留并接入"
+  },
+  "max_tool_description_chars": {
+    "group": "tools",
+    "target": "RunConfig.tools.max_tool_description_chars",
+    "handling": "业务保留并接入"
+  },
+  "max_mcp_output_chars": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.max_mcp_output_chars",
+    "handling": "业务保留并接入"
+  },
+  "allowed_mcp_servers": {
+    "group": "integrations",
+    "target": "RunConfig.integrations.allowed_mcp_servers",
+    "handling": "业务保留并接入"
+  },
+  "allowed_model_endpoints": {
+    "group": "tools",
+    "target": "RunConfig.tools.allowed_model_endpoints",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_enabled": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_enabled",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_policy_path": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_policy_path",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_controller_socket": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_controller_socket",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_gateway_url": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_gateway_url",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_root_signing_key": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_root_signing_key",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_profile_id": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_profile_id",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_policy_digest": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_policy_digest",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_runtime_digest": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_runtime_digest",
+    "handling": "业务保留并接入"
+  },
+  "gateway_protocol_version": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.gateway_protocol_version",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_egress_approval_mode": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_egress_approval_mode",
+    "handling": "业务保留并接入"
+  },
+  "sandbox_egress_pending_wait_seconds": {
+    "group": "sandbox",
+    "target": "RunConfig.sandbox.sandbox_egress_pending_wait_seconds",
+    "handling": "业务保留并接入"
+  },
+  "approval_pending_turn_allowance": {
+    "group": "hitl",
+    "target": "RunConfig.hitl.approval_pending_turn_allowance",
+    "handling": "业务保留并接入"
+  },
+  "enable_memory": {
+    "group": "memory",
+    "target": "RunConfig.memory.enable_memory",
+    "handling": "业务保留并接入"
+  },
+  "memory_provider": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_provider",
+    "handling": "业务保留并接入"
+  },
+  "memory_app_id": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_app_id",
+    "handling": "业务保留并接入"
+  },
+  "memory_agent_id": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_agent_id",
+    "handling": "业务保留并接入"
+  },
+  "memory_project_id": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_project_id",
+    "handling": "业务保留并接入"
+  },
+  "memory_top_k": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_top_k",
+    "handling": "业务保留并接入"
+  },
+  "memory_min_confidence": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_min_confidence",
+    "handling": "业务保留并接入"
+  },
+  "memory_auto_write": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_auto_write",
+    "handling": "业务保留并接入"
+  },
+  "memory_write_after_report": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_write_after_report",
+    "handling": "业务保留并接入"
+  },
+  "memory_fail_open": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_fail_open",
+    "handling": "业务保留并接入"
+  },
+  "memory_advanced_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_advanced_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_decay_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_decay_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_legacy_recall_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_legacy_recall_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_run_end_maintenance_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_run_end_maintenance_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_mutation_lock_timeout_seconds": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_mutation_lock_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "memory_reflection_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_reflection_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_profile_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_profile_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_soft_forgetting_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_soft_forgetting_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_verified_insights_enabled": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_verified_insights_enabled",
+    "handling": "业务保留并接入"
+  },
+  "memory_search_threshold": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_search_threshold",
+    "handling": "业务保留并接入"
+  },
+  "memory_search_rerank": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_search_rerank",
+    "handling": "业务保留并接入"
+  },
+  "memory_importance_weight": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_importance_weight",
+    "handling": "业务保留并接入"
+  },
+  "memory_relevance_weight": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_relevance_weight",
+    "handling": "业务保留并接入"
+  },
+  "memory_recency_weight": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_recency_weight",
+    "handling": "业务保留并接入"
+  },
+  "memory_reflection_observation_threshold": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_reflection_observation_threshold",
+    "handling": "业务保留并接入"
+  },
+  "memory_reflection_importance_threshold": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_reflection_importance_threshold",
+    "handling": "业务保留并接入"
+  },
+  "memory_reflection_max_age_hours": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_reflection_max_age_hours",
+    "handling": "业务保留并接入"
+  },
+  "memory_maintenance_max_input_chars": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_maintenance_max_input_chars",
+    "handling": "业务保留并接入"
+  },
+  "memory_profile_max_chars": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_profile_max_chars",
+    "handling": "业务保留并接入"
+  },
+  "memory_v2_app_suffix": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_v2_app_suffix",
+    "handling": "业务保留并接入"
+  },
+  "memory_half_life_days": {
+    "group": "memory",
+    "target": "RunConfig.memory.memory_half_life_days",
+    "handling": "业务保留并接入"
+  }
+}

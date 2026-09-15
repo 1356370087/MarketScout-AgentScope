@@ -6,10 +6,22 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "agentscope>=2.0.8",
+    "aiodocker>=0.27.0",
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.0",
+    "apscheduler>=3.11.3",
+    "asyncpg>=0.31.0",
+    "beautifulsoup4>=4.15.0",
     "docker>=7.2.0",
     "fastapi>=0.141.1",
+    "google-genai>=1.0",
     "langfuse>=4.15.2",
+    "litellm>=1.100.1",
+    "markdownify>=1.2.3",
     "mcp>=1.30.0",
     "mem0ai>=2.0.20",
     "mypy>=2.3.1",
+    "pymupdf>=1.28.2",
+    "pytest>=9.1.1",
+    "tavily-python>=0.8.3",
 ]
