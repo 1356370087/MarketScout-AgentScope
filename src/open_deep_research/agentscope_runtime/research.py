@@ -33,6 +33,7 @@ def build_research_pipeline(
     report_writer=None,
     budget_available=None,
     context_chars=120_000,
+    recovery=None,
 ):
     """Bind frozen config, native model/tool adapters and stage persistence.
 
@@ -44,15 +45,23 @@ def build_research_pipeline(
         "run_config_fingerprint"
     ]
     checkpoint = FileResearchCheckpoint(checkpoint_path)
+    original_provider = config_provider
+    if recovery:
+        config_provider = lambda: recovery.config(original_provider)
     state = (
-        checkpoint.load()
-        if checkpoint_path.exists()
+        recovery.snapshot
+        if recovery
+        else checkpoint.load()
+        if checkpoint_path.exists() or recovery
         else ResearchSnapshot(run_id=run_id, config_fingerprint=fingerprint)
     )
     if state.run_id != run_id:
         raise ValueError("research checkpoint belongs to another run")
     models = ResearchModels(
-        model_factory, model_for=model_for, context_chars=context_chars
+        model_factory,
+        model_for=model_for,
+        context_chars=context_chars,
+        recovery=recovery,
     )
     quality = NativeResearchQuality(models, config_provider)
     researcher = Researcher(
@@ -85,6 +94,32 @@ def build_research_pipeline(
         memory_write=memory_write,
         report_writer=report_writer,
     )
+    if recovery:
+        from open_deep_research.agentscope_runtime.recovery import RecoveryStages
+
+        stages = RecoveryStages(stages, recovery)
     return ResearchPipeline(
-        state, stages, checkpoint.save, config_fingerprint=fingerprint
+        state,
+        stages,
+        recovery.save if recovery else checkpoint.save,
+        config_fingerprint=fingerprint,
+        recovery=recovery,
     )
+
+
+async def open_durable_research_pipeline(
+    *, store, user_id, ttl=30, approval_applier=None, public_publisher=None, **kwargs
+):
+    """Rebuild an existing authorized run; release the lease if assembly fails."""
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+
+    recovery = await RecoverySession.open(store, kwargs["run_id"], user_id, ttl=ttl)
+    recovery.approval_applier = approval_applier
+    recovery.public_publisher = public_publisher
+    try:
+        flow = build_research_pipeline(**kwargs, recovery=recovery)
+        await recovery.consume_decisions(flow)
+        return flow
+    except BaseException:
+        await recovery.close()
+        raise

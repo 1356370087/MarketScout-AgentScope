@@ -303,6 +303,7 @@ class Researcher:
                 "quality evaluation enabled but no native assessor supplied"
             )
         toolkit.result_observer = observations.capture
+        toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
         agent = Agent(
             name="researcher",
@@ -339,7 +340,13 @@ class Researcher:
             ),
             metadata={"research_protected": True},
         )
-        final, reason = await _reply(agent, [protected])
+        try:
+            final, reason = await _reply(agent, [protected])
+        finally:
+            recovery = getattr(self.models, "recovery", None)
+            if recovery and recovery.problem:
+                raise recovery.problem
+
         if observations.failure:
             raise RuntimeError(
                 f"research tool assessment failed: {observations.failure}"
@@ -495,10 +502,13 @@ class Supervisor:
                 research_topic=input.research_topic, requirement_ids=ids
             )
             claimed.update(ids)
+            recovery = getattr(self.models, "recovery", None)
+            if recovery:
+                assignment.task_id = recovery.assignment_id(len(assignments))
             assignments[assignment.task_id] = assignment
             return assignment
 
-        async def execute(assignment):
+        async def execute_inner(assignment):
             nonlocal ledger
             async with semaphore:
                 outcome = await self.researcher.run(assignment, contract, feedback)
@@ -519,8 +529,18 @@ class Supervisor:
                 results[assignment.task_id] = outcome
                 return outcome
 
+        async def execute(assignment):
+            recovery = getattr(self.models, "recovery", None)
+            if recovery:
+                with recovery.task(assignment.task_id):
+                    return await execute_inner(assignment)
+            return await execute_inner(assignment)
+
         async def conduct(input, context, progress):
             assignment = assign(input)
+            recovery = getattr(self.models, "recovery", None)
+            if recovery:
+                await recovery.store.register_task(recovery.lease, assignment.task_id)
             task = asyncio.create_task(execute(assignment))
             tasks[assignment.task_id] = task
             if cfg.enable_async_research:
@@ -665,6 +685,9 @@ class Supervisor:
             # Iteration exhaustion/no-tool completion must still join launched work.
             if tasks:
                 await asyncio.gather(*tasks.values(), return_exceptions=True)
+            recovery = getattr(self.models, "recovery", None)
+            if recovery and recovery.problem:
+                raise recovery.problem
             agent.state.middle_context["research_tasks"] = [
                 snapshot(key) for key in tasks
             ]

@@ -49,6 +49,7 @@ class ResearchSnapshot(BaseModel):
     """JSON-native research state, separate from individual AgentState objects."""
 
     version: Literal[1] = 1
+    framework_version: Literal["2.0.8"] = "2.0.8"
     engine: Literal["agentscope"] = "agentscope"
     run_id: str
     config_fingerprint: str
@@ -74,6 +75,10 @@ class ResearchSnapshot(BaseModel):
     feedback: list[str] = Field(default_factory=list)
     agent_states: dict = Field(default_factory=dict)
     error: str | None = None
+    revision_count: int = 0
+    approvals: dict = Field(default_factory=dict)
+    approval_grants: dict = Field(default_factory=dict)
+    feedback_by_task: dict = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def check_stage_prefix(self):
@@ -123,6 +128,7 @@ class ResearchPipeline:
         save: Callable[[ResearchSnapshot], Awaitable[None]],
         *,
         config_fingerprint: str,
+        recovery=None,
     ):
         if state.config_fingerprint != config_fingerprint:
             raise ValueError("research configuration fingerprint changed")
@@ -132,6 +138,7 @@ class ResearchPipeline:
         self.stages = stages
         self.save = save
         self._lock = asyncio.Lock()
+        self.recovery = recovery
 
     async def _commit(self, state: ResearchSnapshot) -> None:
         await self.save(state.model_copy(deep=True))
@@ -151,6 +158,25 @@ class ResearchPipeline:
                 raise ValueError("conflicting research decision")
             return
         pending = self.state.pending
+        if decision_id in self.state.approvals:
+            approval = self.state.approvals[decision_id]
+            if action not in {"approve", "revise", "cancel"}:
+                raise ValueError("unsupported operation approval action")
+            state = self.state.model_copy(deep=True)
+            state.decisions[decision_id] = receipt
+            del state.approvals[decision_id]
+            if action == "approve":
+                state.approval_grants[decision_id] = approval
+            elif action == "cancel":
+                state.status = "cancelled"
+                state.approvals.clear()
+            else:
+                state.revision_count += 1
+                state.feedback.append(feedback)
+            if action != "cancel":
+                state.status = "waiting" if state.approvals else "ready"
+            await self._commit(state)
+            return
         if pending is None or pending.id != decision_id:
             raise ValueError("stale research decision")
         if action == "answer" and pending.stage != "clarify_with_user":
@@ -168,6 +194,7 @@ class ResearchPipeline:
         if action == "cancel":
             state.status = "cancelled"
         elif action == "revise":
+            state.revision_count += 1
             target = (
                 "write_research_brief"
                 if pending.stage in {"plan_approval", "clarify_with_user"}
@@ -205,20 +232,44 @@ class ResearchPipeline:
                 state.status, state.pending = "cancelled", None
                 await self._commit(state)
             elif isinstance(inputs, UserConfirmResultEvent):
-                if (
-                    inputs.reply_id != self.state.reply_id
-                    or len(inputs.confirm_results) != 1
-                ):
+                if inputs.reply_id != self.state.reply_id or not inputs.confirm_results:
                     raise ValueError("confirmation does not match research reply")
-                result = inputs.confirm_results[0]
-                action = inputs.metadata.get(
-                    "action", "approve" if result.confirmed else "cancel"
-                )
-                if action == "approve" and not result.confirmed:
-                    raise ValueError("approval contradicts native confirmation")
-                await self._decide(
-                    result.tool_call.id, action, inputs.metadata.get("feedback", "")
-                )
+                for result in inputs.confirm_results:
+                    action = inputs.metadata.get(
+                        "action", "approve" if result.confirmed else "cancel"
+                    )
+                    if action == "approve" and not result.confirmed:
+                        raise ValueError("approval contradicts native confirmation")
+                    if self.recovery:
+                        from open_deep_research.agentscope_runtime.recovery_store import (
+                            digest,
+                        )
+
+                        payload = {
+                            "action": action,
+                            "feedback": inputs.metadata.get("feedback", ""),
+                        }
+                        if "limits" in inputs.metadata:
+                            payload["limits"] = inputs.metadata["limits"]
+                        command_id = inputs.metadata.get(
+                            "command_id",
+                            digest([self.state.reply_id, result.tool_call.id, payload]),
+                        )
+                        await self.recovery.store.submit_decision(
+                            self.state.run_id,
+                            self.recovery.lease.user_id,
+                            command_id + ":" + result.tool_call.id,
+                            result.tool_call.id,
+                            payload,
+                        )
+                    else:
+                        await self._decide(
+                            result.tool_call.id,
+                            action,
+                            inputs.metadata.get("feedback", ""),
+                        )
+                if self.recovery:
+                    await self.recovery.consume_decisions(self, locked=True)
             elif inputs is not None:
                 messages = [inputs] if isinstance(inputs, Msg) else inputs
                 if (
@@ -252,6 +303,20 @@ class ResearchPipeline:
                 reply_id=self.state.reply_id,
                 name="research",
             )
+            if self.state.approvals:
+                yield RequireUserConfirmEvent(
+                    reply_id=self.state.reply_id,
+                    tool_calls=[
+                        ToolCallBlock(
+                            id=key,
+                            name=value["kind"],
+                            input=json.dumps(value["payload"], ensure_ascii=False),
+                        )
+                        for key, value in self.state.approvals.items()
+                    ],
+                    metadata={"run_id": self.state.run_id},
+                )
+                return
             if self.state.pending:
                 yield self._pending_event()
                 yield AssistantMsg("research", self.state.pending.question)
@@ -285,10 +350,40 @@ class ResearchPipeline:
                     await self._commit(working)
                 except asyncio.CancelledError:
                     stopped = self.state.model_copy(deep=True)
-                    stopped.status, stopped.error = "cancelled", "execution_cancelled"
+                    stopped.status, stopped.error = (
+                        ("ready", "process_interrupted")
+                        if self.recovery
+                        else ("cancelled", "execution_cancelled")
+                    )
                     await self._commit(stopped)
                     raise
                 except Exception as exc:
+                    if self.recovery:
+                        from open_deep_research.agentscope_runtime.recovery import (
+                            ApprovalPending,
+                        )
+
+                        problem = self.recovery.problem or exc
+                        if isinstance(problem, ApprovalPending):
+                            working.inflight, working.status = None, "waiting"
+                            working.approvals[problem.action_id] = {
+                                "kind": problem.kind,
+                                "payload": problem.payload,
+                            }
+                            await self._commit(working)
+                            yield RequireUserConfirmEvent(
+                                reply_id=working.reply_id,
+                                tool_calls=[
+                                    ToolCallBlock(
+                                        id=problem.action_id,
+                                        name=problem.kind,
+                                        input=json.dumps(
+                                            problem.payload, ensure_ascii=False
+                                        ),
+                                    )
+                                ],
+                            )
+                            return
                     from open_deep_research.agentscope_runtime.research_agents import (
                         ResearchTerminated,
                     )
@@ -359,5 +454,9 @@ class ResearchPipelineMiddleware(MiddlewareBase):
             agent.state.middle_context["research"] = self.pipeline.state.model_dump(
                 mode="json"
             )
-            if self.gate:
-                await self.gate.end()
+            try:
+                if self.pipeline.recovery:
+                    await self.pipeline.recovery.close()
+            finally:
+                if self.gate:
+                    await self.gate.end()

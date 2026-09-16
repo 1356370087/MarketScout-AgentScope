@@ -91,8 +91,8 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
         engine_kwargs=build_engine_kwargs(settings),
     )
     async with storage:
-        from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
         from open_deep_research.agentscope_runtime.durable import DurableCommandBridge
+        from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
         async with PostgreSQLMessageBus(
             settings.database_url, table_prefix=settings.bus_table_prefix,
             engine_kwargs=build_engine_kwargs(settings),
@@ -101,3 +101,9 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
             engine_kwargs=build_engine_kwargs(settings),
         ):
             pass
+        from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+        recovery = RecoveryStore(settings.database_url, engine_kwargs=build_engine_kwargs(settings))
+        try:
+            await recovery.create_tables()
+        finally:
+            await recovery.aclose()

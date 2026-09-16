@@ -183,20 +183,24 @@ class GovernedTool(ToolBase):
                     )
                 tool = _DispatchedTool(tool, self.owner.dispatcher)
             trace = _CallTrace()
-            result = await execute_governed_tool_call_native(
-                {"name": self.name, "id": identity.call_id, "args": kwargs},
-                {self.name: tool},
-                self.owner.role,
-                config,
-                allowed_tools=resolve_allowed_tools(
-                    self.owner.role, config, {self.name}
-                ),
-                operation_id=identity.operation_id,
-                apply_retry=not remote,
-                max_retries=self.owner.max_retries,
-                base_delay=self.owner.retry_delay,
-                recorder=trace,
-            )
+            if self.owner.journal:
+                config = self.owner.journal.tool_config(config, self.name, identity.call_id, kwargs)
+            async def execute():
+                return await execute_governed_tool_call_native(
+                    {"name": self.name, "id": identity.call_id, "args": kwargs},
+                    {self.name: tool},
+                    self.owner.role,
+                    config,
+                    allowed_tools=resolve_allowed_tools(
+                        self.owner.role, config, {self.name}
+                    ),
+                    operation_id=identity.operation_id,
+                    apply_retry=not remote,
+                    max_retries=self.owner.max_retries,
+                    base_delay=self.owner.retry_delay,
+                    recorder=trace,
+                )
+            result = await self.owner.journal.tool(tool, identity.call_id, kwargs, execute) if self.owner.journal else await execute()
             if self.owner.result_observer is not None:
                 await self.owner.result_observer(self.name, identity.call_id, result)
             error_type = result.error.error_type.value if result.error else None
@@ -253,6 +257,7 @@ class GovernedToolkit(Toolkit):
         # Domain evidence consumers see typed results before the model-facing
         # output budget truncates them. This hook cannot bypass execution policy.
         self.result_observer = None
+        self.journal = None
         self.identity: ContextVar[_CallIdentity | None] = ContextVar(
             "tool_identity", default=None
         )

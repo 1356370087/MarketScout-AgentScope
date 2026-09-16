@@ -15,11 +15,13 @@ import uuid
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 import portalocker
-from langchain_core.runnables import RunnableConfig
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration

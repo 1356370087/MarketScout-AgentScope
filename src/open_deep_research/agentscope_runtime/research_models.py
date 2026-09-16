@@ -8,8 +8,11 @@ from open_deep_research.agentscope_runtime.context import NativeContextCompactor
 class ResearchModels:
     """Keep M3 credential, retry and output-recovery ownership in ModelFactory."""
 
-    def __init__(self, factory, *, model_for=None, context_chars=120_000):
+    def __init__(
+        self, factory, *, model_for=None, context_chars=120_000, recovery=None
+    ):
         self.factory = factory
+        self.recovery = recovery
         self.model_for = model_for
         self.context_chars = context_chars
 
@@ -20,11 +23,27 @@ class ResearchModels:
             else self.factory.build(role)
         )
 
+    def pricing(self, role):
+        descriptor = self.factory.descriptor(role)
+        entry = self.factory.run.get("model_catalog_snapshot").get(descriptor["model"])
+        if entry:
+            return entry["input_cost_per_token"] * 1_000_000, entry[
+                "output_cost_per_token"
+            ] * 1_000_000
+        return None
+
     def agent_middlewares(self, role, model):
+        policy = self.factory.policy_middleware(
+            role, candidates=[model] if self.model_for else None
+        )
+        if not self.recovery:
+            return [policy]
+        from open_deep_research.agentscope_runtime.recovery import JournalMiddleware
+
+        maximum = self.factory.descriptor(role)["max_output_tokens"]
         return [
-            self.factory.policy_middleware(
-                role, candidates=[model] if self.model_for else None
-            )
+            JournalMiddleware(self.recovery, role, maximum, self.pricing(role)),
+            policy,
         ]
 
     async def structured(self, role, prompt, schema, state):
@@ -35,20 +54,47 @@ class ResearchModels:
         async def invoke(current_model, messages, **kwargs):
             return await current_model.generate_structured_output(messages, schema)
 
-        response = await middleware.policy.invoke(invoke, {"messages": messages}, state)
+        async def call():
+            return await middleware.policy.invoke(invoke, {"messages": messages}, state)
+
+        response = (
+            await self.recovery.model(
+                role,
+                messages,
+                call,
+                schema=schema,
+                max_tokens=self.factory.descriptor(role)["max_output_tokens"],
+                pricing=self.pricing(role),
+            )
+            if self.recovery
+            else await call()
+        )
         return schema.model_validate(response.content)
 
     async def text(self, role, prompt, state):
-        response = await self.factory.complete_with_recovery(
-            role,
-            [UserMsg("user", prompt)],
-            state=state,
-            candidates=[self.model_for(role, state.get("task_id", "pipeline"))]
-            if self.model_for
-            else None,
-            compact=NativeContextCompactor(
-                max_chars=self.context_chars, protected_ids=set()
-            ),
+        async def call():
+            return await self.factory.complete_with_recovery(
+                role,
+                [UserMsg("user", prompt)],
+                state=state,
+                candidates=[self.model_for(role, state.get("task_id", "pipeline"))]
+                if self.model_for
+                else None,
+                compact=NativeContextCompactor(
+                    max_chars=self.context_chars, protected_ids=set()
+                ),
+            )
+
+        response = (
+            await self.recovery.model(
+                role,
+                [UserMsg("user", prompt)],
+                call,
+                max_tokens=self.factory.descriptor(role)["max_output_tokens"],
+                pricing=self.pricing(role),
+            )
+            if self.recovery
+            else await call()
         )
         content = "".join(
             block.text for block in response.content if isinstance(block, TextBlock)

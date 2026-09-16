@@ -98,3 +98,102 @@ async def test_pg_chat_service_runs_and_persists_research(pg_url, pause):
             assert len(resolved) == (2 if pause else 1)
     finally:
         await runtime.aclose()
+
+
+async def test_pg_service_rebuilds_durable_pipeline_and_consumes_approval(pg_url):
+    from open_deep_research.agentscope_runtime.recovery import (
+        RecoverySession,
+        RecoveryStages,
+    )
+    from open_deep_research.agentscope_runtime.research_pipeline import (
+        ResearchPipeline,
+        ResearchSnapshot,
+    )
+
+    runtime = await ASRuntime.create(
+        ASRuntimeSettings(
+            database_url=pg_url,
+            database_schema="agentscope_runtime",
+            storage_auto_create=True,
+            bus_table_prefix="as_m6_service_",
+        )
+    )
+    recovery_store = await runtime.create_recovery_store()
+    opened = []
+
+    async def resolve(user, agent, session_id, workspace):
+        session = await RecoverySession.open(recovery_store, session_id, user)
+        opened.append(session.lease.fence)
+        flow = ResearchPipeline(
+            session.snapshot,
+            RecoveryStages(Stages("plan_approval"), session),
+            session.save,
+            config_fingerprint="frozen",
+            recovery=session,
+        )
+        await session.consume_decisions(flow)
+        return flow
+
+    app = runtime.build_app(
+        extra_agent_middlewares=runtime.research_middleware_factory(resolve)
+    )
+    try:
+        async with app.router.lifespan_context(app):
+            data = AgentData(
+                name="durable",
+                context_config=ContextConfig(),
+                react_config=ReActConfig(),
+            )
+            agent_id = await runtime.storage.upsert_agent(
+                "owner", AgentRecord(user_id="owner", data=data)
+            )
+            credential = await runtime.storage.upsert_credential(
+                "owner",
+                OpenAICredential(api_key="fixture", base_url="http://127.0.0.1:1/v1"),
+            )
+            session = await runtime.storage.upsert_session(
+                user_id="owner",
+                agent_id=agent_id,
+                config=SessionConfig(
+                    name="M6",
+                    workspace_id="m6-acceptance",
+                    chat_model_config=ChatModelConfig(
+                        type="OpenAIChatModel",
+                        credential_id=credential,
+                        model="fixture",
+                        parameters={},
+                    ),
+                ),
+            )
+            await recovery_store.create_run(
+                "owner",
+                ResearchSnapshot(run_id=session.id, config_fingerprint="frozen"),
+            )
+            await app.state.chat_service.run(
+                "owner", session.id, agent_id, UserMsg("user", "q")
+            )
+            state, _ = await recovery_store.load(session.id, "owner")
+            assert state.status == "waiting"
+            from agentscope.message import ToolCallBlock
+
+            confirmation = UserConfirmResultEvent(
+                reply_id=state.reply_id,
+                confirm_results=[
+                    ConfirmResult(
+                        confirmed=True,
+                        tool_call=ToolCallBlock(
+                            id=state.pending.id, name="plan_approval", input="{}"
+                        ),
+                    )
+                ],
+            )
+            await app.state.chat_service.run(
+                "owner", session.id, agent_id, confirmation
+            )
+            state, _ = await recovery_store.load(session.id, "owner")
+            assert state.status == "completed"
+            assert opened == [1, 2]
+            stored = await runtime.storage.get_session("owner", agent_id, session.id)
+            assert stored.state.middle_context["research"]["status"] == "completed"
+    finally:
+        await runtime.aclose()
