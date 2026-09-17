@@ -1,4 +1,6 @@
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
+# 使用镜像自带 Python 3.14；禁止 uv 隐式下载另一套解释器。
+ENV UV_PYTHON_DOWNLOADS=never PYTHONPATH=/app/src
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -10,7 +12,8 @@ RUN apt-get update \
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY config ./config
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra document-worker
+# Docling 通过独立服务 HTTP 接入；本地解析依赖已纳入主锁文件。
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 # Match the API owner so private (0600) uploads remain readable on the shared volume.
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \

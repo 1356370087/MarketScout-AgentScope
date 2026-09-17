@@ -1,4 +1,6 @@
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
+# 使用镜像自带 Python 3.14；禁止 uv 隐式下载另一套解释器。
+ENV UV_PYTHON_DOWNLOADS=never PYTHONPATH=/app/src
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-noto-cjk \
