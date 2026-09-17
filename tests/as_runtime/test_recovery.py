@@ -23,6 +23,11 @@ from open_deep_research.agentscope_runtime.research_pipeline import (
     ResearchSnapshot,
 )
 from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
+from open_deep_research.tools.base import ToolEffect, ToolResult
+from open_deep_research.tools.governance import (
+    GovernedToolCallResult,
+    ToolOutcomeMessage,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -1109,3 +1114,114 @@ async def test_public_approval_projection_retains_unresolved_item(store, tmp_pat
     assert [
         item["approval_id"] for item in log.project().pending_security_approvals
     ] == ["two"]
+
+
+async def test_model_settlement_counts_every_physical_attempt_and_keeps_details(store):
+    """每个物理调用只计一次：尝试数、失败已计费 usage 与缓存 token 分别入账。"""
+    from types import SimpleNamespace
+
+    from agentscope.message import TextBlock
+    from agentscope.model import ChatUsage, ChatResponse
+
+    state, lease = await create(store, limits={"model_calls": 3})
+    session = RecoverySession(store, lease, state)
+
+    class BilledFailure(Exception):
+        pass
+
+    billed_failure = BilledFailure("truncated")
+    billed_failure.completion = SimpleNamespace(
+        usage=SimpleNamespace(prompt_tokens=7, completion_tokens=2)
+    )
+    physical = {"count": 0}
+
+    def final_response():
+        response = ChatResponse(content=[TextBlock(text="ok")], is_last=True)
+        response.usage = ChatUsage(
+            input_tokens=5, output_tokens=6, cache_input_tokens=4, time=0.1
+        )
+        return response
+
+    async def call():
+        # 模拟策略层：第一次物理尝试失败（携带已计费 usage），重试成功。
+        physical["count"] += 1
+        if physical["count"] == 1:
+            try:
+                raise billed_failure
+            except BilledFailure:
+                pass
+        response = final_response()
+        response.metadata["model_attempts"] = {
+            "physical_attempts": 2,
+            "attempt_failures": [
+                {
+                    "error_type": "BilledFailure",
+                    "billed_usage": {"input_tokens": 7, "output_tokens": 2},
+                }
+            ],
+        }
+        return response
+
+    with session.scope("researching", 1):
+        await session.model("researcher", [UserMsg("user", "q")], call)
+    budget = await store.budget(state.run_id, "owner")
+    assert budget["used"] == {"model_calls": 2, "input_tokens": 12, "output_tokens": 8}
+    assert all(amount == 0 for amount in budget["reserved"].values())
+    record = await store.operation_record(lease, "researching:1:pipeline:model:researcher:0")
+    assert record["result"]["usage_details"]["cached_input_tokens"] == 4
+    assert record["result"]["usage_details"]["physical_attempts"] == 2
+    await session.close()
+
+
+async def test_model_settlement_without_usage_keeps_conservative_reservation(store):
+    from agentscope.message import TextBlock
+    from agentscope.model import ChatResponse
+
+    state, lease = await create(store, limits={"model_calls": 3})
+    session = RecoverySession(store, lease, state)
+
+    async def call():
+        response = ChatResponse(content=[TextBlock(text="ok")], is_last=True)
+        response.metadata["model_attempts"] = {"physical_attempts": 2, "attempt_failures": []}
+        return response
+
+    with session.scope("researching", 1):
+        await session.model(
+            "researcher", [UserMsg("user", "q")], call, max_tokens=9
+        )
+    budget = await store.budget(state.run_id, "owner")
+    # usage 缺失：保守按预留结算（输出按 max_tokens），不当作零。
+    assert budget["used"]["model_calls"] == 2
+    assert budget["used"]["output_tokens"] == 9
+    await session.close()
+
+
+async def test_tool_settlement_uses_reported_physical_fetches(store):
+    from types import SimpleNamespace
+
+    state, lease = await create(store, limits={"tool_calls": 3, "fetch_calls": 9})
+    session = RecoverySession(store, lease, state)
+    tool = SimpleNamespace(
+        name="web_research", effect=ToolEffect.READ_ONLY, supports_idempotency=True
+    )
+
+    async def reported():
+        return GovernedToolCallResult(
+            ToolOutcomeMessage("done", "web_research", "call-1"),
+            ToolResult(output="out", metadata={"physical_fetches": 3}),
+            None,
+        )
+
+    async def unreported():
+        return GovernedToolCallResult(
+            ToolOutcomeMessage("done", "web_research", "call-2"),
+            ToolResult(output="out"),
+            None,
+        )
+
+    with session.scope("researching", 1):
+        await session.tool(tool, "call-1", {}, reported)
+        await session.tool(tool, "call-2", {}, unreported)
+    budget = await store.budget(state.run_id, "owner")
+    assert budget["used"] == {"tool_calls": 2, "fetch_calls": 4}
+    await session.close()

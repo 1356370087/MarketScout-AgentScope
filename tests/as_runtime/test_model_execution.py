@@ -131,6 +131,23 @@ async def test_fallback_state_survives_serialization():
     assert calls == [a, b, b]
 
 
+async def test_failed_transport_attempt_is_counted_before_fallback():
+    calls = []
+    state = {}
+
+    async def handler(**kwargs):
+        calls.append(kwargs["current_model"])
+        if len(calls) == 1:
+            raise GatewayCallError("limited", status_code=429)
+        return response()
+
+    await ModelCallPolicy([object(), object()], attempts=1).invoke(
+        handler, {"messages": []}, state
+    )
+    assert state["physical_attempts"] == len(calls) == 2
+    assert len(state["attempt_failures"]) == 1
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 422])
 async def test_terminal_http_errors_do_not_fallback(status):
     calls = []

@@ -22,8 +22,15 @@ from open_deep_research.sandbox.gateway import GatewayRunContext, GatewayRuntime
 from open_deep_research.sandbox.internal_api import (
     BudgetReserveRequest,
     OperationGetRequest,
+    OperationTransitionRequest,
+    ToolBudgetReserveRequest,
+    ToolBudgetSettleRequest,
 )
-from open_deep_research.sandbox.wire import GatewayModelOutcomeV2, GatewayModelRequestV2
+from open_deep_research.sandbox.wire import (
+    GatewayModelOutcomeV2,
+    GatewayModelRequestV2,
+    GatewayToolOutcomeV1,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -45,8 +52,10 @@ async def host(tmp_path):
     app = FastAPI()
 
     async def resolve(run):
-        return ledger if run == "r" else None
+        return resolvable.get(run)
 
+    resolvable = {"r": ledger}
+    ledger.resolvable_runs = resolvable
     app.include_router(build_gateway_ledger_router(resolve, root))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://host"
@@ -246,3 +255,231 @@ async def test_gateway_budget_rejection_becomes_native_approval(host):
         with gateway_operation_scope("outside:pipeline:model:researcher:0"), pytest.raises(BudgetExhausted):
             await model(messages=[UserMsg("user", "q")])
         assert len(identifiers) == 2 and identifiers[0] == identifiers[1]
+
+
+async def _tool_reserve(gateway, ledger, operation_id, *, tool_name, idempotent):
+    request = gateway.internal.signed(
+        ToolBudgetReserveRequest,
+        run_id="r",
+        task_id="t",
+        fence_token=ledger.recovery.lease.fence,
+        stage="researching",
+        logical_operation_id=operation_id,
+        tool_name=tool_name,
+        idempotent=idempotent,
+    )
+    response = await gateway.internal.post(
+        "/internal/sandbox/budgets/tool-reserve", request
+    )
+    return response
+
+
+async def test_tool_ledger_settles_actual_fetches_and_replays_outcome(host):
+    """工具物理执行统一计一次：实测抓取数结算，已提交回执直接复用。"""
+    gateway, ledger, client = host
+    reserved = await _tool_reserve(
+        gateway, ledger, "tool-op-1", tool_name="web_research", idempotent=True
+    )
+    assert reserved == {"replayed": False}
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["reserved"] == {"tool_calls": 1, "fetch_calls": 1}
+
+    outcome = GatewayToolOutcomeV1(
+        logical_operation_id="tool-op-1",
+        tool_call_id="call-1",
+        status="completed",
+        output="evidence",
+    )
+    settle = gateway.internal.signed(
+        ToolBudgetSettleRequest,
+        run_id="r",
+        fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="tool-op-1",
+        outcome=outcome.model_dump(mode="json"),
+        fetch_calls=3,
+    )
+    assert (
+        await gateway.internal.post(
+            "/internal/sandbox/budgets/tool-settle", settle
+        )
+        == {"status": "settled"}
+    )
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"] == {"tool_calls": 1, "fetch_calls": 3}
+    assert all(amount == 0 for amount in budget["reserved"].values())
+
+    # 崩溃后重试：预留端点返回已提交回执，工具不再次执行。
+    replayed = await _tool_reserve(
+        gateway, ledger, "tool-op-1", tool_name="web_research", idempotent=True
+    )
+    assert replayed["replayed"] is True
+    assert GatewayToolOutcomeV1.model_validate(
+        replayed["result"]["outcome"]
+    ) == outcome
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"] == {"tool_calls": 1, "fetch_calls": 3}
+
+
+async def test_tool_ledger_missing_fetch_report_keeps_reservation(host):
+    """抓取数缺失时保持保守预留，不当零。"""
+    gateway, ledger, _client = host
+    await _tool_reserve(
+        gateway, ledger, "tool-op-2", tool_name="fetch_url", idempotent=True
+    )
+    settle = gateway.internal.signed(
+        ToolBudgetSettleRequest,
+        run_id="r",
+        fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="tool-op-2",
+        outcome={"status": "completed"},
+    )
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", settle)
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"] == {"tool_calls": 1, "fetch_calls": 1}
+
+
+async def test_non_idempotent_tool_retry_is_quarantined_not_replayed(host):
+    """非幂等工具在"已执行未结算"窗口重试进入未知隔离，不自动重放。"""
+    gateway, ledger, client = host
+    await _tool_reserve(
+        gateway, ledger, "tool-op-3", tool_name="publish_report", idempotent=False
+    )
+    request = gateway.internal.signed(
+        ToolBudgetReserveRequest,
+        run_id="r",
+        task_id="t",
+        fence_token=ledger.recovery.lease.fence,
+        stage="researching",
+        logical_operation_id="tool-op-3",
+        tool_name="publish_report",
+        idempotent=False,
+    )
+    response = await client.post(
+        "/internal/sandbox/budgets/tool-reserve", json=request.model_dump(mode="json")
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "tool_operation_unknown"
+
+
+async def test_tool_budget_exhaustion_maps_to_dimension_error(host):
+    gateway, ledger, client = host
+    store = ledger.recovery.store
+    await store.create_run(
+        "u2",
+        ResearchSnapshot(run_id="r2", config_fingerprint="f"),
+        limits={"tool_calls": 1},
+    )
+    second = await RecoverySession.open(store, "r2", "u2")
+    try:
+        original = ledger.recovery
+        ledger.recovery = second
+        ledger.resolvable_runs["r2"] = ledger
+        await _tool_reserve(
+            gateway, ledger, "tool-a", tool_name="web_research", idempotent=True
+        )
+        # 第二次调用超出 tool_calls 上限：429 携带维度。
+        second_store_budget = await second.store.budget("r2", "u2")
+        assert second_store_budget["reserved"] == {"tool_calls": 1, "fetch_calls": 1}
+        request = gateway.internal.signed(
+            ToolBudgetReserveRequest,
+            run_id="r2",
+            task_id="t",
+            fence_token=second.lease.fence,
+            stage="researching",
+            logical_operation_id="tool-b",
+            tool_name="web_research",
+            idempotent=True,
+        )
+        response = await client.post(
+            "/internal/sandbox/budgets/tool-reserve", json=request.model_dump(mode="json")
+        )
+        assert response.status_code == 429
+        assert response.json()["detail"] == "budget_exhausted:tool_calls"
+    finally:
+        ledger.recovery = original
+        await second.close()
+
+
+async def test_failed_model_transition_settles_billed_usage_not_zero(host):
+    """失败物理调用携带的已计费 usage 计入账本；无账单才零结算。"""
+    gateway, ledger, _client = host
+    store = ledger.recovery.store
+    await store.create_run(
+        "u3",
+        ResearchSnapshot(run_id="r3", config_fingerprint="f"),
+        limits={"model_calls": 3},
+    )
+    third = await RecoverySession.open(store, "r3", "u3")
+    try:
+        original = ledger.recovery
+        ledger.recovery = third
+        reservation = gateway.internal.signed(
+            BudgetReserveRequest,
+            run_id="r3",
+            task_id="t",
+            fence_token=third.lease.fence,
+            stage="researching",
+            logical_operation_id="failed-op",
+            physical_attempt_id="p1",
+            model_name="m",
+            estimated_input_tokens=5,
+            estimated_output_tokens=6,
+            request_digest="payload",
+        )
+        await ledger.reserve(reservation)
+        transition = gateway.internal.signed(
+            OperationTransitionRequest,
+            run_id="r3",
+            fence_token=third.lease.fence,
+            logical_operation_id="failed-op",
+            status="failed",
+            outcome=GatewayModelOutcomeV2(
+                logical_operation_id="failed-op",
+                status="failed",
+                requested_model="m",
+                usage={"input_tokens": 11, "output_tokens": 7},
+                error_code="length",
+            ).model_dump(mode="json"),
+            error_type="length",
+        )
+        await ledger.transition(transition)
+        budget = await store.budget("r3", "u3")
+        assert budget["used"]["input_tokens"] == 11
+        assert budget["used"]["output_tokens"] == 7
+
+        # 无账单的确定拒绝：零结算释放预留。
+        reservation = gateway.internal.signed(
+            BudgetReserveRequest,
+            run_id="r3",
+            task_id="t",
+            fence_token=third.lease.fence,
+            stage="researching",
+            logical_operation_id="rejected-op",
+            physical_attempt_id="p2",
+            model_name="m",
+            estimated_input_tokens=5,
+            estimated_output_tokens=6,
+            request_digest="payload",
+        )
+        await ledger.reserve(reservation)
+        transition = gateway.internal.signed(
+            OperationTransitionRequest,
+            run_id="r3",
+            fence_token=third.lease.fence,
+            logical_operation_id="rejected-op",
+            status="failed",
+            outcome=GatewayModelOutcomeV2(
+                logical_operation_id="rejected-op",
+                status="failed",
+                requested_model="m",
+                error_code="authentication",
+            ).model_dump(mode="json"),
+            error_type="authentication",
+        )
+        await ledger.transition(transition)
+        budget = await store.budget("r3", "u3")
+        assert budget["used"]["input_tokens"] == 11  # 无账单失败未追加
+        assert budget["reserved"].get("model_calls", 0) == 0
+    finally:
+        ledger.recovery = original
+        await third.close()

@@ -52,6 +52,25 @@ def safe_fallback_messages(messages):
     return result
 
 
+def billed_failure_usage(error):
+    """提取失败物理调用已被提供商计费的 usage（例如截断错误的完成内容）。
+
+    缺失时返回 None：账本对未知用量保持保守预留，不得记零。
+    """
+    completion = getattr(error, "completion", None)
+    usage = getattr(completion, "usage", None)
+    if usage is None:
+        return None
+    try:
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if input_tokens <= 0 and output_tokens <= 0:
+        return None
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens}
+
+
 class ModelCallPolicy:
     def __init__(
         self,
@@ -85,6 +104,9 @@ class ModelCallPolicy:
         index = state.setdefault("active_candidate_index", 0)
         if not isinstance(index, int) or not 0 <= index < len(self.candidates):
             raise ValueError("invalid restored model candidate index")
+        # 本次逻辑调用的物理尝试记账：结算时按实际尝试数与失败已计费用量入账。
+        state["physical_attempts"] = 0
+        state["attempt_failures"] = []
         original = input_kwargs["messages"]
         last_error = None
         for index in range(index, len(self.candidates)):
@@ -115,6 +137,7 @@ class ModelCallPolicy:
                     async with asyncio.timeout(
                         self.timeout if self.probe_mode == "enforced" else None
                     ):
+                        state["physical_attempts"] += 1
                         result = await handler(**kwargs)
                         if isinstance(result, (ChatResponse, StructuredResponse)):
                             if (
@@ -179,6 +202,12 @@ class ModelCallPolicy:
                     if isinstance(error, CircuitOpenError):
                         last_error = error
                         break
+                    state.setdefault("attempt_failures", []).append(
+                        {
+                            "error_type": type(error).__name__,
+                            "billed_usage": billed_failure_usage(error),
+                        }
+                    )
                     if not retryable(error):
                         raise
                     if gateway_owned:

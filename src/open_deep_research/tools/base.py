@@ -74,6 +74,9 @@ class ToolResult(Generic[OutputT]):
     """A successful tool result before transport-specific rendering."""
 
     output: OutputT
+    # Non-model-facing accounting facts (e.g. physical fetch count) consumed by
+    # the SQL ledger settlement; never rendered into the prompt.
+    metadata: Optional[dict] = None
 
 
 ProgressCallback = Callable[[ProgressT], Union[Awaitable[None], None]]

@@ -46,6 +46,18 @@ class ResearchModels:
             policy,
         ]
 
+    @staticmethod
+    def _attach_attempt_summary(response, policy_state):
+        """把本次逻辑调用的物理尝试记账附到响应元数据，供 SQL 结算读取。"""
+        if policy_state.get("physical_attempts") is None:
+            return
+        metadata = getattr(response, "metadata", None)
+        if isinstance(metadata, dict):
+            metadata["model_attempts"] = {
+                "physical_attempts": policy_state.get("physical_attempts") or 0,
+                "attempt_failures": policy_state.get("attempt_failures") or [],
+            }
+
     async def structured(self, role, prompt, schema, state):
         candidates = [self.model_for(role, "pipeline")] if self.model_for else None
         middleware = self.factory.policy_middleware(role, candidates=candidates)
@@ -55,7 +67,11 @@ class ResearchModels:
             return await current_model.generate_structured_output(messages, schema)
 
         async def call():
-            return await middleware.policy.invoke(invoke, {"messages": messages}, state)
+            response = await middleware.policy.invoke(
+                invoke, {"messages": messages}, state
+            )
+            self._attach_attempt_summary(response, state)
+            return response
 
         response = (
             await self.recovery.model(
@@ -73,7 +89,7 @@ class ResearchModels:
 
     async def text(self, role, prompt, state):
         async def call():
-            return await self.factory.complete_with_recovery(
+            response = await self.factory.complete_with_recovery(
                 role,
                 [UserMsg("user", prompt)],
                 state=state,
@@ -84,6 +100,8 @@ class ResearchModels:
                     max_chars=self.context_chars, protected_ids=set()
                 ),
             )
+            self._attach_attempt_summary(response, state.get("route", {}))
+            return response
 
         response = (
             await self.recovery.model(

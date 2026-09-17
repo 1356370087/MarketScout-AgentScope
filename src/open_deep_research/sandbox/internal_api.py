@@ -102,11 +102,15 @@ class BudgetFailRequest(ServiceRequest):
 
 class ToolBudgetReserveRequest(ServiceRequest):
     """Reserve one logical Gateway tool call."""
+
     run_id: str
     task_id: str
     fence_token: int
     stage: str
     logical_operation_id: str
+    # SQL 权威端点用：按工具元数据决定幂等重放与抓取维度；旧文件账本忽略。
+    tool_name: str | None = None
+    idempotent: bool | None = None
 
 
 class ToolBudgetSettleRequest(ServiceRequest):
@@ -115,6 +119,9 @@ class ToolBudgetSettleRequest(ServiceRequest):
     run_id: str
     fence_token: int
     logical_operation_id: str
+    # SQL 权威端点用：结算回执与实测物理抓取数；缺失时保持保守预留。
+    outcome: dict[str, Any] | None = None
+    fetch_calls: int | None = Field(default=None, ge=0)
 
 
 class OperationTransitionRequest(ServiceRequest):
@@ -447,10 +454,36 @@ def reconcile_run_gateway_usage(
 
 def build_internal_sandbox_router(
     resolve_run: Callable[[str], InternalRunContext | None],
+    *,
+    native_ledger: Callable[[str], Any] | None = None,
+    native_root_key: Callable[[], str | None] | None = None,
 ) -> APIRouter:
-    """Build the internal-only, HMAC-authenticated sandbox control router."""
+    """Build the internal-only, HMAC-authenticated sandbox control router.
+
+    ``native_ledger(run_id)`` 返回原生运行的 ``SQLGatewayLedger`` 或 None。
+    提供时，预算与操作端点先按运行归属分派：原生运行结算到 SQL 恢复权威
+    （同一物理调用只计一次），旧引擎运行保持文件账本行为不变。
+    """
     router = APIRouter(prefix="/internal/sandbox", tags=["sandbox-internal"])
     replay = NonceReplayCache()
+
+    async def native_ledger_for(request):
+        if native_ledger is None:
+            return None
+        ledger = await native_ledger(request.run_id)
+        if ledger is None:
+            return None
+        from open_deep_research.agentscope_runtime.gateway_ledger import authorize_gateway_ledger
+
+        return await authorize_gateway_ledger(
+            request, ledger, native_root_key() if native_root_key else None, replay
+        )
+
+    def _budget_exhausted(exc: BaseException) -> HTTPException:
+        dimension = getattr(exc, "dimension", None)
+        return HTTPException(
+            429, "budget_exhausted:" + getattr(dimension, "value", "unknown")
+        )
 
     def authorize(request: ServiceRequest, context: InternalRunContext) -> None:
         validate_timestamp(request.service_timestamp)
@@ -514,6 +547,14 @@ def build_internal_sandbox_router(
 
     @router.post("/budgets/reserve")
     async def reserve_budget(request: BudgetReserveRequest) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            try:
+                return await ledger.reserve(request)
+            except Exception as exc:
+                if hasattr(exc, "dimension"):
+                    raise _budget_exhausted(exc) from None
+                raise
         context = authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
@@ -539,6 +580,9 @@ def build_internal_sandbox_router(
 
     @router.post("/budgets/settle")
     async def settle_budget(request: BudgetSettleRequest) -> dict[str, str]:
+        if await native_ledger_for(request) is not None:
+            # SQL 权威只认终态回执；中间结算通知不改账。
+            return {"status": "awaiting_receipt"}
         context = authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
@@ -556,6 +600,8 @@ def build_internal_sandbox_router(
 
     @router.post("/budgets/fail")
     async def fail_budget(request: BudgetFailRequest) -> dict[str, str]:
+        if await native_ledger_for(request) is not None:
+            return {"status": "awaiting_receipt"}
         context = authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
@@ -570,7 +616,17 @@ def build_internal_sandbox_router(
         return {"status": "uncertain" if request.uncertain else "released"}
 
     @router.post("/budgets/tool-reserve")
-    async def reserve_tool_budget(request: ToolBudgetReserveRequest) -> dict[str, str]:
+    async def reserve_tool_budget(request: ToolBudgetReserveRequest) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            try:
+                return await ledger.reserve_tool(request)
+            except Exception as exc:
+                if hasattr(exc, "dimension"):
+                    raise _budget_exhausted(exc) from None
+                if type(exc).__name__ == "UnknownOperation":
+                    raise HTTPException(409, "tool_operation_unknown") from None
+                raise
         context = authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
@@ -586,7 +642,15 @@ def build_internal_sandbox_router(
     @router.post("/budgets/tool-settle")
     async def settle_tool_budget(
         request: ToolBudgetSettleRequest,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            try:
+                return await ledger.settle_tool(request)
+            except Exception as exc:
+                if type(exc).__name__ == "RecoveryConflict":
+                    raise HTTPException(409, str(exc)) from None
+                raise
         context = authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
@@ -601,6 +665,11 @@ def build_internal_sandbox_router(
 
     @router.post("/operations/get")
     async def get_operation(request: OperationGetRequest) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            return await ledger.lookup(
+                request.logical_operation_id, request.request_digest
+            )
         context = authority(request, request.run_id, request.fence_token)
         record = await asyncio.to_thread(
             ModelOperationStore(
@@ -614,6 +683,9 @@ def build_internal_sandbox_router(
 
     @router.post("/operations/transition")
     async def transition_operation(request: OperationTransitionRequest) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            return await ledger.transition(request)
         context = authority(request, request.run_id, request.fence_token)
         expected = {
             "dispatched": {"reserved"},

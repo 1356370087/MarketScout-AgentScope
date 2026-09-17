@@ -72,6 +72,40 @@ def response_dump(value):
     return value
 
 
+def _usage_details(response, agent):
+    """缓存 token 与物理尝试明细：单独记录，不并入六维结算。
+
+    六维账本的算术只认 ``BudgetDimension``；缓存 token、失败尝试的已计费
+    usage 与尝试计数作为回执明细留存，满足"分别计入、缺失不当零"。
+    """
+    details = {}
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        for field_name in ("cache_input_tokens", "cached_input_tokens"):
+            cached = getattr(usage, field_name, None)
+            if cached:
+                details["cached_input_tokens"] = cached
+                break
+    metadata = getattr(response, "metadata", None)
+    attempts = (
+        metadata.get("model_attempts")
+        if isinstance(metadata, dict) and metadata.get("model_attempts")
+        else None
+    )
+    if attempts is None and agent is not None:
+        route = (getattr(agent.state, "middle_context", None) or {}).get(
+            "model_route"
+        )
+        if isinstance(route, dict) and route.get("physical_attempts") is not None:
+            attempts = {
+                "physical_attempts": route.get("physical_attempts"),
+                "attempt_failures": route.get("attempt_failures") or [],
+            }
+    if attempts:
+        details.update(attempts)
+    return details or None
+
+
 def response_load(value, *, structured=False):
     result = dict(value)
     if result.get("usage"):
@@ -304,6 +338,7 @@ class RecoverySession:
                 "framework": "2.0.8",
                 "response": response_dump(response),
                 "agent_state": agent.state.model_dump(mode="json") if agent else None,
+                "usage_details": _usage_details(response, agent),
             }
 
         async def invoke():
@@ -318,20 +353,31 @@ class RecoverySession:
             if self.model_accounting == "gateway":
                 return {}
             usage = result["response"].get("usage")
-            # Unknown usage remains conservatively charged at reservation.
+            details = result.get("usage_details") or {}
+            failures = [
+                item.get("billed_usage")
+                for item in details.get("attempt_failures") or []
+                if item and item.get("billed_usage")
+            ]
+            attempts = int(details.get("physical_attempts") or 0)
             if not usage:
+                if attempts > 1 or failures:
+                    # 未知用量保持保守预留；物理尝试数仍按实际情况计数。
+                    return {**reserve, "model_calls": max(1, attempts)}
                 return reserve
             actual = {
-                "model_calls": 1,
-                "input_tokens": usage["input_tokens"],
-                "output_tokens": usage["output_tokens"],
+                "model_calls": max(1, attempts or 1),
+                "input_tokens": usage["input_tokens"]
+                + sum(item["input_tokens"] for item in failures),
+                "output_tokens": usage["output_tokens"]
+                + sum(item["output_tokens"] for item in failures),
             }
             if "cost_micro_usd" in reserve:
                 import math
 
                 actual["cost_micro_usd"] = math.ceil(
-                    usage["input_tokens"] * pricing[0]
-                    + usage["output_tokens"] * pricing[1]
+                    actual["input_tokens"] * pricing[0]
+                    + actual["output_tokens"] * pricing[1]
                 )
             return actual
 
@@ -353,7 +399,7 @@ class RecoverySession:
             agent.state = AgentState.model_validate(result["agent_state"])
         return response_load(result["response"], structured=schema is not None)
 
-    async def tool(self, tool, call_id, arguments, handler):
+    async def tool(self, tool, call_id, arguments, handler, *, bill=True):
         key = f"{self.stage.get()}:{self.task_id.get()}:tool:{call_id}"
         rejected_before_execution = {
             "permission_denied",
@@ -406,12 +452,34 @@ class RecoverySession:
                 "output": output,
                 "has_result": result.result is not None,
                 "error": result.error.model_dump(mode="json") if result.error else None,
+                "tool_metadata": (
+                    dict(result.result.metadata)
+                    if result.result is not None and result.result.metadata
+                    else None
+                ),
             }
 
         safe = tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
-        reserve = {"tool_calls": 1}
-        if tool.name in {"fetch_url", "fetch_webpage"}:
+        # 远区派发的工具由 Gateway 侧统一计费；宿主回执不再重复预留 tool_calls。
+        reserve = {"tool_calls": 1} if bill else None
+        if bill and tool.name in {"fetch_url", "fetch_webpage", "web_research"}:
             reserve["fetch_calls"] = 1
+
+        def settle(result):
+            if not bill:
+                return None
+            if (result.get("error") or {}).get("error_type") in (
+                rejected_before_execution
+            ):
+                return {dimension: 0 for dimension in reserve}
+            actual = dict(reserve)
+            metadata = result.get("tool_metadata") or {}
+            physical = metadata.get("physical_fetches")
+            if "fetch_calls" in actual and physical is not None:
+                # 实测物理抓取数；缺失时保持预留值，不当作零。
+                actual["fetch_calls"] = int(physical)
+            return actual
+
         value = await self.operation(
             "tool",
             {"name": tool.name, "arguments": arguments},
@@ -419,12 +487,7 @@ class RecoverySession:
             key=key,
             replay_safe=safe,
             reserve=reserve,
-            actual=lambda result: (
-                {dimension: 0 for dimension in reserve}
-                if (result.get("error") or {}).get("error_type")
-                in rejected_before_execution
-                else reserve
-            ),
+            actual=settle,
         )
         return GovernedToolCallResult(
             ToolOutcomeMessage(**value["message"]),

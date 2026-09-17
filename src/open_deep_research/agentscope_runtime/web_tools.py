@@ -798,7 +798,15 @@ def web_research_tool(
             ledger.record_transport_failure(
                 run_id, task_id, result.gap_analysis.budget.transport_failed_fetches
             )
-        return ToolResult(output=compact_web_result(result, config))
+        return ToolResult(
+            output=compact_web_result(result, config),
+            metadata={
+                "physical_fetches": consumed,
+                "transport_failed_fetches": (
+                    result.gap_analysis.budget.transport_failed_fetches
+                ),
+            },
+        )
 
     return build_tool(
         name="web_research",
@@ -886,7 +894,15 @@ def fetch_url_tool(
             ledger.record_transport_failure(
                 run_id, task_id, result.gap_analysis.budget.transport_failed_fetches
             )
-        return ToolResult(output=compact_web_result(result, config))
+        return ToolResult(
+            output=compact_web_result(result, config),
+            metadata={
+                "physical_fetches": consumed,
+                "transport_failed_fetches": (
+                    result.gap_analysis.budget.transport_failed_fetches
+                ),
+            },
+        )
 
     return build_tool(
         name="fetch_url",

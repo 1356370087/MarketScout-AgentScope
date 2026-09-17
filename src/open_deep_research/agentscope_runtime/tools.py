@@ -200,7 +200,13 @@ class GovernedTool(ToolBase):
                     base_delay=self.owner.retry_delay,
                     recorder=trace,
                 )
-            result = await self.owner.journal.tool(tool, identity.call_id, kwargs, execute) if self.owner.journal else await execute()
+            result = (
+                await self.owner.journal.tool(
+                    tool, identity.call_id, kwargs, execute, bill=not remote
+                )
+                if self.owner.journal
+                else await execute()
+            )
             if self.owner.result_observer is not None:
                 await self.owner.result_observer(self.name, identity.call_id, result)
             error_type = result.error.error_type.value if result.error else None

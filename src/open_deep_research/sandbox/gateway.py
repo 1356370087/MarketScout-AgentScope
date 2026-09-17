@@ -1456,7 +1456,7 @@ class GatewayRuntime:
                 status="failed",
                 error={"error_type": "tool_not_found", "message": "Tool is not registered in Gateway."},
             )
-        from open_deep_research.tools.base import ToolExecutionZone
+        from open_deep_research.tools.base import ToolEffect, ToolExecutionZone
 
         if tool.execution_zone is not ToolExecutionZone.GATEWAY:
             return GatewayToolOutcomeV1(
@@ -1634,10 +1634,38 @@ class GatewayRuntime:
             fence_token=context.fence_token,
             stage=request.stage,
             logical_operation_id=request.logical_operation_id,
+            tool_name=request.tool_name,
+            idempotent=(
+                tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
+            ),
         )
-        await self.internal.post(
-            "/internal/sandbox/budgets/tool-reserve", budget_request
-        )
+        try:
+            reservation = await self.internal.post(
+                "/internal/sandbox/budgets/tool-reserve", budget_request
+            )
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            if exc.response.status_code == 429:
+                with suppress(ValueError, KeyError):
+                    detail = str(exc.response.json().get("detail", ""))
+            if detail.startswith("budget_exhausted:"):
+                return GatewayToolOutcomeV1(
+                    logical_operation_id=request.logical_operation_id,
+                    tool_call_id=request.tool_call_id,
+                    status="failed",
+                    error={
+                        "error_type": "budget_exhausted",
+                        "message": (
+                            "The run's tool budget rejected this call; request "
+                            "a budget approval instead of retrying."
+                        ),
+                    },
+                )
+            raise
+        replayed_outcome = self._gateway_tool_replayed_outcome(reservation)
+        if replayed_outcome is not None:
+            # 已提交回执直接复用：效果恰一次，不再次执行工具。
+            return replayed_outcome
         call = {
             "name": request.tool_name,
             "args": request.arguments,
@@ -1761,29 +1789,34 @@ class GatewayRuntime:
                 governed = await execute_authorized()
                 if isinstance(governed, GatewayToolOutcomeV1):
                     return governed
-        settle_request = self.internal.signed(
-            ToolBudgetSettleRequest,
-            run_id=request.run_id,
-            fence_token=context.fence_token,
-            logical_operation_id=request.logical_operation_id,
-        )
-        await self.internal.post(
-            "/internal/sandbox/budgets/tool-settle",
-            settle_request,
-        )
-        if governed.error is not None:
-            return GatewayToolOutcomeV1(
+        outcome = (
+            GatewayToolOutcomeV1(
                 logical_operation_id=request.logical_operation_id,
                 tool_call_id=request.tool_call_id,
                 status="failed",
                 error=governed.error.model_dump(mode="json"),
             )
-        return GatewayToolOutcomeV1(
-            logical_operation_id=request.logical_operation_id,
-            tool_call_id=request.tool_call_id,
-            status="completed",
-            output=governed.result.output if governed.result is not None else governed.message.content,
+            if governed.error is not None
+            else GatewayToolOutcomeV1(
+                logical_operation_id=request.logical_operation_id,
+                tool_call_id=request.tool_call_id,
+                status="completed",
+                output=governed.result.output if governed.result is not None else governed.message.content,
+            )
         )
+        settle_request = self.internal.signed(
+            ToolBudgetSettleRequest,
+            run_id=request.run_id,
+            fence_token=context.fence_token,
+            logical_operation_id=request.logical_operation_id,
+            outcome=outcome.model_dump(mode="json"),
+            fetch_calls=self._governed_fetch_calls(governed),
+        )
+        await self.internal.post(
+            "/internal/sandbox/budgets/tool-settle",
+            settle_request,
+        )
+        return outcome
 
     @native_tools_scope
     async def authorize_local_tool(
@@ -1793,7 +1826,7 @@ class GatewayRuntime:
     ) -> GatewayToolOutcomeV1:
         """Authorize, but never physically execute, a sandbox-local tool call."""
         from open_deep_research.security.redaction import redact_text
-        from open_deep_research.tools.base import ToolExecutionZone
+        from open_deep_research.tools.base import ToolEffect, ToolExecutionZone
         from open_deep_research.tools.governance import (
             AgentRole,
             filter_tools_by_permission,
@@ -1940,21 +1973,38 @@ class GatewayRuntime:
             fence_token=context.fence_token,
             stage=request.stage,
             logical_operation_id=request.logical_operation_id,
+            tool_name=request.tool_name,
+            idempotent=(
+                tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
+            ),
         )
-        await self.internal.post(
-            "/internal/sandbox/budgets/tool-reserve", budget_request
-        )
-        settle_request = self.internal.signed(
-            ToolBudgetSettleRequest,
-            run_id=request.run_id,
-            fence_token=context.fence_token,
-            logical_operation_id=request.logical_operation_id,
-        )
-        await self.internal.post(
-            "/internal/sandbox/budgets/tool-settle",
-            settle_request,
-        )
-        return GatewayToolOutcomeV1(
+        try:
+            reservation = await self.internal.post(
+                "/internal/sandbox/budgets/tool-reserve", budget_request
+            )
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            if exc.response.status_code == 429:
+                with suppress(ValueError, KeyError):
+                    detail = str(exc.response.json().get("detail", ""))
+            if detail.startswith("budget_exhausted:"):
+                return GatewayToolOutcomeV1(
+                    logical_operation_id=request.logical_operation_id,
+                    tool_call_id=request.tool_call_id,
+                    status="failed",
+                    error={
+                        "error_type": "budget_exhausted",
+                        "message": (
+                            "The run's tool budget rejected this authorization; "
+                            "request a budget approval instead of retrying."
+                        ),
+                    },
+                )
+            raise
+        replayed_outcome = self._gateway_tool_replayed_outcome(reservation)
+        if replayed_outcome is not None:
+            return replayed_outcome
+        outcome = GatewayToolOutcomeV1(
             logical_operation_id=request.logical_operation_id,
             tool_call_id=request.tool_call_id,
             status="completed",
@@ -1963,6 +2013,47 @@ class GatewayRuntime:
                 "execution_zone": ToolExecutionZone.SANDBOX_LOCAL.value,
             },
         )
+        settle_request = self.internal.signed(
+            ToolBudgetSettleRequest,
+            run_id=request.run_id,
+            fence_token=context.fence_token,
+            logical_operation_id=request.logical_operation_id,
+            outcome=outcome.model_dump(mode="json"),
+        )
+        await self.internal.post(
+            "/internal/sandbox/budgets/tool-settle",
+            settle_request,
+        )
+        return outcome
+
+    @staticmethod
+    def _gateway_tool_replayed_outcome(reservation):
+        """从 SQL 预留响应识别已提交回执，复用结果而不再次执行工具。"""
+        if not isinstance(reservation, dict) or not reservation.get("replayed"):
+            return None
+        stored = reservation.get("result")
+        if not isinstance(stored, dict):
+            return None
+        outcome = stored.get("outcome")
+        if not isinstance(outcome, dict):
+            # 版本偏斜（旧结算未携带回执）或授权型结算：无法安全复用。
+            raise ModelGatewayError(
+                "gateway_tool_receipt_unavailable",
+                "A committed tool receipt exists but carries no replayable outcome.",
+            )
+        return GatewayToolOutcomeV1.model_validate(outcome)
+
+    @staticmethod
+    def _governed_fetch_calls(governed) -> int | None:
+        """从治理结果元数据读取实测物理抓取数；缺失返回 None 保持预留。"""
+        result = getattr(governed, "result", None)
+        metadata = getattr(result, "metadata", None)
+        if isinstance(metadata, dict) and metadata.get("physical_fetches") is not None:
+            try:
+                return int(metadata["physical_fetches"])
+            except (TypeError, ValueError):
+                return None
+        return None
 
     @staticmethod
     def _failure_usage(exc: BaseException) -> dict[str, int]:
@@ -2429,6 +2520,9 @@ class GatewayRuntime:
                 logical_operation_id=request.logical_operation_id,
                 status="uncertain" if uncertain else "failed",
                 requested_model=request.model,
+                # 失败物理调用仍可能已被提供商计费（如截断错误的完成内容）；
+                # 有账单则由 SQL 结算计入，缺失不伪造零。
+                usage=self._failure_usage(exc),
                 error_code=error_code,
             )
             transition = self.internal.signed(
