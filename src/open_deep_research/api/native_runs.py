@@ -153,6 +153,9 @@ class NativeRuns:
                         "authz_version": principal.authz_version,
                     },
                     "configuration": config.snapshot(),
+                    # 交互开关（如 enable_human_in_loop）不在冻结契约内；
+                    # 持久化已校验的请求配置，供管线工厂合并到运行配置。
+                    "request_configurable": dict(request.configurable),
                     "title": request.title or request.messages[-1]["content"][:160],
                     "created_at": time.time(),
                     "source_selection": request.source_selection.model_dump(

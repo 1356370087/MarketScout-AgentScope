@@ -226,6 +226,26 @@ async def _lifespan(_app: FastAPI):
     _shutting_down.clear()
     _sse_shutdown.clear()
     await startup_checks()
+    global _native_research_service
+    from open_deep_research.agentscope_runtime.native_host import (
+        native_engine_enabled,
+    )
+
+    if native_engine_enabled():
+        from open_deep_research.agentscope_runtime.native_host import (
+            build_native_research_service,
+            mount_native_research,
+        )
+
+        _native_research_service = await build_native_research_service(
+            runs_dir=Configuration.from_runnable_config(None).runs_dir,
+            database_url=os.getenv("AS_RECOVERY_DATABASE_URL") or None,
+        )
+        mount_native_research(app, _native_research_service)
+        logger.info(
+            "RESEARCH_ENGINE=native: research run routes served by the native "
+            "runtime; legacy runs are read-only history"
+        )
     document_schema_error: str | None = None
     if get_document_settings().enabled:
         try:
@@ -312,6 +332,9 @@ async def _lifespan(_app: FastAPI):
             )
         finally:
             _sse_shutdown.set()
+            if _native_research_service is not None:
+                await _native_research_service.native_aclose()
+                _native_research_service = None
             if _retention_sweep_task is not None:
                 _retention_sweep_task.cancel()
                 await asyncio.gather(_retention_sweep_task, return_exceptions=True)
@@ -478,7 +501,26 @@ def _resolve_internal_sandbox_run(run_id: str) -> InternalRunContext | None:
     )
 
 
-app.include_router(build_internal_sandbox_router(_resolve_internal_sandbox_run))
+_native_research_service = None
+
+
+async def _native_sandbox_ledger(run_id: str):
+    """原生运行的 SQL 账本权威；仅网关计账的活跃运行返回账本。
+
+    旧引擎运行与本缝未启用时返回 None，内部预算端点保持文件账本行为。
+    """
+    service = _native_research_service
+    if service is None:
+        return None
+    return await service.pipeline_factory.gateway_ledger(run_id)
+
+
+app.include_router(
+    build_internal_sandbox_router(
+        _resolve_internal_sandbox_run, native_ledger=_native_sandbox_ledger,
+        native_root_key=lambda: Configuration.from_runnable_config(None).sandbox_root_signing_key,
+    )
+)
 
 
 def _new_run_record(

@@ -82,6 +82,11 @@ class ProductionRunFactory:
         config = apply_principal_to_config(
             run_config.compatibility_projection(), principal
         )
+        # 交互开关不在冻结契约内；恢复时从持久化的请求配置取回。
+        config["configurable"] = {
+            **snapshot.application.get("request_configurable", {}),
+            **config["configurable"],
+        }
         config["metadata"].update(
             run_id=recovery.lease.run_id,
             user_id=principal.user_id,
@@ -103,6 +108,11 @@ class ProductionRunFactory:
             recovery.model_accounting = (
                 "gateway" if ports.gateway_accounting else "local"
             )
+            if cfg.enable_async_research and self.runtime is None:
+                raise ValueError(
+                    "native team host requires ASRuntime; deploy the runtime "
+                    "or disable enable_async_research"
+                )
             team = (
                 await self.runtime.bind_research_team(recovery)
                 if cfg.enable_async_research
