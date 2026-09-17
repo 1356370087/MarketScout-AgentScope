@@ -5,16 +5,34 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="07355fec-7b27-4edf-892e-c274f25e56d0" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/configuration.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/configuration.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/models/resolution.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/models/resolution.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/security/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/security/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/tools/base.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/tools/base.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/tools/governance.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/tools/governance.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/tools/registry.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/tools/registry.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_tool_governance.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_tool_governance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_store.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_store.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_agents.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_agents.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/documents/embeddings.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/documents/embeddings.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/documents/worker.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/documents/worker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/evaluation/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/evaluation/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/answer.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/answer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/rerank.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/rerank.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/sync.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/sync.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/memory/maintenance.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/memory/maintenance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/memory/policy.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/memory/policy.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/models/gateway.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/models/gateway.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/observability/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/observability/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/report/assembly.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/report/assembly.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/report/evidence_synthesis.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/report/evidence_synthesis.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/report/orchestrator.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/report/orchestrator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/report/reviewer.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/report/reviewer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/report/writing.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/report/writing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/run_context.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/run_context.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/tasks/team_store.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/tasks/team_store.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_facts_wiki_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_facts_wiki_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_search_flow_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_search_flow_db.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -25,6 +43,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "1356370087"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/1356370087/MarketScout-AgentScope.git",
+    "accountId": "b3f82285-327f-4167-bfd5-5e18fbbda991"
+  }
+}]]></component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0,
   &quot;fromUser&quot;: false
@@ -266,7 +296,7 @@
       <option name="presentableId" value="Default" />
       <updated>1789223620786</updated>
       <workItem from="1789223621913" duration="758000" />
-      <workItem from="1789224390030" duration="26877000" />
+      <workItem from="1789224390030" duration="42934000" />
     </task>
     <servers />
   </component>
