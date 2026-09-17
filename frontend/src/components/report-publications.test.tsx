@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePublications } from "@/hooks/use-publications";
 import { researchApi } from "@/lib/api";
 import { defaultPublicationTheme } from "@/lib/settings";
-import { ReportPublications } from "./report-publications";
+import { ReportPublications } from "@/features/research/report-publications";
 
 vi.mock("@/hooks/use-publications", () => ({ usePublications: vi.fn() }));
 

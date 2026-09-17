@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { researchApi } from "@/lib/api";
 import { useResearchRunStore } from "@/stores/research-run-store";
-import { ApprovalCenter } from "./approval-center";
+import { ApprovalCenter } from "@/features/research/approval-center";
 
 const state = {
   baseline_mode: "auto", effective_mode: "auto", can_resolve: true,

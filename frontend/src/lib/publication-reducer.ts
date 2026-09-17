@@ -1,4 +1,4 @@
-import type { PublicationEvent, PublicationJob, PublicationStatus } from "./types";
+import type { PublicationEvent, PublicationJob, PublicationStatus } from "./contracts/publications";
 
 export interface PublicationState {
   jobsById: Record<string, PublicationJob>;

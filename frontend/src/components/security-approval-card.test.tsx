@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SecurityApprovalCard } from "./research-workspace";
+import { SecurityApprovalCard } from "@/features/research/research-workspace";
 import { researchApi } from "@/lib/api";
 import { resolvedSecurityApprovalIds } from "@/lib/security-approvals";
 import type { SecurityApproval } from "@/lib/types";

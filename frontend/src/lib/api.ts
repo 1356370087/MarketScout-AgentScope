@@ -1,6 +1,11 @@
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import { csrfHeaders, refreshBrowserSession } from "./auth";
-import type { CapabilitiesResponse, DocumentChunk, EgressModeState, EgressRuntimeMode, EgressState, EgressTarget, ModelCatalogResponse, PublicationEvent, PublicationRequestFormat, PublicationJob, PublicationListResponse, PublicationTheme, PublicEvent, ResearchDocument, RunSnapshot, RunUsageResponse, SecurityApproval, SourceSelection, TaskActivityEvent, TaskActivityKind, TaskActivityPage, UsageAnalyticsResponse } from "./types";
+import type { CapabilitiesResponse, PublicEvent, RunSnapshot, TaskActivityEvent, TaskActivityKind, TaskActivityPage } from "./contracts/research";
+import type { DocumentChunk, ResearchDocument, SourceSelection } from "./contracts/documents";
+import type { EgressModeState, EgressRuntimeMode, EgressState, EgressTarget, SecurityApproval } from "./contracts/security";
+import type { ModelCatalogResponse } from "./contracts/models";
+import type { PublicationEvent, PublicationRequestFormat, PublicationJob, PublicationListResponse, PublicationTheme } from "./contracts/publications";
+import type { RunUsageResponse, UsageAnalyticsResponse } from "./contracts/usage";
 
 const API_BASE = process.env.NEXT_PUBLIC_RESEARCH_API_BASE ?? "/api/research";
 const DOCUMENT_PAGE_SIZE = 100;

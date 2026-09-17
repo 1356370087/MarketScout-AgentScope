@@ -1,4 +1,4 @@
-import { ResearchWorkspace } from "@/components/research-workspace";
+import { ResearchWorkspace } from "@/features/research/research-workspace";
 
 export default async function RunPage({ params }: { params: Promise<{ runId: string }> }) {
   const { runId } = await params;

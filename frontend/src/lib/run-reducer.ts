@@ -1,5 +1,6 @@
 import { isSecurityApprovalResolved, resolvedSecurityApprovalIds, resolvedHumanActionIds } from "./security-approvals";
-import type { PublicEvent, ReportReviewSummary, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./types";
+import type { PublicEvent, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./contracts/research";
+import type { ReportReviewSummary } from "./contracts/publications";
 
 export const STAGES: StageId[] = ["preparing", "planning", "researching", "synthesizing", "writing", "finalizing"];
 const TERMINAL = new Set(["run.completed", "run.failed", "run.cancelled"]);

@@ -1,4 +1,4 @@
-import type { TaskActivityEvent } from "./types";
+import type { TaskActivityEvent } from "./contracts/research";
 
 export interface TaskActivityTimelineState {
   events: TaskActivityEvent[];

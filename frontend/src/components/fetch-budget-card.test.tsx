@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { researchApi } from "@/lib/api";
 import { useResearchRunStore } from "@/stores/research-run-store";
-import { HumanActionCard } from "./research-workspace";
+import { HumanActionCard } from "@/features/research/research-workspace";
 
 describe("fetch budget HITL", () => {
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });

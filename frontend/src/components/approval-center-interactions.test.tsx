@@ -5,7 +5,7 @@ import { emptyRunState, hydrateSnapshot, reducePublicEvent } from "@/lib/run-red
 import { resolvedHumanActionIds } from "@/lib/security-approvals";
 import type { PendingHumanAction, PublicEvent, SecurityApproval } from "@/lib/types";
 import { useResearchRunStore } from "@/stores/research-run-store";
-import { ApprovalCenter, HumanActionCard, SecurityApprovalCard } from "./approval-center";
+import { ApprovalCenter, HumanActionCard, SecurityApprovalCard } from "@/features/research/approval-center";
 
 beforeEach(() => {
   vi.restoreAllMocks();

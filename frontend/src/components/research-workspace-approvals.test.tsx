@@ -5,7 +5,7 @@ import { researchApi } from "@/lib/api";
 import { resolvedSecurityApprovalIds } from "@/lib/security-approvals";
 import type { SecurityApproval } from "@/lib/types";
 import { useResearchRunStore } from "@/stores/research-run-store";
-import { ResearchWorkspace } from "./research-workspace";
+import { ResearchWorkspace } from "@/features/research/research-workspace";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -16,7 +16,7 @@ vi.mock("@/hooks/use-run-stream", () => ({ useRunStream: vi.fn() }));
 vi.mock("./app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
-vi.mock("./task-activity-drawer", () => ({ TaskActivityDrawer: () => null }));
+vi.mock("@/features/research/task-activity-drawer", () => ({ TaskActivityDrawer: () => null }));
 vi.mock("./token-usage-dashboard", () => ({
   TokenUsageDashboard: () => null,
   UsageCompactSummary: () => null,
