@@ -48,6 +48,51 @@ def test_guard_detects_alias_lazy_relative_and_dynamic_imports(tmp_path, source)
     assert found and found[0]["line"] > 0
 
 
+def test_guard_rejects_legacy_write_event_lock_and_approval_surfaces(tmp_path):
+    """原生侧旧路径禁令：写入/事件生产/锁/审批界面在 runtime 与 api 均被识别。"""
+    sources = {
+        "runtime": [
+            "from open_deep_research.agents.query_checkpoint import RunContextQueryCheckpointSink",
+            "from open_deep_research.events.public import RunEventPublisher",
+            "from open_deep_research.events.public import event_store_from_config",
+            "from open_deep_research.tasks.lease import LeaderLeaseManager",
+            "import open_deep_research.run_control",
+            "from open_deep_research.run_context import save_query_state",
+            "from open_deep_research.run_context import save_human_decision",
+        ],
+        "api": [
+            "from open_deep_research.events.public import RunEventPublisher",
+            "from open_deep_research.run_context import save_query_state",
+        ],
+    }
+    for scope, samples in sources.items():
+        for source in samples:
+            directory = (
+                "src/open_deep_research/agentscope_runtime"
+                if scope == "runtime"
+                else "src/open_deep_research/api"
+            )
+            path = tmp_path / directory / "sample.py"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+            findings = import_findings(path, tmp_path, native_scope=scope)
+            assert findings and findings[0]["kind"] == "legacy_path_import", source
+
+
+def test_guard_allows_history_read_only_event_store_in_api_layer(tmp_path):
+    """api/ 兼容层（T074）允许 RunEventStore 历史只读；runtime 目录仍禁用。"""
+    source = "from open_deep_research.events.public import RunEventStore"
+    api_path = tmp_path / "src/open_deep_research/api/streams.py"
+    api_path.parent.mkdir(parents=True)
+    api_path.write_text(source, encoding="utf-8")
+    assert import_findings(api_path, tmp_path, native_scope="api") == []
+    runtime_path = tmp_path / "src/open_deep_research/agentscope_runtime/x.py"
+    runtime_path.parent.mkdir(parents=True)
+    runtime_path.write_text(source, encoding="utf-8")
+    findings = import_findings(runtime_path, tmp_path, native_scope="runtime")
+    assert findings and findings[0]["kind"] == "legacy_path_import"
+
+
 def test_comments_and_native_imports_are_not_legacy(tmp_path):
     path = tmp_path / "src/open_deep_research/sample.py"
     path.parent.mkdir(parents=True)
