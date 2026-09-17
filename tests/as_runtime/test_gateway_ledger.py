@@ -483,3 +483,23 @@ async def test_failed_model_transition_settles_billed_usage_not_zero(host):
     finally:
         ledger.recovery = original
         await third.close()
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+async def test_partial_gateway_usage_keeps_unknown_dimension(host, status):
+    gateway, ledger, _ = host
+    await ledger.reserve(gateway.internal.signed(
+        BudgetReserveRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        task_id="t", stage="researching", logical_operation_id="partial",
+        physical_attempt_id="p", model_name="m", estimated_input_tokens=8,
+        estimated_output_tokens=10, request_digest="partial",
+    ))
+    transition = gateway.internal.signed(
+        OperationTransitionRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="partial", status=status,
+        outcome={"requested_model": "m", "usage": {"input_tokens": 0}},
+    )
+    await ledger.transition(transition)
+    await ledger.transition(transition)
+    used = (await ledger.recovery.store.budget("r", "u"))["used"]
+    assert used == {"model_calls": 1, "input_tokens": 0, "output_tokens": 10}

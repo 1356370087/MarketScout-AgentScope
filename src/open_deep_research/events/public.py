@@ -802,7 +802,8 @@ def event_store_from_config(config: RuntimeConfig | dict[str, Any]) -> RunEventS
 
 def event_publisher_from_config(config: RuntimeConfig | dict[str, Any]) -> RunEventPublisher:
     """Build a run-scoped public event publisher from runtime config."""
-    return RunEventPublisher(event_store_from_config(config))
+    publisher = config.get("_event_publisher")
+    return publisher if publisher is not None else RunEventPublisher(event_store_from_config(config))
 
 
 def project_public_events(events: list[PublicEvent]) -> PublicRunProjection:

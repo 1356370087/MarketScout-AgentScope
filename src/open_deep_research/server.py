@@ -316,6 +316,7 @@ async def _lifespan(_app: FastAPI):
         _run_key_reconciler_task = asyncio.create_task(
             run_key_reconciler_loop(
                 key_settings,
+                native_cleanup=_native_key_cleanup,
                 runs_dir=configurable.runs_dir,
                 interval_seconds=float(
                     os.getenv("LITELLM_RUN_KEY_RECONCILE_INTERVAL_SECONDS", "300")
@@ -446,6 +447,12 @@ app.include_router(workspace_router)
 
 async def _rbac_run_owner_checker(_db, principal, run_id: str) -> bool:
     """Ownership bridge used by ``require_run_owner`` (prepared for cutover)."""
+    if _native_research_service is not None:
+        try:
+            await _native_research_service.store.load(run_id, principal.user_id)
+            return True
+        except KeyError:
+            pass
     record = _runs.get(run_id)
     if record is not None:
         metadata = getattr(record.engine, "config", {}).get("metadata", {})
@@ -502,6 +509,13 @@ def _resolve_internal_sandbox_run(run_id: str) -> InternalRunContext | None:
 
 
 _native_research_service = None
+
+
+async def _native_key_cleanup(run_id, manager):
+    if _native_research_service is None:
+        return False
+    from open_deep_research.agentscope_runtime.native_security import cleanup_run_key
+    return await cleanup_run_key(_native_research_service.store, run_id, manager)
 
 
 async def _native_sandbox_ledger(run_id: str):
@@ -2820,12 +2834,17 @@ async def submit_human_action(
     return {"status": "accepted", "command_id": command.command_id, "action": request.action}
 
 
-def _sandbox_store_context(
+async def _sandbox_store_context(
     run_id: str,
     *,
     require_live_fence: bool = False,
 ) -> tuple[Configuration, int, dict[str, Any]]:
     """Resolve store configuration and current fence after RBAC authorization."""
+    if _native_research_service is not None:
+        from open_deep_research.agentscope_runtime.native_security import sandbox_context
+        native = await sandbox_context(_native_research_service, run_id, require_live_fence=require_live_fence)
+        if native is not None:
+            return native
     record = _runs.get(run_id)
     if record is not None:
         if require_live_fence and record.status in _TERMINAL_RUN_STATUSES:
@@ -2867,7 +2886,7 @@ async def list_security_approvals(
 ) -> dict[str, Any]:
     """List the caller-authorized run's durable sandbox approval queue."""
     del user
-    configurable, _fence_token, _config = _sandbox_store_context(run_id)
+    configurable, _fence_token, _config = await _sandbox_store_context(run_id)
     version, approvals = await asyncio.to_thread(
         SecurityApprovalStore(run_id, runs_dir=configurable.runs_dir).list,
         status=status,
@@ -2892,7 +2911,7 @@ async def resolve_security_approval(
     ),
 ) -> dict[str, Any]:
     """Resolve one approval for exactly the live run ownership epoch."""
-    configurable, fence_token, config = _sandbox_store_context(
+    configurable, fence_token, config = await _sandbox_store_context(
         run_id,
         require_live_fence=True,
     )
@@ -3032,7 +3051,7 @@ async def get_egress_state(run_id: str, user: Principal = Depends(require_run_ow
     RESEARCH_SECURITY_APPROVAL_READ_OWN.code, RESEARCH_SECURITY_APPROVAL_READ_ANY.code,
 ))) -> dict[str, Any]:
     """Return a reloadable snapshot of permissions, decisions, and health."""
-    configurable, fence_token, _ = _sandbox_store_context(run_id)
+    configurable, fence_token, _ = await _sandbox_store_context(run_id)
     result = await asyncio.to_thread(_read_egress_state, run_id, configurable, fence_token)
     owns_run = await _rbac_run_owner_checker(None, user, run_id)
     result["can_resolve"] = user.has_any([RESEARCH_SECURITY_APPROVAL_RESOLVE_ANY.code]) or (
@@ -3048,7 +3067,7 @@ async def decide_egress_target(run_id: str, target_id: str, request: EgressTarge
     )),
 ) -> dict[str, Any]:
     """Apply an exact target override, never overriding administrator denial."""
-    configurable, fence_token, config = _sandbox_store_context(run_id, require_live_fence=True)
+    configurable, fence_token, config = await _sandbox_store_context(run_id, require_live_fence=True)
     store = SecurityApprovalStore(run_id, runs_dir=configurable.runs_dir)
     snapshot = await asyncio.to_thread(store.target_state, fence_token)
     target = next((item for item in snapshot["targets"] if item["target_id"] == target_id), None)
@@ -3084,7 +3103,7 @@ async def get_run_egress_mode(
 ) -> dict[str, Any]:
     """Report the run's current egress approval mode and its provenance."""
     del user
-    configurable, fence_token, _config = _sandbox_store_context(run_id)
+    configurable, fence_token, _config = await _sandbox_store_context(run_id)
     override_mode = _runtime_egress_override(
         run_id,
         configurable.runs_dir,
@@ -3112,7 +3131,7 @@ async def set_run_egress_mode(
     """Switch the runtime egress mode; widening past the baseline is refused."""
     if request.mode not in RUN_EGRESS_MODE_VALUES:
         raise HTTPException(status_code=400, detail="sandbox_egress_mode_invalid")
-    configurable, fence_token, config = _sandbox_store_context(
+    configurable, fence_token, config = await _sandbox_store_context(
         run_id,
         require_live_fence=True,
     )
@@ -3655,6 +3674,13 @@ async def get_run_usage_accounting(
     user: Principal = Depends(require_permissions(RESEARCH_RUN_READ_OWN.code)),
 ) -> dict[str, Any]:
     """Return content-free token accounting for one owned research run."""
+    if _native_research_service is not None:
+        from open_deep_research.agentscope_runtime.usage_projection import project_usage
+        try:
+            return await project_usage(_native_research_service.store, run_id, user.user_id,
+                _unavailable_usage_response(run_id, configurable=Configuration.from_runnable_config(None)))
+        except KeyError:
+            pass
     record, configurable = _require_run_owner(run_id, user)
     manifest = None
     with contextlib.suppress(ValueError, JournalCorruptedError, OSError):

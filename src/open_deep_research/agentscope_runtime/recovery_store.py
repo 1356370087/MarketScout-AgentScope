@@ -530,7 +530,9 @@ class RecoveryStore:
                 .one()
             )
             if op["state"] == "committed":
-                if digest(op["result"]) != digest(result):
+                original = {k: v for k, v in op["result"].items() if k != "usage_correction"}
+                incoming = {k: v for k, v in result.items() if k != "usage_correction"}
+                if digest(original) != digest(incoming):
                     raise RecoveryConflict("conflicting operation receipt")
                 return
             if op["state"] != "started" or op["fence"] != lease.fence:
@@ -564,6 +566,54 @@ class RecoveryStore:
                 {"operation_key": key, "kind": op["kind"], "usage": actual},
                 event_id=digest([lease.run_id, key]),
             )
+
+    async def reconcile_model_usage(self, lease, key, *, receipt_id, input_tokens,
+                                    output_tokens, cost_micro_usd=None):
+        """Replace estimated usage with verified provider facts, once per receipt.
+
+        The trusted caller must verify the provider receipt belongs to this attempt.
+        Keep the execution result immutable so operation replay remains valid.
+        """
+        facts = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+        if cost_micro_usd is not None:
+            facts["cost_micro_usd"] = cost_micro_usd
+        if not receipt_id or any(type(n) is not int or n < 0 for n in facts.values()):
+            raise ValueError("provider receipt requires nonnegative integer usage")
+        async with self.transaction(lease) as (conn, row):
+            op = (await conn.execute(select(self.ops).where(
+                self.ops.c.run_id == lease.run_id, self.ops.c.key == key
+            ))).mappings().one()
+            if op["kind"] not in {"model_attempt", "gateway:model"} or op["state"] != "committed":
+                raise RecoveryConflict("only committed native model attempts can be reconciled")
+            result = dict(op["result"])
+            correction = {"receipt_id": receipt_id, "usage": facts}
+            if result.get("usage_correction"):
+                if result["usage_correction"] != correction:
+                    raise RecoveryConflict("conflicting provider usage receipt")
+                return
+            if result.get("usage_status") != "estimated" and result.get("cost_status") == "reported":
+                raise RecoveryConflict("model usage already reported")
+            if result.get("usage_status") == "reported" and result["observed_usage"] != {
+                "input_tokens": input_tokens, "output_tokens": output_tokens,
+            }:
+                raise RecoveryConflict("provider receipt conflicts with reported tokens")
+            actual = dict(op["actual"])
+            actual.update(facts)
+            pricing = result.get("pricing_micro_usd")
+            if cost_micro_usd is None and pricing is not None:
+                import math
+                actual["cost_micro_usd"] = math.ceil(input_tokens * pricing[0] + output_tokens * pricing[1])
+            used = dict(row["used"])
+            for dimension, amount in actual.items():
+                used[dimension] = used.get(dimension, 0) + amount - op["actual"].get(dimension, 0)
+            result["usage_correction"] = correction
+            await conn.execute(update(self.runs).where(self._identity(lease)).values(used=used))
+            await conn.execute(update(self.ops).where(
+                self.ops.c.run_id == lease.run_id, self.ops.c.key == key
+            ).values(result=result, actual=actual))
+            await self._event(conn, row, "research.usage_reconciled",
+                              {"operation_key": key, "usage": actual},
+                              event_id=digest([lease.run_id, key, "usage_correction"]))
 
     async def resolve_operation(self, lease, key, *, result=None, not_executed=False):
         """Explicit reconciliation after a human/service checks the external effect."""

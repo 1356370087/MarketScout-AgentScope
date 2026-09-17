@@ -165,43 +165,26 @@ class SQLGatewayLedger:
             await session.store.commit_operation(session.lease, key, result)
             return result
         actual = dict(row["reservation"])
-        if request.status == "failed":
+        if request.status in {"failed", "completed"}:
             outcome = request.outcome or {}
             usage = outcome.get("usage") or {}
-            if usage.get("input_tokens") or usage.get("output_tokens"):
-                # 失败物理调用仍可能已被提供商计费（如截断错误的完成内容）：
-                # 有账单的失败按实际计费结算，缺失才释放为零结算。
-                actual.update(
-                    input_tokens=int(usage.get("input_tokens") or 0),
-                    output_tokens=int(usage.get("output_tokens") or 0),
-                )
-                if (
-                    "cost_micro_usd" in actual
-                    and outcome.get("requested_model") in self.catalog
-                ):
-                    actual["cost_micro_usd"] = self.cost(
-                        outcome["requested_model"], actual
-                    )
-            else:
+            rejected = request.status == "failed" and outcome.get("error_code") in {
+                "authentication", "permission_denied", "invalid_request",
+            }
+            if rejected and not any(usage.get(k) is not None for k in ("input_tokens", "output_tokens")):
+                # 明确未执行的拒绝可释放 token；请求尝试仍计一次。
                 actual = {dimension: 0 for dimension in actual}
-        elif request.status == "completed":
-            outcome = request.outcome or {}
-            usage = outcome.get("usage") or {}
-            if (
-                usage.get("input_tokens") is not None
-                and usage.get("output_tokens") is not None
-            ):
-                actual.update(
-                    input_tokens=usage["input_tokens"],
-                    output_tokens=usage["output_tokens"],
-                )
-                if "cost_micro_usd" in actual:
-                    cost = outcome.get("response_cost_usd")
-                    actual["cost_micro_usd"] = (
-                        math.ceil(cost * 1_000_000)
-                        if cost is not None
-                        else self.cost(outcome["requested_model"], actual)
-                    )
+                actual["model_calls"] = 1
+            else:
+                # 部分或缺失用量保留该维度预留，不能以 `or 0` 抹掉未知。
+                for dimension in ("input_tokens", "output_tokens"):
+                    if usage.get(dimension) is not None:
+                        actual[dimension] = usage[dimension]
+                cost = outcome.get("response_cost_usd")
+                if cost is not None:
+                    actual["cost_micro_usd"] = math.ceil(cost * 1_000_000)
+                elif outcome.get("requested_model") in self.catalog:
+                    actual["cost_micro_usd"] = self.cost(outcome["requested_model"], actual)
         await session.store.commit_operation(session.lease, key, result, actual=actual)
         return result
 

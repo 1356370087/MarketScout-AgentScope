@@ -138,7 +138,14 @@ class ModelCallPolicy:
                         self.timeout if self.probe_mode == "enforced" else None
                     ):
                         state["physical_attempts"] += 1
-                        result = await handler(**kwargs)
+                        from open_deep_research.agentscope_runtime.model_accounting import current_accounting
+
+                        accounting = current_accounting.get()
+                        result = (
+                            await accounting.invoke(handler, kwargs)
+                            if accounting is not None
+                            else await handler(**{k: v for k, v in kwargs.items() if k != "accounting_max_tokens"})
+                        )
                         if isinstance(result, (ChatResponse, StructuredResponse)):
                             if (
                                 isinstance(result, ChatResponse)

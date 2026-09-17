@@ -19,6 +19,28 @@ from tests.auth_helpers import research_principal
 pytestmark = pytest.mark.asyncio
 
 
+async def test_factory_reuses_creation_generation_instead_of_current_document(setup, monkeypatch):
+    from open_deep_research.documents import repository
+
+    run, recovery, path = setup
+    selected = [{"id": "doc", "filename": "source.txt", "sha256": "original", "current_generation_id": "published-at-creation"}]
+    recovery.snapshot.application["selected_source_snapshots"] = selected
+    bindings = []
+    async def bind(run_id, owner, documents):
+        bindings.append((run_id, owner, documents))
+    monkeypatch.setattr(repository, "bind_run_sources", bind)
+    async def authorize(owner, application):
+        return research_principal(owner)
+    @asynccontextmanager
+    async def resources(*args):
+        yield RunResources(Factory(), lambda assignment: [])
+    factory = ProductionRunFactory(None, authorize, resources, runs_dir=path)
+    for _ in range(2):
+        async with factory(recovery.snapshot, run, recovery):
+            pass
+    assert bindings == [("run", "alice", selected)] * 2
+
+
 @pytest_asyncio.fixture
 async def setup(tmp_path):
     run = RunConfig.compile(

@@ -127,6 +127,7 @@ class NativeGatewayProvider:
                     "logical_operation_id": request.logical_operation_id,
                     "tags": [
                         f"run:{request.run_id}",
+                        f"operation:{request.logical_operation_id}",
                         f"role:{request.role}",
                         f"stage:{request.stage}",
                     ],

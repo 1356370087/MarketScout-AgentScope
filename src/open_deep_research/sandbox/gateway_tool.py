@@ -10,11 +10,11 @@ import json
 import os
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from open_deep_research.sandbox.wire import GatewayToolOutcomeV1, GatewayToolRequestV1
 from open_deep_research.tools.base import (
@@ -70,9 +70,10 @@ async def _call_gateway(
     tool: Tool,
     input: BaseModel,
     context: ToolContext,
+    *, gateway_url: str | None = None, task_token: SecretStr | None = None,
 ) -> GatewayToolOutcomeV1:
-    gateway_url = os.environ.get("SANDBOX_GATEWAY_URL", "")
-    task_token = os.environ.get("SANDBOX_TASK_TOKEN", "")
+    gateway_url = gateway_url if gateway_url is not None else os.environ.get("SANDBOX_GATEWAY_URL", "")
+    task_token = task_token.get_secret_value() if task_token is not None else os.environ.get("SANDBOX_TASK_TOKEN", "")
     if not gateway_url or not task_token:
         raise RuntimeError("sandbox_gateway_not_configured")
     headers = {
@@ -96,6 +97,8 @@ class GatewayToolProxy:
     """Preserve a tool's model contract while moving physical execution to Gateway."""
 
     delegate: Tool
+    gateway_url: str | None = None
+    task_token: SecretStr | None = field(default=None, repr=False)
 
     @property
     def name(self):
@@ -157,6 +160,7 @@ class GatewayToolProxy:
             self.delegate,
             input,
             context,
+            gateway_url=self.gateway_url, task_token=self.task_token,
         )
         if outcome.status == "approval_required":
             raise ApprovalPendingError(
@@ -192,6 +196,7 @@ class AuthorizedLocalToolProxy(GatewayToolProxy):
             self.delegate,
             input,
             context,
+            gateway_url=self.gateway_url, task_token=self.task_token,
         )
         if outcome.status != "completed":
             message = (outcome.error or {}).get("message") or "sandbox_local_tool_denied"

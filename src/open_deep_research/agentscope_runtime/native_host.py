@@ -6,15 +6,16 @@
 
 边界（诚实声明）：
 - 宿主直连提供商模型（sandbox_enabled=false）与宿主区工具可用；
-- 沙箱运行与网关区工具（web 搜索/抓取）仍需 M10 生产资源提供器
-  （LiteLLM Run Key、Gateway 注册与工具代理），本组合对这类配置显式拒绝，
-  不做静默降级；
+- AS_NATIVE_RESOURCES=gateway 显式接入生产资源提供器（Run Key、Gateway
+  注册与任务代理），要求 PostgreSQL；host 模式仍拒绝网关区工具；
+- 可信团队 Worker 不执行沙箱本地 shell/file 工具；完整出网审批需联合验收；
 - 默认入口切换属 T080 切换演练决策，本缝只提供机制。
 """
 
 from __future__ import annotations
 
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -137,32 +138,73 @@ async def build_native_research_service(*, runs_dir, database_url=None):
     runs_dir.mkdir(parents=True, exist_ok=True)
     if database_url is None:
         database_url = "sqlite+aiosqlite:///" + (runs_dir / "native-recovery.db").as_posix()
-    store = RecoveryStore(database_url)
-    await store.create_tables()
-    factory = ProductionRunFactory(
-        None,
-        authorize_run_owner,
-        _host_resources(runs_dir),
-        runs_dir=runs_dir,
-    )
+    runtime = None
+    production = os.environ.get("AS_NATIVE_RESOURCES", "host") == "gateway"
+    if production:
+        from open_deep_research.agentscope_runtime.app import ASRuntime
+        from open_deep_research.agentscope_runtime.production_resources import (
+            prepare_production_config, production_resources,
+        )
+        from open_deep_research.sandbox.team_controller import ControllerTeamLauncher
+        from open_deep_research.sandbox.controller_client import SandboxControllerClient
+        from open_deep_research.configuration import Configuration
+        from open_deep_research.sandbox.schema import resolve_profile
 
-    async def prepare_config(request, principal):
-        return {
-            "configurable": request.configurable,
-            "metadata": {
-                "user_id": principal.user_id,
-                "langgraph_auth_user": {
-                    "identity": principal.user_id,
-                    "permissions": sorted(principal.permissions),
+        runtime = await ASRuntime.create()
+        try:
+            if runtime.settings.is_demo:
+                raise ValueError("production native resources require AS_DATABASE_URL")
+            store = await runtime.create_recovery_store()
+        except BaseException:
+            await runtime.aclose()
+            raise
+
+        def launcher_factory():
+            cfg = Configuration.from_runnable_config(None)
+            bundle, _, _ = resolve_profile(cfg)
+            return ControllerTeamLauncher(SandboxControllerClient(cfg, bundle))
+
+        factory = ProductionRunFactory(runtime, authorize_run_owner,
+            production_resources(runs_dir, launcher_factory=launcher_factory), runs_dir=runs_dir)
+        prepare_config = prepare_production_config
+    else:
+        store = RecoveryStore(database_url)
+        await store.create_tables()
+        factory = ProductionRunFactory(
+            None,
+            authorize_run_owner,
+            _host_resources(runs_dir),
+            runs_dir=runs_dir,
+        )
+
+        async def prepare_config(request, principal):
+            return {
+                "configurable": request.configurable,
+                "metadata": {
+                    "user_id": principal.user_id,
+                    "langgraph_auth_user": {
+                        "identity": principal.user_id,
+                        "permissions": sorted(principal.permissions),
+                    },
                 },
-            },
-        }
+            }
 
     service = NativeRuns(store, factory, prepare_config, runs_dir=runs_dir)
 
+    reconciliation = None
+    if production:
+        from open_deep_research.agentscope_runtime.spend_reconciliation import reconciliation_loop
+        reconciliation = asyncio.create_task(reconciliation_loop(service))
+
     async def aclose():
+        if reconciliation is not None:
+            reconciliation.cancel()
+            await asyncio.gather(reconciliation, return_exceptions=True)
         await service.aclose()
-        await store.aclose()
+        if runtime is not None:
+            await runtime.aclose()
+        else:
+            await store.aclose()
 
     service.native_aclose = aclose
     return service

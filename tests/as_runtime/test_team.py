@@ -107,11 +107,15 @@ async def env(pg_url):
     )
     async with storage:
 
-        async def build(run_id=None, user="owner", bus=None):
+        async def build(run_id=None, user="owner", bus=None, run_config=None):
             run_id = run_id or uuid4().hex
-            await recovery.create_run(
-                user, ResearchSnapshot(run_id=run_id, config_fingerprint="frozen")
-            )
+            if run_config is None:
+                await recovery.create_run(
+                    user, ResearchSnapshot(run_id=run_id, config_fingerprint="frozen")
+                )
+            else:
+                await recovery.create_from_config(user, run_id, run_config,
+                    application={"configuration": run_config.snapshot()})
             lease = await recovery.acquire(run_id, user, ttl=120)
             agent_id = await storage.upsert_agent(
                 user,

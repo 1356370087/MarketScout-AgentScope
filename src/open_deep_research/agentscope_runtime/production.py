@@ -89,11 +89,18 @@ class ProductionRunFactory:
         }
         config["metadata"].update(
             run_id=recovery.lease.run_id,
+            deployment_surface="http",
             user_id=principal.user_id,
             run_fence_token=recovery.lease.fence,
             source_selection=snapshot.application.get("source_selection", {}),
             publication_theme=snapshot.application.get("publication_theme", {}),
         )
+        selected = snapshot.application.get("selected_source_snapshots", [])
+        if selected:
+            from open_deep_research.documents.repository import bind_run_sources
+            await bind_run_sources(recovery.lease.run_id, principal.user_id, selected)
+        from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+        config["_event_publisher"] = NativeEventPublisher(recovery.store, recovery.lease)
         cfg = Configuration.from_runnable_config(config)
         await recovery.store.register_task(recovery.lease, "supervisor")
         async with self.open_resources(run_config, config, recovery) as ports:
@@ -144,6 +151,9 @@ class ProductionRunFactory:
                 if ports.gateway_accounting
                 else None,
             }
+            ledger = self.active[recovery.lease.run_id]["ledger"]
+            if ledger is not None:
+                ledger.config = config
             try:
                 yield pipeline
             finally:

@@ -1,0 +1,47 @@
+# 原生 E2E 覆盖配置。与根目录 docker-compose.yaml 合并使用。
+# 必须先填写专用 Worker 环境文件并构建 API 镜像；仅启动本次需要的服务。
+services:
+  api:
+    image: insightforge-api:local
+    environment:
+      RESEARCH_ENGINE: native
+      AS_NATIVE_RESOURCES: gateway
+      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_STORAGE_AUTO_CREATE: "false"
+      AS_ROCKETMQ_ENDPOINT: ${AS_ROCKETMQ_ENDPOINT:?填写远程RocketMQ的gRPC代理地址}
+      AS_ROCKETMQ_GROUP: ${AS_ROCKETMQ_GROUP:-insightforge-native-api}
+      SANDBOX_ENABLED: "true"
+      ENABLE_ASYNC_RESEARCH: "true"
+      ALLOW_CLARIFICATION: "false"
+      ENABLE_HUMAN_IN_LOOP: "true"
+      LOCAL_DEV_AUTH_BYPASS: ${LOCAL_DEV_AUTH_BYPASS:-false}
+    depends_on:
+      native-migrate:
+        condition: service_completed_successfully
+      sandbox-controller:
+        condition: service_started
+  native-migrate:
+    image: insightforge-api:local
+    env_file: .env
+    environment:
+      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_STORAGE_AUTO_CREATE: "false"
+    command: ["python", "-c", "import asyncio; from open_deep_research.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+  sandbox-controller:
+    environment:
+      SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}-sandbox-gateway
+      AS_TEAM_WORKER_IMAGE: insightforge-api:local
+      AS_TEAM_PROJECT: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}
+      AS_TEAM_WORKER_ENV_FILE: /run/native-team.env
+      AS_TEAM_WORKER_NETWORK: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}_default
+      # Docker SDK Mount 参数；共享 API 的工件与资料卷，不挂载 Docker socket 到 Worker。
+      AS_TEAM_CONTROLLER_MOUNTS: '[{"target":"/data/runs","source":"${COMPOSE_PROJECT_NAME:-marketscout-agentscope}_research-runs","type":"volume"},{"target":"/data/documents","source":"${COMPOSE_PROJECT_NAME:-marketscout-agentscope}_document-data","type":"volume","read_only":true}]'
+    volumes:
+      - ${AS_TEAM_WORKER_ENV_FILE:?填写专用Worker环境文件绝对路径}:/run/native-team.env:ro
+
+  sandbox-gateway:
+    container_name: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}-sandbox-gateway

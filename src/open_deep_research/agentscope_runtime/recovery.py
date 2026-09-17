@@ -262,6 +262,7 @@ class RecoverySession:
         pricing=None,
         request_details=None,
         agent=None,
+        account_attempts=False,
     ):
         key = self.key("model:" + role)
         if agent is not None:
@@ -345,12 +346,27 @@ class RecoverySession:
             from open_deep_research.agentscope_runtime.gateway import (
                 gateway_operation_scope,
             )
+            from open_deep_research.agentscope_runtime.model_accounting import (
+                AttemptAccounting,
+                current_accounting,
+            )
 
-            with gateway_operation_scope(key):
-                return await invoke_response()
+            accounting = (
+                AttemptAccounting(self, key, reserve, pricing)
+                if account_attempts and self.model_accounting == "local" else None
+            )
+            token = current_accounting.set(accounting)
+            try:
+                with gateway_operation_scope(key):
+                    result = await invoke_response()
+                if accounting is not None and not accounting.ordinal:
+                    raise RuntimeError("native model bypassed physical accounting policy")
+                return result
+            finally:
+                current_accounting.reset(token)
 
         def settle(result):
-            if self.model_accounting == "gateway":
+            if self.model_accounting == "gateway" or account_attempts:
                 return {}
             usage = result["response"].get("usage")
             details = result.get("usage_details") or {}
@@ -386,8 +402,8 @@ class RecoverySession:
             payload,
             invoke,
             key=key,
-            replay_safe=self.model_accounting == "gateway",
-            reserve=reserve if self.model_accounting == "local" else {},
+            replay_safe=self.model_accounting == "gateway" or account_attempts,
+            reserve=reserve if self.model_accounting == "local" and not account_attempts else {},
             actual=settle,
         )
         if (
@@ -557,9 +573,10 @@ class RecoverySession:
 
 
 class JournalMiddleware(MiddlewareBase):
-    def __init__(self, session, role, max_tokens, pricing=None):
+    def __init__(self, session, role, max_tokens, pricing=None, *, account_attempts=False):
         self.session, self.role, self.max_tokens = session, role, max_tokens
         self.pricing = pricing
+        self.account_attempts = account_attempts
 
     async def on_model_call(self, agent, input_kwargs, next_handler):
         return await self.session.model(
@@ -574,6 +591,7 @@ class JournalMiddleware(MiddlewareBase):
                 if k not in {"messages", "current_model"}
             },
             agent=agent,
+            account_attempts=self.account_attempts,
         )
 
 

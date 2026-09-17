@@ -1271,6 +1271,9 @@ def create_controller_app(runtime: DockerControllerRuntime) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {"status": "reconciled", "stopped_container_ids": stopped}
 
+    from open_deep_research.sandbox.team_controller import install_team_routes
+
+    install_team_routes(app, runtime)
     return app
 
 

@@ -66,7 +66,7 @@ def _entry_run_id(entry: dict[str, Any]) -> str | None:
     return None
 
 
-async def reconcile_run_keys_once(settings: RunKeySettings, *, runs_dir: str) -> dict[str, int]:
+async def reconcile_run_keys_once(settings: RunKeySettings, *, runs_dir: str, native_cleanup=None) -> dict[str, int]:
     """Block encrypted keys whose Run is terminal, plus remote orphaned keys.
 
     Only terminal Runs release their keys: paused and crashed Runs keep theirs
@@ -82,6 +82,8 @@ async def reconcile_run_keys_once(settings: RunKeySettings, *, runs_dir: str) ->
     try:
         for run_id in store.run_ids():
             checked += 1
+            if native_cleanup is not None and await native_cleanup(run_id, manager):
+                continue
             context = RunContextStore(run_id, runs_dir=runs_dir)
             try:
                 manifest = context.load_manifest()
@@ -163,11 +165,12 @@ async def run_key_reconciler_loop(
     *,
     runs_dir: str,
     interval_seconds: float,
+    native_cleanup=None,
 ) -> None:
     """Periodically retry Run Key cleanup until application shutdown."""
     while True:
         try:
-            await reconcile_run_keys_once(settings, runs_dir=runs_dir)
+            await reconcile_run_keys_once(settings, runs_dir=runs_dir, native_cleanup=native_cleanup)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - reconciler is fail-open

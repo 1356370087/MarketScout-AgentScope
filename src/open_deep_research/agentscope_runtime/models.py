@@ -128,6 +128,8 @@ def bind_role(
 class ModelFactory:
     """只在内存持有凭据和 SDK 实例；调用者负责运行/服务作用域的权威身份。"""
 
+    accounts_physical_attempts = True
+
     def __init__(
         self,
         run: RunConfig,
@@ -260,6 +262,11 @@ class ModelFactory:
             }
         instance = model_class(**kwargs)
         instance.retry_owner = "gateway" if binding.gateway else "application"
+        entry = catalog.get(descriptor["model"])
+        instance.accounting_price = (
+            (entry["input_cost_per_token"] * 1_000_000, entry["output_cost_per_token"] * 1_000_000)
+            if entry else None
+        )
         self._models[cache_key] = instance
         return instance
 
@@ -345,7 +352,7 @@ class ModelFactory:
                 return await current_model(messages=messages, max_tokens=limit)
 
             result = await middleware.policy.invoke(
-                handler, {"messages": current}, state.setdefault("route", {})
+                handler, {"messages": current, "accounting_max_tokens": limit}, state.setdefault("route", {})
             )
             if isinstance(result, ChatResponse):
                 return result

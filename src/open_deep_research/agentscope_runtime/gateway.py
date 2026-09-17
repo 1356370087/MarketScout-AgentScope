@@ -158,7 +158,8 @@ class SandboxChatModel(ChatModelBase):
                 binding.service_key,
             )
         else:
-            headers["Authorization"] = f"Bearer {binding.token.get_secret_value()}"
+            token = binding.token() if callable(binding.token) else binding.token
+            headers["Authorization"] = f"Bearer {token.get_secret_value()}"
         try:
             response = await self.client.post(
                 "/v2/models/complete",

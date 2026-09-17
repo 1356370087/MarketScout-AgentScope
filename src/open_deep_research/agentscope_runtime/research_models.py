@@ -42,7 +42,10 @@ class ResearchModels:
 
         maximum = self.factory.descriptor(role)["max_output_tokens"]
         return [
-            JournalMiddleware(self.recovery, role, maximum, self.pricing(role)),
+            JournalMiddleware(
+                self.recovery, role, maximum, self.pricing(role),
+                account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
+            ),
             policy,
         ]
 
@@ -81,6 +84,7 @@ class ResearchModels:
                 schema=schema,
                 max_tokens=self.factory.descriptor(role)["max_output_tokens"],
                 pricing=self.pricing(role),
+                account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
             )
             if self.recovery
             else await call()
@@ -110,6 +114,7 @@ class ResearchModels:
                 call,
                 max_tokens=self.factory.descriptor(role)["max_output_tokens"],
                 pricing=self.pricing(role),
+                account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
             )
             if self.recovery
             else await call()

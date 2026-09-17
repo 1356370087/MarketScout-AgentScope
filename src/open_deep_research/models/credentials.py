@@ -688,7 +688,7 @@ class RunKeyManager:
             lease = await self._replace_unusable_key(
                 run_id,
                 allowed_models=allowed_models,
-                budget_micro_usd=None,
+                budget_micro_usd=self.settings.resolve_budget(requested_budget_micro_usd),
                 stale_key=existing,
                 team_id=team_id,
             )

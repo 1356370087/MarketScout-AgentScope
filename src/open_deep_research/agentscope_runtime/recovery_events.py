@@ -85,13 +85,15 @@ def public_events(event):
 def public_event(event):
     payload = event["payload"]
     kind = payload["type"]
+    if kind == "research.public":
+        return payload["public_type"], payload.get("stage"), payload["public_payload"]
     if kind == "research.cancelled":
         return (
             "run.cancelled",
             None,
             {"status": "cancelled", "termination_reason": "user_cancelled"},
         )
-    if kind == "research.operation_committed":
+    if kind in {"research.operation_committed", "research.usage_reconciled"}:
         return (
             "run.usage.updated",
             None,

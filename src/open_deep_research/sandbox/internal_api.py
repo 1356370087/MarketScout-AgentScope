@@ -499,7 +499,15 @@ def build_internal_sandbox_router(
             expires_at=time.time() + 60,
         )
 
-    def authority(request: ServiceRequest, run_id: str, fence_token: int) -> InternalRunContext:
+    async def authority(request: ServiceRequest, run_id: str, fence_token: int) -> InternalRunContext:
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            config = getattr(ledger, "config", None)
+            if config is None:
+                raise HTTPException(503, "native_resources_unavailable")
+            return InternalRunContext(config=config,
+                configurable=Configuration.from_runnable_config(config), fence_token=fence_token,
+                started_at=ledger.recovery.snapshot.application.get("created_at", time.time()))
         context = resolve_run(run_id)
         if context is None:
             raise HTTPException(status_code=404, detail="run_not_active")
@@ -536,7 +544,14 @@ def build_internal_sandbox_router(
 
     @router.post("/team")
     async def team_bridge(request: TeamBridgeRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            # Native TeamWorkers installs TeamSay/control locally against SQL.
+            # Do not expose the old file-backed collaboration adapter in its catalog.
+            if request.action == "catalog":
+                return {"tools": []}
+            raise HTTPException(409, "native_team_uses_sql_worker_transport")
+        context = await authority(request, request.run_id, request.fence_token)
         from open_deep_research.tasks.team_bridge import host_request
         try:
             return await host_request(context, request.task_id, request.action, request.payload)
@@ -555,7 +570,7 @@ def build_internal_sandbox_router(
                 if hasattr(exc, "dimension"):
                     raise _budget_exhausted(exc) from None
                 raise
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
             request.run_id,
@@ -583,7 +598,7 @@ def build_internal_sandbox_router(
         if await native_ledger_for(request) is not None:
             # SQL 权威只认终态回执；中间结算通知不改账。
             return {"status": "awaiting_receipt"}
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
             request.run_id,
@@ -602,7 +617,7 @@ def build_internal_sandbox_router(
     async def fail_budget(request: BudgetFailRequest) -> dict[str, str]:
         if await native_ledger_for(request) is not None:
             return {"status": "awaiting_receipt"}
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
             request.run_id,
@@ -627,7 +642,7 @@ def build_internal_sandbox_router(
                 if type(exc).__name__ == "UnknownOperation":
                     raise HTTPException(409, "tool_operation_unknown") from None
                 raise
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
             request.run_id,
@@ -651,7 +666,7 @@ def build_internal_sandbox_router(
                 if type(exc).__name__ == "RecoveryConflict":
                     raise HTTPException(409, str(exc)) from None
                 raise
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         gate = BudgetGate.from_config(
             context.configurable,
             request.run_id,
@@ -670,7 +685,7 @@ def build_internal_sandbox_router(
             return await ledger.lookup(
                 request.logical_operation_id, request.request_digest
             )
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         record = await asyncio.to_thread(
             ModelOperationStore(
                 request.run_id, runs_dir=context.configurable.runs_dir
@@ -686,7 +701,7 @@ def build_internal_sandbox_router(
         ledger = await native_ledger_for(request)
         if ledger is not None:
             return await ledger.transition(request)
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         expected = {
             "dispatched": {"reserved"},
             "completed": {"dispatched"},
@@ -714,7 +729,7 @@ def build_internal_sandbox_router(
     @router.post("/usage/report")
     async def report_tool_usage(request: UsageReportRequest) -> dict[str, Any]:
         """Persist one forwarded gateway tool-side model usage row."""
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         try:
             from open_deep_research.observability.tracing import (
                 TokenUsage,
@@ -781,7 +796,7 @@ def build_internal_sandbox_router(
 
     @router.post("/approvals/request")
     async def request_approval(request: ApprovalCreateRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         approval = await asyncio.to_thread(
             SecurityApprovalStore(
                 request.run_id, runs_dir=context.configurable.runs_dir
@@ -824,7 +839,7 @@ def build_internal_sandbox_router(
 
     @router.post("/approvals/wait")
     async def wait_approvals(request: ApprovalWaitRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         version, approvals = await SecurityApprovalStore(
             request.run_id, runs_dir=context.configurable.runs_dir
         ).wait_for_change(
@@ -858,7 +873,7 @@ def build_internal_sandbox_router(
 
     @router.post("/approvals/consume")
     async def consume_approval(request: ApprovalConsumeRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         try:
             approval = await asyncio.to_thread(
                 SecurityApprovalStore(
@@ -884,7 +899,7 @@ def build_internal_sandbox_router(
         request: EgressClassificationLoadRequest,
     ) -> dict[str, Any]:
         """Return the full run classification ledger for cache warm."""
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         entries = await asyncio.to_thread(
             EgressClassificationStore(
                 request.run_id, runs_dir=context.configurable.runs_dir
@@ -896,14 +911,14 @@ def build_internal_sandbox_router(
 
     @router.post("/egress/target/check")
     async def check_egress_target(request: EgressTargetCheckRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         store = SecurityApprovalStore(request.run_id, runs_dir=context.configurable.runs_dir)
         return await asyncio.to_thread(store.check_target, request.capability,
                                        request.target, request.fence_token)
 
     @router.post("/egress/health")
     async def record_egress_health(request: EgressHealthRequest) -> dict[str, Any]:
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         health = await asyncio.to_thread(EgressClassificationStore(
             request.run_id, runs_dir=context.configurable.runs_dir).save_classifier_state,
             request.state)
@@ -917,7 +932,7 @@ def build_internal_sandbox_router(
         request: EgressClassificationRecordRequest,
     ) -> dict[str, Any]:
         """Persist one ledger entry and publish its public event."""
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         store = EgressClassificationStore(
             request.run_id, runs_dir=context.configurable.runs_dir
         )
@@ -953,7 +968,7 @@ def build_internal_sandbox_router(
     @router.post("/egress/mode/get")
     async def get_egress_mode(request: EgressModeGetRequest) -> dict[str, Any]:
         """Return the runtime override; stale-fence overrides read as absent."""
-        context = authority(request, request.run_id, request.fence_token)
+        context = await authority(request, request.run_id, request.fence_token)
         override = await asyncio.to_thread(
             RunEgressModeStore(
                 request.run_id, runs_dir=context.configurable.runs_dir

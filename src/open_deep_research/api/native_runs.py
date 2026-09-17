@@ -126,7 +126,8 @@ class NativeRuns:
                 with suppress(FenceLost):
                     await self.start(run_id, owner)
             return run_id
-        config = RunConfig.compile(await self.prepare_config(request, principal))
+        prepared = await self.prepare_config(request, principal)
+        config = RunConfig.compile(prepared)
         messages = [
             (
                 UserMsg
@@ -147,6 +148,7 @@ class NativeRuns:
                 config,
                 messages=messages,
                 application={
+                    "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
                     "identity": {
                         "session_id": principal.session_id,

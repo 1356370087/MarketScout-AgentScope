@@ -1,0 +1,60 @@
+{
+  "date": "2026-09-18",
+  "scope": "component_and_deployment_fixture_verification_not_live_e2e",
+  "results": {
+    "native_full": {
+      "tests": 517,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 515,
+      "junit_sha256": "acaed349a3b1de769cd0275e6f5e935ff0b22aa35f63c647548a6a0f1ad99480"
+    },
+    "native_targeted": {
+      "tests": 51,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 51,
+      "junit_sha256": "386d307eecef153896c01bcd91ae089e08757ec2ec5534a4e24dd2420d362254"
+    },
+    "resources_final": {
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 14,
+      "junit_sha256": "d6bdddbd1551403c3e5e5a6c9dfe5364faf1191dcdafd8cd585e80e6de00a994"
+    },
+    "legacy": {
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 32,
+      "junit_sha256": "4832d8bab49480fe96a68292ff21c146abecf3508314bdabf64a2d4c16b21a5a"
+    },
+    "public_http": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 1,
+      "junit_sha256": "2a7e875218899cc12a65aa27913c5c159e11ab31542e0bb5497def56d0365fd9"
+    }
+  },
+  "not_executed": [
+    "paid_model_four_source_browser_e2e",
+    "live_controller_worker",
+    "live_api_gateway_simultaneous_failure",
+    "remote_network_partition",
+    "provider_upstream_attempt_bill_audit"
+  ],
+  "source_fingerprints": {
+    "src\\open_deep_research\\agentscope_runtime\\production_resources.py": "e6878d97a47ad546d08ca6790097606609dc5ab7c86ad39ca4b915d4efdddc2d",
+    "src\\open_deep_research\\sandbox\\team_controller.py": "eacf9f4d445b8f67e0f1e8f283a5c4f4a7878788d42c04ebe45191519f5a6679",
+    "src\\open_deep_research\\agentscope_runtime\\native_security.py": "1f8495789975a3e969786965c4dec6a8053cbbb15106b0ed84142d98fe2db868",
+    "src\\open_deep_research\\agentscope_runtime\\spend_reconciliation.py": "096069567d752c1cb9ce76234a13f9b2765c08341e1785380235c1b36f322d40",
+    "frontend\\e2e\\native-research.spec.ts": "b134b24295d4666aa389626ee499ff9d30f8e5c961f1b54bed5f6154c7f38c84"
+  }
+}
