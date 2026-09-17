@@ -35,13 +35,28 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from pydantic import BaseModel, Field
 
 from open_deep_research.agents.query_engine import QueryEngine
+from open_deep_research.api.projections import _stable_output, _stable_report_review  # noqa: F401
+from open_deep_research.api import streams
+from open_deep_research.api.contracts import (
+    EgressModeChangeRequest,
+    EgressTargetDecisionRequest,
+    HumanActionRequest,
+    HumanFeedbackRequest,
+    PublicationRequest,
+    ResumeRunRequest,
+    RunRequest,
+    SecurityApprovalDecisionRequest,
+    TeamMessageRequest,
+)
+from open_deep_research.api.streams import (
+    StreamOptions,
+    _sse_headers,
+)
 from open_deep_research.api_governance import ConnectionLimiter, FixedWindowRateLimiter
 from open_deep_research.budgets import RunBudgetLedger
 from open_deep_research.configuration import Configuration
-from open_deep_research.documents.contracts import SourceSelection
 from open_deep_research.documents.database import (
     close_document_pool,
     document_health,
@@ -60,21 +75,16 @@ from open_deep_research.documents.router import router as documents_router
 from open_deep_research.documents.settings import get_document_settings
 from open_deep_research.events.public import (
     PUBLIC_EVENT_SCHEMA_VERSION,
-    PublicEvent,
     RunEventStore,
     event_publisher_from_config,
-    is_terminal_event,
 )
 from open_deep_research.events.publications import (
     PUBLICATION_EVENT_SCHEMA_VERSION,
-    PublicationEvent,
     PublicationEventStore,
     publication_event_payload,
 )
 from open_deep_research.events.task_activity import (
     PUBLIC_TASK_ACTIVITY_SCHEMA_VERSION,
-    TASK_TERMINAL_TYPES,
-    PublicTaskActivityEvent,
     TaskActivityStore,
     activity_summary,
     derive_trace_activity,
@@ -182,61 +192,18 @@ load_dotenv()
 configure_logging()
 
 
-class RunRequest(BaseModel):
-    """HTTP request body for a research run."""
-
-    messages: list[dict[str, Any]]
-    configurable: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    title: str | None = Field(default=None, max_length=160)
-    source_selection: SourceSelection = Field(default_factory=SourceSelection)
-    publication_theme: PublisherTheme | None = None
 
 
-class ResumeRunRequest(BaseModel):
-    """Runtime overrides and credentials for explicitly resuming a run."""
-
-    configurable: dict[str, Any] = Field(default_factory=dict)
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class HumanActionRequest(BaseModel):
-    """Approval/revision/cancellation response for a pending HITL action."""
-
-    action: Literal["approve", "revise", "answer", "deny", "cancel"]
-    message: str | None = None
 
 
-class SecurityApprovalDecisionRequest(BaseModel):
-    """Resolve one sandbox security approval without changing permanent policy."""
-
-    decision: Literal["allow_once", "allow_run", "deny"]
-    reason: str = Field(default="", max_length=1000)
 
 
-class EgressModeChangeRequest(BaseModel):
-    """Switch the run's runtime egress approval mode within the baseline."""
-
-    mode: Literal["manual", "auto", "open"]
-    reason: str = Field(default="", max_length=1000)
 
 
-class HumanFeedbackRequest(BaseModel):
-    """Mid-run human direction or evidence follow-up."""
-
-    type: Literal["direction", "evidence_question"]
-    message: str
-    task_id: str | None = None
-    source_url: str | None = None
-    claim_text: str | None = None
-    command_id: str | None = None
 
 
-class PublicationRequest(BaseModel):
-    """Create one idempotent publication for a completed run."""
-
-    format: str = Field(min_length=1, max_length=40)
-    theme: PublisherTheme | None = None
 
 
 @dataclass
@@ -871,183 +838,40 @@ async def readyz() -> JSONResponse:
     return JSONResponse(report, status_code=200 if ready else 503)
 
 
-def _sse(event: PublicEvent) -> str:
-    return (
-        f"id: {event.sequence}\n"
-        f"event: {event.type}\n"
-        f"data: {json.dumps(event.public_dict(), ensure_ascii=False, default=str)}\n\n"
+async def _reauthorize_stream(principal):
+    async with session_scope() as db:
+        return await reauthorize_session(db, principal) is not None
+
+
+def _stream_options():
+    return StreamOptions(
+        configuration=Configuration.from_runnable_config(None),
+        shutdown=_sse_shutdown,
+        authorize=_reauthorize_stream,
+        reauth_interval=get_iam_settings().sse_reauth_interval,
+        publisher_settings=get_publisher_settings(),
     )
 
 
-def _publication_sse(event: PublicationEvent) -> str:
-    """Serialize one publication event on its independent cursor domain."""
-    return (
-        f"id: {event.sequence}\n"
-        f"event: {event.type}\n"
-        f"data: {json.dumps(event.public_dict(), ensure_ascii=False, default=str)}\n\n"
-    )
+async def _public_event_iterator(store, *, after=0, principal=None):
+    async for frame in streams._public_event_iterator(
+        store, after=after, principal=principal, options=_stream_options()
+    ):
+        yield frame
 
 
-def _task_activity_sse(event: PublicTaskActivityEvent) -> str:
-    """Serialize one browser-safe task activity as SSE."""
-    return (
-        f"id: {event.sequence}\n"
-        f"event: {event.type}\n"
-        f"data: {json.dumps(event.public_dict(), ensure_ascii=False, default=str)}\n\n"
-    )
+async def _publication_event_iterator(store, *, after=0, principal=None):
+    async for frame in streams._publication_event_iterator(
+        store, after=after, principal=principal, options=_stream_options()
+    ):
+        yield frame
 
 
-def _sse_headers() -> dict[str, str]:
-    return {
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-        "Connection": "keep-alive",
-    }
-
-
-async def _public_event_iterator(
-    store: RunEventStore, *, after: int = 0, principal: Principal | None = None
-):
-    """Replay then tail a durable public stream, including cross-worker writes."""
-    configurable = Configuration.from_runnable_config(None)
-    poll_seconds = configurable.sse_poll_interval_ms / 1000
-    heartbeat_seconds = configurable.sse_heartbeat_seconds
-    cursor = after
-    last_output_at = asyncio.get_running_loop().time()
-    last_auth_at = last_output_at
-    while True:
-        if _sse_shutdown.is_set():
-            return
-        now = asyncio.get_running_loop().time()
-        if (
-            principal is not None
-            and principal.session_id is not None
-            and now - last_auth_at >= get_iam_settings().sse_reauth_interval
-        ):
-            async with session_scope() as db:
-                if await reauthorize_session(db, principal) is None:
-                    return
-            last_auth_at = now
-        events = await asyncio.to_thread(store.read, cursor)
-        for event in events:
-            yield _sse(event)
-            cursor = event.sequence
-            last_output_at = asyncio.get_running_loop().time()
-            if is_terminal_event(event):
-                return
-        if not events:
-            last_sequence = await asyncio.to_thread(store.last_sequence)
-            if last_sequence and cursor >= last_sequence:
-                latest = await asyncio.to_thread(store.read, last_sequence - 1)
-                if latest and is_terminal_event(latest[-1]):
-                    return
-            now = asyncio.get_running_loop().time()
-            if now - last_output_at >= heartbeat_seconds:
-                yield ": keep-alive\n\n"
-                last_output_at = now
-        await asyncio.sleep(poll_seconds)
-
-
-async def _publication_event_iterator(
-    store: PublicationEventStore,
-    *,
-    after: int = 0,
-    principal: Principal | None = None,
-):
-    """Replay and briefly tail post-run publication events."""
-    configurable = Configuration.from_runnable_config(None)
-    publisher_settings = get_publisher_settings()
-    poll_seconds = configurable.sse_poll_interval_ms / 1000
-    heartbeat_seconds = configurable.sse_heartbeat_seconds
-    cursor = after
-    loop = asyncio.get_running_loop()
-    last_output_at = loop.time()
-    last_event_at = last_output_at
-    last_auth_at = last_output_at
-    while True:
-        if _sse_shutdown.is_set():
-            return
-        now = loop.time()
-        if (
-            principal is not None
-            and principal.session_id is not None
-            and now - last_auth_at >= get_iam_settings().sse_reauth_interval
-        ):
-            async with session_scope() as db:
-                if await reauthorize_session(db, principal) is None:
-                    return
-            last_auth_at = now
-        try:
-            events = await asyncio.to_thread(store.read, cursor)
-        except (OSError, ValueError, portalocker.exceptions.LockException):
-            # A corrupt or temporarily locked publication log is fail-closed;
-            # the client can reconnect after the storage issue is repaired.
-            return
-        for event in events:
-            yield _publication_sse(event)
-            cursor = event.sequence
-            last_output_at = loop.time()
-            last_event_at = last_output_at
-        now = loop.time()
-        idle_due = now - last_event_at >= publisher_settings.sse_idle_seconds
-        # Emit a due heartbeat before applying the idle close boundary.  The
-        # generator pauses at ``yield`` so a client can observe one final
-        # keep-alive even when a very small idle window and filesystem polling
-        # overhead elapse in the same iteration.
-        if not events and now - last_output_at >= heartbeat_seconds:
-            yield ": keep-alive\n\n"
-            last_output_at = loop.time()
-            if idle_due:
-                return
-        if idle_due:
-            return
-        await asyncio.sleep(poll_seconds)
-
-
-async def _task_activity_iterator(
-    store: TaskActivityStore, *, after: int = 0, principal: Principal | None = None
-):
-    """Replay then tail one task-local durable activity stream."""
-    configurable = Configuration.from_runnable_config(None)
-    poll_seconds = configurable.sse_poll_interval_ms / 1000
-    heartbeat_seconds = configurable.sse_heartbeat_seconds
-    cursor = after
-    last_output_at = asyncio.get_running_loop().time()
-    last_auth_at = last_output_at
-    while True:
-        if _sse_shutdown.is_set():
-            return
-        now = asyncio.get_running_loop().time()
-        if (
-            principal is not None
-            and principal.session_id is not None
-            and now - last_auth_at >= get_iam_settings().sse_reauth_interval
-        ):
-            async with session_scope() as db:
-                if await reauthorize_session(db, principal) is None:
-                    return
-            last_auth_at = now
-        events = await asyncio.to_thread(store.read, cursor)
-        terminal_seen = False
-        for event in events:
-            yield _task_activity_sse(event)
-            cursor = event.sequence
-            last_output_at = asyncio.get_running_loop().time()
-            if event.type in TASK_TERMINAL_TYPES:
-                terminal_seen = True
-        if terminal_seen:
-            return
-        if not events:
-            last_sequence = await asyncio.to_thread(store.last_sequence)
-            if last_sequence and cursor >= last_sequence:
-                history = await asyncio.to_thread(store.read)
-                if any(event.type in TASK_TERMINAL_TYPES for event in history):
-                    return
-            now = asyncio.get_running_loop().time()
-            if now - last_output_at >= heartbeat_seconds:
-                yield ": keep-alive\n\n"
-                last_output_at = now
-        await asyncio.sleep(poll_seconds)
+async def _task_activity_iterator(store, *, after=0, principal=None):
+    async for frame in streams._task_activity_iterator(
+        store, after=after, principal=principal, options=_stream_options()
+    ):
+        yield frame
 
 
 def _config_from_request(request: RunRequest, principal: Principal) -> dict[str, Any]:
@@ -1823,107 +1647,10 @@ async def _run_publications(run_id: str, runs_dir: str) -> list[dict[str, Any]]:
     return [_publication_response(job) for job in jobs]
 
 
-_REPORT_REVIEW_SUMMARY_KEYS = (
-    "schema_version",
-    "status",
-    "decision",
-    "gate_decision",
-    "attempt",
-    "revision_count",
-    "issue_count",
-    "critical_issue_count",
-    "hard_failure",
-    "degraded",
-    "skipped",
-    "draft_sha256",
-    "sha256",
-    "policy_version",
-    "evaluation_epoch",
-)
-_REPORT_REVIEW_DIMENSION_KEYS = {
-    "coverage",
-    "citation_correctness",
-    "contradictions",
-    "unsupported_claims",
-    "redundancy",
-    "executive_readability",
-}
 
 
-def _stable_report_review(result: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Project a content-free report-review summary for the public API.
-
-    Review objects contain issue descriptions, evidence IDs, and provenance
-    intended for internal recovery only.  The run API exposes a small status
-    projection so clients can render progress without receiving that data.
-    """
-    state = result or {}
-    candidates: list[Any] = [state]
-    nested = state.get("result") if isinstance(state, dict) else None
-    if isinstance(nested, dict):
-        candidates.append(nested)
-    raw: Any = None
-    for candidate in candidates:
-        if isinstance(candidate, dict) and isinstance(candidate.get("report_review"), dict):
-            raw = candidate["report_review"]
-            break
-    if not isinstance(raw, dict):
-        return None
-    # QueryEngine/public-event producers historically used both singular and
-    # plural spellings; normalize them at the API boundary.
-    raw = dict(raw)
-    if "issue_count" not in raw and "issues_count" in raw:
-        raw["issue_count"] = raw["issues_count"]
-    if "critical_issue_count" not in raw and "critical_issues_count" in raw:
-        raw["critical_issue_count"] = raw["critical_issues_count"]
-    summary: dict[str, Any] = {
-        key: raw[key]
-        for key in _REPORT_REVIEW_SUMMARY_KEYS
-        if key in raw and isinstance(raw[key], str | int | float | bool)
-    }
-    # Dimension scores are safe numeric metadata, but never pass through
-    # arbitrary nested objects from the model response.
-    dimensions = raw.get("dimensions") or raw.get("dimension_scores") or raw.get("scores")
-    if isinstance(dimensions, dict):
-        numeric = {
-            str(key): float(value)
-            for key, value in dimensions.items()
-            if key in _REPORT_REVIEW_DIMENSION_KEYS
-            and isinstance(value, int | float)
-            and not isinstance(value, bool)
-        }
-        if numeric:
-            summary["dimensions"] = numeric
-    return summary or None
 
 
-def _stable_output(
-    result: dict[str, Any] | None,
-    report: str = "",
-    *,
-    publications: list[dict[str, Any]] | None = None,
-    preferred_output_format: str | None = None,
-    publication_theme: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    state = result or {}
-    outcome = state.get("result") if isinstance(state.get("result"), dict) else state
-    outcome = outcome if isinstance(outcome, dict) else {}
-    markdown = report or str(state.get("final_report") or outcome.get("result") or "")
-    return {
-        "markdown": markdown,
-        "artifacts": state.get("artifacts") or outcome.get("artifacts") or [],
-        "publications": publications or [],
-        "preferred_output_format": preferred_output_format,
-        "publication_theme": publication_theme,
-        "quality_gate": state.get("quality_gate") or outcome.get("quality_gate"),
-        "report_review": _stable_report_review(state)
-        or _stable_report_review(outcome),
-        "termination_reason": outcome.get("termination_reason"),
-        "status": outcome.get("status"),
-        "usage": outcome.get("usage") or {},
-        "usage_accounting": outcome.get("usage_accounting"),
-        "metrics": outcome.get("metrics") or {},
-    }
 
 
 def _require_record_owner(record: RunRecord, user: Principal) -> None:
@@ -3221,12 +2948,6 @@ def _runtime_egress_override(
     return override.mode
 
 
-class EgressTargetDecisionRequest(BaseModel):
-    """A versioned human override for an observed network target."""
-
-    decision: Literal["allow_run", "block_run", "revoke"]
-    reason: str = Field(default="", max_length=1000)
-    expected_version: int = Field(ge=0)
 
 
 def _read_egress_state(run_id: str, configurable: Configuration, fence_token: int) -> dict[str, Any]:
@@ -3448,11 +3169,6 @@ async def get_research_team(
             "messages": [json.loads(row["event"]) for row in reversed(messages)]}
 
 
-class TeamMessageRequest(BaseModel):
-    """Human direction to a member, scoped to the authenticated run owner."""
-    to: str
-    message: str = Field(min_length=1, max_length=12000)
-    command_id: str = Field(min_length=1, max_length=256)
 
 
 @app.post("/runs/{run_id}/team/messages")

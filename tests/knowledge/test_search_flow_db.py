@@ -326,5 +326,7 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
             await connection.execute(
                 "DELETE FROM knowledge_entities WHERE owner_id=$1::uuid", OWNER)
             await connection.execute(
+                "DELETE FROM knowledge_jobs WHERE knowledge_base_id IN (SELECT id FROM knowledge_bases WHERE owner_id=$1::uuid)", OWNER)
+            await connection.execute(
                 "DELETE FROM knowledge_bases WHERE owner_id=$1::uuid", OWNER)
         await close_document_pool()

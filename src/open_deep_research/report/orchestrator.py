@@ -24,16 +24,12 @@ from collections.abc import Callable, Mapping
 from typing import Any, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
-
 from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
 from open_deep_research.evaluation import build_evaluation_snapshot
 from open_deep_research.events.public import canonical_local_source
 from open_deep_research.evidence import (
     source_scoped_evidence_records,
 )
-from open_deep_research.observability import get_trace_recorder
 from open_deep_research.run_context import RunContextStore
 from open_deep_research.security.content import sanitize_report_markdown
 
@@ -56,6 +52,7 @@ from .references import (
     replace_sources_section,
 )
 from .renderers import render_artifacts
+from .runtime import AIMessage, RunnableConfig, get_trace_recorder
 
 _FENCE_LINE_RE = re.compile(
     r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>[^\r\n]*)"

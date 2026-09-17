@@ -89,7 +89,8 @@ class RecoverySession:
     """A leased run; stage replay reuses committed model and tool results."""
 
     def __init__(
-        self, store, lease, snapshot, *, ttl=30, failpoint=None, approval_applier=None
+        self, store, lease, snapshot, *, ttl=30, failpoint=None, approval_applier=None,
+        model_accounting="local",
     ):
         self.store, self.lease, self.snapshot = store, lease, snapshot
         self.ttl, self.failpoint = ttl, failpoint
@@ -102,6 +103,9 @@ class RecoverySession:
         self.approval_applier = approval_applier
         self.public_publisher = None
         self.grants = dict(snapshot.approval_grants)
+        if model_accounting not in {"local", "gateway"}:
+            raise ValueError("unknown model accounting authority")
+        self.model_accounting = model_accounting
 
     @classmethod
     async def open(cls, store, run_id, user_id, *, ttl=30, failpoint=None):
@@ -271,7 +275,7 @@ class RecoverySession:
             "output_tokens": max_tokens,
         }
         budget = await self.store.budget(self.lease.run_id, self.lease.user_id)
-        if "cost_micro_usd" in budget["limits"]:
+        if self.model_accounting == "local" and "cost_micro_usd" in budget["limits"]:
             if pricing is None:
                 raise ValueError(
                     "cost-capped model calls require an explicit priced reservation"
@@ -282,7 +286,7 @@ class RecoverySession:
                 reserve["input_tokens"] * pricing[0] + max_tokens * pricing[1]
             )
 
-        async def invoke():
+        async def invoke_response():
             response = await call()
             if not isinstance(response, (ChatResponse, StructuredResponse)):
                 final = None
@@ -302,7 +306,17 @@ class RecoverySession:
                 "agent_state": agent.state.model_dump(mode="json") if agent else None,
             }
 
+        async def invoke():
+            from open_deep_research.agentscope_runtime.gateway import (
+                gateway_operation_scope,
+            )
+
+            with gateway_operation_scope(key):
+                return await invoke_response()
+
         def settle(result):
+            if self.model_accounting == "gateway":
+                return {}
             usage = result["response"].get("usage")
             # Unknown usage remains conservatively charged at reservation.
             if not usage:
@@ -326,8 +340,8 @@ class RecoverySession:
             payload,
             invoke,
             key=key,
-            replay_safe=False,
-            reserve=reserve,
+            replay_safe=self.model_accounting == "gateway",
+            reserve=reserve if self.model_accounting == "local" else {},
             actual=settle,
         )
         if (
@@ -530,6 +544,7 @@ class RecoveryStages:
                 ) or (
                     stage == "final_report_generation"
                     and getattr(self.inner, "report_writer", None) is not None
+                    and not getattr(self.inner.report_writer, "resumable", False)
                 )
                 if external_effect:
                     # These application ports may commit outside our SQL transaction.

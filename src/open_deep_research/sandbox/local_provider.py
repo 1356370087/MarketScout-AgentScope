@@ -10,14 +10,14 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 
 MAX_COMMAND_OUTPUT_BYTES = 1_000_000
 
 
-def task_workspace(config: RunnableConfig) -> Path:
+def task_workspace(config: RuntimeConfig) -> Path:
     """Resolve the task-owned workspace without accepting a caller path root."""
     if os.getenv("SANDBOX_TASK_TOKEN"):
         return Path(
@@ -32,7 +32,7 @@ def task_workspace(config: RunnableConfig) -> Path:
     return root
 
 
-def safe_workspace_path(config: RunnableConfig, value: str) -> Path:
+def safe_workspace_path(config: RuntimeConfig, value: str) -> Path:
     """Resolve a path below the task workspace and reject existing symlinks."""
     root = task_workspace(config)
     supplied = Path(value)
@@ -50,7 +50,7 @@ def safe_workspace_path(config: RunnableConfig, value: str) -> Path:
     return candidate
 
 
-def developer_tools_enabled(config: RunnableConfig, permission: str) -> bool:
+def developer_tools_enabled(config: RuntimeConfig, permission: str) -> bool:
     """Require both administrator Profile selection and an RBAC capability."""
     profile_id = os.getenv("SANDBOX_PROFILE_ID") or str(
         config.get("configurable", {}).get("sandbox_profile_id") or ""
@@ -137,7 +137,7 @@ class BubblewrapSandboxProvider:
         self,
         command: str,
         *,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         cwd: str | None = None,
         timeout_seconds: int = 120,
     ) -> dict[str, Any]:

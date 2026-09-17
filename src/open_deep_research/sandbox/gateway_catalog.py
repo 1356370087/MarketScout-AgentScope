@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, ConfigDict
 
 from open_deep_research.sandbox.wire import (
@@ -86,11 +86,11 @@ class GatewayCatalogTool:
         del input
         return str(self.catalog.definition.get("description") or "")
 
-    def prompt(self, config: RunnableConfig) -> str | None:
+    def prompt(self, config: RuntimeConfig) -> str | None:
         del config
         return self.catalog.prompt
 
-    def is_enabled(self, config: RunnableConfig) -> bool:
+    def is_enabled(self, config: RuntimeConfig) -> bool:
         del config
         return True
 
@@ -110,7 +110,7 @@ class GatewayCatalogTool:
 
 async def load_gateway_catalog_tools(
     role: str,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     existing_names: set[str],
 ) -> list[GatewayCatalogTool]:
     """Fetch replay-protected dynamic schemas from the authoritative Gateway."""

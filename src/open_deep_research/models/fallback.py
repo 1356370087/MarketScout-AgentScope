@@ -14,7 +14,7 @@ from enum import Enum
 from typing import Any, TypeVar
 
 from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import event_publisher_from_config
@@ -139,7 +139,7 @@ async def invoke_with_model_fallback(
     primary_model: str,
     model_fallbacks: Mapping[str, Sequence[str]] | None,
     role: str,
-    config: RunnableConfig | None = None,
+    config: RuntimeConfig | None = None,
     on_fallback: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
 ) -> _ModelResult:
     """Invoke one role's model chain for bounded availability errors."""
@@ -206,7 +206,7 @@ async def invoke_with_model_fallback(
     raise RuntimeError("model_fallback_chain_empty")
 
 
-def _query_turn(config: RunnableConfig | None) -> int:
+def _query_turn(config: RuntimeConfig | None) -> int:
     metadata = (config or {}).get("metadata") or {}
     value = metadata.get("query_turn", metadata.get("turn", 0))
     try:
@@ -220,7 +220,7 @@ async def _record_fallback_event(
     *,
     role: str,
     attempt: int,
-    config: RunnableConfig | None,
+    config: RuntimeConfig | None,
 ) -> None:
     logger.info(
         "query.model_fallback",

@@ -11,7 +11,7 @@ from langchain_core.messages import (
     MessageLikeRepresentation,
     filter_messages,
 )
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.models.resolution import resolve_api_key, resolve_base_url
 
@@ -76,7 +76,7 @@ def get_config_value(value: Any) -> Any:
     return value.value
 
 
-def get_api_key_for_model(model_name: str, config: RunnableConfig) -> str | None:
+def get_api_key_for_model(model_name: str, config: RuntimeConfig) -> str | None:
     """Compatibility shim for shared credential resolution."""
     return resolve_api_key(model_name, config)
 
@@ -88,7 +88,7 @@ def get_base_url_for_model(model_name: str) -> str | None:
 
 def get_model_connection_kwargs(
     model_name: str,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> dict[str, str | None]:
     """Return provider credentials and an optional compatible base URL."""
     connection: dict[str, str | None] = {

@@ -23,7 +23,7 @@ from langchain_core.messages import (
     HumanMessage,
     get_buffer_string,
 )
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.agents.model_recovery import (
     ModelCandidate,
@@ -131,8 +131,8 @@ from open_deep_research.tools.governance import GovernedToolCallResult
 logger = logging.getLogger(__name__)
 
 
-def _ensure_config(config: RunnableConfig | None, fallback: RunnableConfig | None = None) -> RunnableConfig:
-    merged: RunnableConfig = {"configurable": {}, "metadata": {}}
+def _ensure_config(config: RuntimeConfig | None, fallback: RuntimeConfig | None = None) -> RuntimeConfig:
+    merged: RuntimeConfig = {"configurable": {}, "metadata": {}}
     for source in (fallback, config):
         if not source:
             continue
@@ -162,7 +162,7 @@ _APPROVAL_PENDING_MESSAGE = (
 async def _supervisor_turn_advance_policy(
     messages: list[BaseMessage],
     _state: QueryLoopState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> int:
     """Keep passive coordination waits off the research-turn budget.
 
@@ -321,7 +321,7 @@ def _evidence_limited_coverage_map(
     return result
 
 
-def _config_user_id(config: RunnableConfig) -> str | None:
+def _config_user_id(config: RuntimeConfig) -> str | None:
     metadata = config.get("metadata", {})
     configurable = config.get("configurable", {})
     return metadata.get("user_id") or metadata.get("owner") or configurable.get("user_id")
@@ -329,7 +329,7 @@ def _config_user_id(config: RunnableConfig) -> str | None:
 class QueryEngine:
     """Conversation and protocol shell for the lead research agent."""
 
-    def __init__(self, config: RunnableConfig | None = None):
+    def __init__(self, config: RuntimeConfig | None = None):
         """Create a lead-agent session engine."""
         self.config = _ensure_config(config)
         self.run_id = self.config["metadata"]["run_id"]
@@ -818,7 +818,7 @@ class QueryEngine:
         run_id: str,
         *,
         runs_dir: str = ".runs",
-        config: RunnableConfig | None = None,
+        config: RuntimeConfig | None = None,
         legacy_migration: bool = False,
     ) -> QueryEngine:
         """Load a persisted run shell for explicit recovery."""
@@ -852,7 +852,7 @@ class QueryEngine:
                 "run_schema_not_resumable:run_config_not_frozen"
             )
 
-        persisted_run_config: RunnableConfig = {
+        persisted_run_config: RuntimeConfig = {
             "configurable": dict(persisted_configurable),
             "metadata": dict(persisted_metadata),
         }
@@ -874,7 +874,7 @@ class QueryEngine:
         )
         if explicitly_frozen:
             expected = Configuration.from_runnable_config(persisted_run_config)
-            candidate_config: RunnableConfig = {
+            candidate_config: RuntimeConfig = {
                 "configurable": {
                     **persisted_run_config["configurable"],
                     **supplied_configurable,
@@ -901,7 +901,7 @@ class QueryEngine:
             "quality_rigor_policy",
             "quality_configuration_warnings",
         }
-        supplied: RunnableConfig = {
+        supplied: RuntimeConfig = {
             "configurable": {
                 **persisted_configurable,
                 **supplied_configurable,
@@ -1370,7 +1370,7 @@ class QueryEngine:
         function: Callable[..., Any],
         draft: Any,
         state: dict[str, Any],
-        config: RunnableConfig,
+        config: RuntimeConfig,
         attempt: int,
     ) -> Any:
         """Invoke Reviewer doubles with the optional ``attempt`` keyword."""
@@ -3178,7 +3178,7 @@ class QueryEngine:
     async def submit_message(
         self,
         messages: list[Any],
-        config: RunnableConfig | None = None,
+        config: RuntimeConfig | None = None,
     ) -> dict[str, Any]:
         """Run a complete research request and return the final state."""
         async for _event in self.stream_message(messages, config):
@@ -3814,7 +3814,7 @@ class QueryEngine:
     async def stream_message(
         self,
         messages: list[Any],
-        config: RunnableConfig | None = None,
+        config: RuntimeConfig | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream protocol events for a complete research request."""
         validate_client_messages(messages)
@@ -6026,7 +6026,7 @@ class QueryEngine:
             async def before_turn(
                 messages: list[BaseMessage],
                 _next_turn: int,
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
             ) -> BeforeTurnHookResult | None:
                 self.cancellation_scope.checkpoint("supervisor.before_turn")
                 prepared_state = {
@@ -6109,7 +6109,7 @@ class QueryEngine:
                 _tool_calls: list[dict[str, Any]],
                 _tools_by_name: dict[str, Any],
                 turn: int,
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
                 committed_outcomes: dict[
                     str,
                     GovernedToolCallResult,
@@ -6210,7 +6210,7 @@ class QueryEngine:
 
             async def handle_no_tool_stop(
                 messages: list[BaseMessage],
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
             ) -> StopHookResult:
                 turn = int(supervisor_state.get("research_iterations", 0) or 0)
                 drained_update: dict[str, Any] | None = None
@@ -6592,7 +6592,7 @@ class QueryEngine:
 class ResearcherQueryEngine:
     """Runs a single focused Researcher with a clean context window."""
 
-    def __init__(self, config: RunnableConfig | None = None):
+    def __init__(self, config: RuntimeConfig | None = None):
         """Create a researcher engine."""
         self.config = _ensure_config(config)
 
@@ -6601,7 +6601,7 @@ class ResearcherQueryEngine:
         research_topic: str,
         *,
         memory_context: str | None = None,
-        config: RunnableConfig | None = None,
+        config: RuntimeConfig | None = None,
     ) -> dict[str, Any]:
         """Run one focused topic in a clean researcher context."""
         from langchain_core.messages import HumanMessage
@@ -6616,7 +6616,7 @@ class ResearcherQueryEngine:
     async def ainvoke(
         self,
         state: dict[str, Any],
-        config: RunnableConfig | None = None,
+        config: RuntimeConfig | None = None,
     ) -> dict[str, Any]:
         """Invoke one focused Researcher through the shared Query runtime."""
         from open_deep_research.agents import deep_researcher as graph
@@ -6676,7 +6676,7 @@ class ResearcherQueryEngine:
 
             async def handle_no_tool_stop(
                 _messages: list[BaseMessage],
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
             ) -> StopHookResult:
                 decision = completion_policy.evaluate(researcher_completion_context())
                 researcher_state["completion_decision"] = {
@@ -6710,7 +6710,7 @@ class ResearcherQueryEngine:
             async def before_turn(
                 _messages: list[BaseMessage],
                 _next_turn: int,
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
             ) -> BeforeTurnHookResult | None:
                 if (
                     _next_turn - approval_pending_turns
@@ -6777,7 +6777,7 @@ class ResearcherQueryEngine:
                 outcomes: list[Any],
                 tools_by_name: dict[str, Any],
                 turn: int,
-                _config: RunnableConfig,
+                _config: RuntimeConfig,
             ) -> ToolResultsHookResult:
                 nonlocal quality_recovery_state
                 nonlocal approval_pending_turns

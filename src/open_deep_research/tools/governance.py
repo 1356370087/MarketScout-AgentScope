@@ -31,9 +31,9 @@ import aiohttp
 
 if TYPE_CHECKING:
     from langchain_core.messages import ToolMessage
-    from langchain_core.runnables import RunnableConfig
+    from open_deep_research.config_types import RuntimeConfig
 else:
-    RunnableConfig = dict[str, Any]
+    RuntimeConfig = dict[str, Any]
 from pydantic import BaseModel, Field, ValidationError
 
 from open_deep_research.configuration import Configuration
@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 ##########################
 
 
-def get_trace_recorder(config: RunnableConfig):
+def get_trace_recorder(config: RuntimeConfig):
     """Load the legacy trace adapter only for legacy callers."""
     from open_deep_research.observability import get_trace_recorder as get_recorder
 
@@ -540,7 +540,7 @@ def _check_value(name: str, value: Any, spec: dict[str, Any]) -> Optional[ToolEr
 
 
 def validate_tool_args(
-    tool: Tool, args: dict[str, Any], config: Optional[RunnableConfig] = None,
+    tool: Tool, args: dict[str, Any], config: Optional[RuntimeConfig] = None,
 ) -> Optional[ToolError]:
     """Validate ``args`` against the tool's LLM-facing input schema.
 
@@ -684,7 +684,7 @@ async def invoke_tool_with_retry(
 ##########################
 
 
-def _origin_blocklist(role: AgentRole, config: RunnableConfig) -> set[ToolOrigin]:
+def _origin_blocklist(role: AgentRole, config: RuntimeConfig) -> set[ToolOrigin]:
     """Resolve the set of blocked origins for ``role`` from config."""
     configurable = Configuration.from_runnable_config(config)
     raw = (
@@ -704,7 +704,7 @@ def _origin_blocklist(role: AgentRole, config: RunnableConfig) -> set[ToolOrigin
 
 
 def resolve_allowed_tools(
-    role: AgentRole, config: RunnableConfig, assembled_names: set[str]
+    role: AgentRole, config: RuntimeConfig, assembled_names: set[str]
 ) -> Optional[set[str]]:
     """Resolve the per-role tool-name whitelist.
 
@@ -724,14 +724,14 @@ def resolve_allowed_tools(
     return {name for name in whitelist if name in assembled_names}
 
 
-def _peek_mcp_tokens(config: RunnableConfig) -> Optional[Any]:
+def _peek_mcp_tokens(config: RuntimeConfig) -> Optional[Any]:
     """Check whether an MCP access token is present in config (no exchange work)."""
     configurable = config.get("configurable", {}) or {} if isinstance(config, dict) else {}
     tokens = configurable.get("mcp_tokens")
     return tokens if tokens else None
 
 
-def get_user_permissions(config: RunnableConfig) -> list[str]:
+def get_user_permissions(config: RuntimeConfig) -> list[str]:
     """Read the authenticated user's role codes from the run config.
 
     Self-hosted IAM injects a runtime identity into
@@ -757,7 +757,7 @@ def get_user_permissions(config: RunnableConfig) -> list[str]:
     return []
 
 
-def get_effective_permissions(config: RunnableConfig) -> tuple[bool, set[str]]:
+def get_effective_permissions(config: RuntimeConfig) -> tuple[bool, set[str]]:
     """Return ``(authenticated, effective_permissions)`` from runtime config."""
     configurable = config.get("configurable", {}) or {} if isinstance(config, dict) else {}
     auth_user = configurable.get("langgraph_auth_user")
@@ -786,7 +786,7 @@ def check_permission(
     tool: Tool,
     role: AgentRole,
     allowed: Optional[set[str]],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> Optional[ToolError]:
     """Run the permission gate: whitelist membership + origin policy + MCP auth.
 
@@ -871,7 +871,7 @@ def check_permission(
 def filter_tools_by_permission(
     tools: list[Tool],
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> list[Any]:
     """Filter assembled ``tools`` down to those the ``role`` is permitted to bind.
 
@@ -953,7 +953,7 @@ async def check_egress_domain_native(
     tool_call: dict[str, Any],
     tool: Tool,
     args: dict[str, Any],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> Optional[ToolOutcomeMessage]:
     """Enforce the V7 egress allowlist, denying unknown hosts during M1."""
     tool_call_id = tool_call["id"]
@@ -1016,7 +1016,7 @@ async def check_egress_domain_native(
 def _is_preapproved_local_document_read(
     tool: Tool,
     effect: ToolEffect,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> bool:
     """Trust the server-validated frozen selection for owner-scoped document reads."""
     if (
@@ -1035,7 +1035,7 @@ async def execute_governed_tool_call_native(
     tool_call: dict[str, Any],
     tools_by_name: dict[str, Tool],
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     allowed_tools: Optional[set[str]] = None,
     apply_retry: bool = True,

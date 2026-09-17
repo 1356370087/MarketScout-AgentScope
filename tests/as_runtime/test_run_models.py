@@ -1,23 +1,25 @@
 """T018/T019 原生配置与模型凭据契约验证（不访问模型网络）。"""
 
+import csv
 import json
 import os
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
-import csv
+
 import pytest
-from pydantic import SecretStr
 from agentscope.model import ChatModelBase, OpenAIChatModel
-from open_deep_research.configuration import Configuration, freeze_run_config
-from open_deep_research.agentscope_runtime.run_config import FIELD_MAP, RunConfig
+from pydantic import SecretStr
+
 from open_deep_research.agentscope_runtime.models import (
+    ROLES,
     CredentialBinding,
     ModelFactory,
-    ROLES,
     bind_role,
 )
+from open_deep_research.agentscope_runtime.run_config import FIELD_MAP, RunConfig
+from open_deep_research.configuration import Configuration, freeze_run_config
 
 
 @pytest.fixture(autouse=True)
@@ -362,8 +364,15 @@ def test_auxiliary_model_fallbacks_match_old_roles():
     binding = CredentialBinding(
         "ref", "run", "run-1", ("openai:judge",), SecretStr("fixture")
     )
-    for role in ("report_review", "report_revisor", "egress_classifier"):
+    for role in ("report_review", "egress_classifier"):
         factory = ModelFactory(
             run, scope="run", owner="run-1", bindings={role: binding}
         )
         assert factory.descriptor(role)["model"] == "openai:judge"
+    writer_binding = CredentialBinding(
+        "writer", "run", "run-1", ("openai:writer",), SecretStr("fixture")
+    )
+    factory = ModelFactory(
+        run, scope="run", owner="run-1", bindings={"report_revisor": writer_binding}
+    )
+    assert factory.descriptor("report_revisor")["model"] == "openai:writer"

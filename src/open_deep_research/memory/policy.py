@@ -9,10 +9,11 @@ keywords, and confidence thresholds.
 from __future__ import annotations
 
 import re
-from typing import Any, Awaitable, Callable, Literal
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any, Literal
 from urllib.parse import urlparse
 
-from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -24,15 +25,37 @@ from open_deep_research.memory.store import (
     MemoryRecord,
     MemorySourceKind,
 )
-from open_deep_research.models.invocation import complete_model
-from open_deep_research.models.resolution import build_model_config
-from open_deep_research.observability import (
-    apply_helicone_config,
-    get_trace_recorder,
-    invoke_model_with_retry_observability,
-)
 from open_deep_research.security.content import inspect_untrusted_content
-from open_deep_research.tools.legacy_shims import get_today_str
+
+
+def get_today_str():
+    return datetime.now(UTC).strftime("%a %b %d, %Y")
+
+def HumanMessage(**kwargs):
+    from langchain_core.messages import HumanMessage as message
+    return message(**kwargs)
+
+def build_model_config(*args, **kwargs):
+    from open_deep_research.models.resolution import build_model_config as build
+    return build(*args, **kwargs)
+
+def apply_helicone_config(*args, **kwargs):
+    from open_deep_research.observability import apply_helicone_config as apply
+    return apply(*args, **kwargs)
+
+def get_trace_recorder(*args, **kwargs):
+    from open_deep_research.observability import get_trace_recorder as get
+    return get(*args, **kwargs)
+
+async def complete_model(*args, **kwargs):
+    from open_deep_research.models.invocation import complete_model as complete
+    return await complete(*args, **kwargs)
+
+async def invoke_model_with_retry_observability(*args, **kwargs):
+    from open_deep_research.observability import (
+        invoke_model_with_retry_observability as invoke,
+    )
+    return await invoke(*args, **kwargs)
 
 # ---------------------------------------------------------------------------
 # Structured output model
@@ -316,7 +339,9 @@ async def extract_memory_candidates(
     )
 
     configurable = Configuration.from_runnable_config(config)
-    if configurable.model_backend == "litellm":
+    if hasattr(model, "structured"):
+        response = await model.structured("memory", prompt, MemoryExtractionResult, {})
+    elif configurable.model_backend == "litellm":
         response = await complete_model(
             [HumanMessage(content=prompt)],
             config,
@@ -367,7 +392,7 @@ async def extract_memory_candidates(
             and candidate_matches_verified_claim(candidate, verified_evidence)
         )
     ]
-    if config is not None:
+    if config is not None and not hasattr(model, "structured"):
         active_span = get_trace_recorder(config).active_span()
         active_span.score("memory.observation_candidate_count", len(response.candidates))
         active_span.score("memory.observation_rejected_count", len(response.candidates) - len(accepted))
@@ -571,7 +596,9 @@ async def decide_memory_conflict(
         f"New observation: {candidate.content}\nExisting memories:\n{payload}"
     )
     configurable = Configuration.from_runnable_config(config)
-    if configurable.model_backend == "litellm":
+    if hasattr(model, "structured"):
+        response = await model.structured("memory", prompt, MemoryConflictDecisionModel, {})
+    elif configurable.model_backend == "litellm":
         response = await complete_model(
             [HumanMessage(content=prompt)],
             config,
@@ -641,7 +668,7 @@ async def generate_reflections(
     )
     configurable = Configuration.from_runnable_config(config)
     question_model = None
-    if configurable.model_backend != "litellm":
+    if not hasattr(model, "structured") and configurable.model_backend != "litellm":
         question_model = model.with_structured_output(
             ReflectionQuestionsModel,
             method="function_calling",
@@ -658,7 +685,9 @@ async def generate_reflections(
                 agent_role="lead",
             )
         )
-    if configurable.model_backend == "litellm":
+    if hasattr(model, "structured"):
+        question_response = await model.structured("memory", question_prompt, ReflectionQuestionsModel, {})
+    elif configurable.model_backend == "litellm":
         question_response = await complete_model(
             [HumanMessage(content=question_prompt)],
             config,
@@ -699,7 +728,7 @@ async def generate_reflections(
             f"Question: {question}\nRelevant observations:\n{payload}"
         )
         reflection_model = None
-        if configurable.model_backend != "litellm":
+        if not hasattr(model, "structured") and configurable.model_backend != "litellm":
             reflection_model = model.with_structured_output(
                 ReflectionResultModel,
                 method="function_calling",
@@ -714,7 +743,9 @@ async def generate_reflections(
                 span_name="lead.memory_reflect_answer",
                 agent_role="lead",
             ))
-        if configurable.model_backend == "litellm":
+        if hasattr(model, "structured"):
+            response = await model.structured("memory", reflection_prompt, ReflectionResultModel, {})
+        elif configurable.model_backend == "litellm":
             response = await complete_model(
                 [HumanMessage(content=reflection_prompt)],
                 config,
@@ -775,7 +806,7 @@ async def generate_research_profile(
     )
     configurable = Configuration.from_runnable_config(config)
     structured = None
-    if configurable.model_backend != "litellm":
+    if not hasattr(model, "structured") and configurable.model_backend != "litellm":
         structured = model.with_structured_output(
             ResearchProfileModel,
             method="function_calling",
@@ -792,7 +823,9 @@ async def generate_research_profile(
                 agent_role="lead",
             )
         )
-    if configurable.model_backend == "litellm":
+    if hasattr(model, "structured"):
+        response = await model.structured("memory", prompt, ResearchProfileModel, {})
+    elif configurable.model_backend == "litellm":
         response = await complete_model(
             [HumanMessage(content=prompt)],
             config,

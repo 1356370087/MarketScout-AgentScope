@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated, Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import InjectedToolArg, tool
 
 from open_deep_research.configuration import Configuration, SearchAPI
@@ -23,7 +23,7 @@ from open_deep_research.tools.web_research import pipeline, providers
 async def _openai_web_search_call(
     queries: list[str],
     max_results: Annotated[int, InjectedToolArg] = 5,
-    config: RunnableConfig = None,
+    config: RuntimeConfig = None,
 ) -> str:
     """Run OpenAI server-side web search and summarize its cited digest."""
     configurable = Configuration.from_runnable_config(config)

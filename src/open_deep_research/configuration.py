@@ -5,12 +5,9 @@ import json
 import os
 import uuid
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Literal, Optional
 
-if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
-else:
-    RunnableConfig = dict[str, Any]
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from open_deep_research.quality.policy import (
@@ -266,7 +263,7 @@ class SearchAPI(Enum):
 
 
 def _resolve_quality_rigor(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     prefer_configurable: bool = False,
 ) -> tuple[QualityEvaluationRigor, dict[str, Any] | None]:
@@ -2180,9 +2177,9 @@ class Configuration(BaseModel):
 
     @classmethod
     def from_runnable_config(
-        cls, config: Optional[RunnableConfig] = None
+        cls, config: Optional[RuntimeConfig] = None
     ) -> "Configuration":
-        """Create a Configuration instance from a RunnableConfig."""
+        """Create a Configuration instance from a RuntimeConfig."""
         configurable = config.get("configurable", {}) if config else {}
         legacy_fields = {
             "enable_docker_sandbox",
@@ -2241,7 +2238,7 @@ class Configuration(BaseModel):
         arbitrary_types_allowed = True
 
 
-def frozen_run_config_values(config: RunnableConfig) -> dict[str, Any]:
+def frozen_run_config_values(config: RuntimeConfig) -> dict[str, Any]:
     """Return the canonical, non-secret values covered by the run contract."""
     configurable = config.get("configurable", {})
     schema_version = int(
@@ -2281,7 +2278,7 @@ def frozen_run_config_values(config: RunnableConfig) -> dict[str, Any]:
     }
 
 
-def run_config_fingerprint(config: RunnableConfig) -> str:
+def run_config_fingerprint(config: RuntimeConfig) -> str:
     """Hash the frozen run contract without credential-bearing configuration."""
     payload = {
         "schema_version": int(
@@ -2307,12 +2304,12 @@ def run_config_fingerprint(config: RunnableConfig) -> str:
 
 
 def freeze_run_config(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     prefer_configurable: bool = False,
-) -> RunnableConfig:
+) -> RuntimeConfig:
     """Resolve and pin model, policy, timeout, and budget values for one run."""
-    frozen: RunnableConfig = {
+    frozen: RuntimeConfig = {
         **config,
         "configurable": dict(config.get("configurable", {})),
         "metadata": dict(config.get("metadata", {})),

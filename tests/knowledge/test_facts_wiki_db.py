@@ -382,7 +382,8 @@ async def test_facts_wiki_and_export(monkeypatch):
         assert precheck["document_count"] >= 1
         assert precheck["fact_count"] >= 1
         assert precheck["page_count"] >= 1
-        with NamedTemporaryFile(suffix=".zip") as transfer:
+        with NamedTemporaryFile(suffix=".zip", delete_on_close=False) as transfer:
+            transfer.close()
             Path(transfer.name).write_bytes(zip_bytes)
             imported = await exporter.import_archive(
                 OWNER, str(kb_id), Path(transfer.name), str(uuid.uuid4())

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextvars
-import hashlib
 import os
 import re
 import time
@@ -24,11 +22,16 @@ from open_deep_research.models.codec import (
     structured_output_tool,
     structured_tool_choice,
 )
+from open_deep_research.models.credentials_context import (
+    bind_run_key,
+    current_gateway_key,
+    current_run_key,
+    reset_run_key,
+)
 from open_deep_research.models.errors import (
     GATEWAY_TOKEN_LIMIT_MARKER,
     gateway_error_indicates_token_limit,
 )
-from open_deep_research.observability import current_span_ids
 
 T = TypeVar("T", bound=BaseModel)
 ModelRole = Literal[
@@ -213,36 +216,6 @@ class ModelGateway(Protocol):
         """Execute one logical request."""
 
 
-_run_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "litellm_run_key", default=None
-)
-
-
-def bind_run_key(key: str):
-    """Bind a decrypted Run Key to the current async execution context."""
-    return _run_key.set(key)
-
-
-def reset_run_key(token: contextvars.Token[str | None]) -> None:
-    """Remove a previously bound Run Key from the execution context."""
-    _run_key.reset(token)
-
-
-def current_run_key() -> str:
-    """Return the Run-scoped virtual key without service-key fallback."""
-    key = _run_key.get()
-    if not key:
-        raise RuntimeError("litellm_run_key_unavailable")
-    return key
-
-
-def current_gateway_key() -> str:
-    """Return the Run Key, falling back to a restricted non-run service key."""
-    key = _run_key.get() or os.getenv("LITELLM_SERVICE_KEY")
-    if not key:
-        raise RuntimeError("litellm_gateway_key_unavailable")
-    return key
-
 
 def _header(headers: Mapping[str, str], *names: str) -> str | None:
     lowered = {str(key).lower(): str(value) for key, value in headers.items()}
@@ -260,27 +233,7 @@ def _number_header(headers: Mapping[str, str], name: str) -> float | None:
         return None
 
 
-def current_traceparent(run_id: str) -> str:
-    """Create a W3C trace context from the current content-free span identity."""
-    try:
-        from opentelemetry.propagate import inject
-
-        carrier: dict[str, str] = {}
-        inject(carrier)
-        propagated = carrier.get("traceparent")
-        if propagated:
-            return propagated
-    except Exception:  # noqa: BLE001 - deterministic fallback remains available
-        pass
-    current_run_id, current_span_id = current_span_ids()
-    trace_seed = current_run_id or run_id
-    trace_id = hashlib.sha256(trace_seed.encode("utf-8")).hexdigest()[:32]
-    span_seed = (current_span_id or hashlib.sha256(os.urandom(16)).hexdigest())[-16:]
-    if set(trace_id) == {"0"}:
-        trace_id = "1" + trace_id[1:]
-    if set(span_seed) == {"0"}:
-        span_seed = "1" + span_seed[1:]
-    return f"00-{trace_id}-{span_seed}-01"
+from open_deep_research.observability.trace_context import current_traceparent
 
 
 class LiteLLMModelGateway:

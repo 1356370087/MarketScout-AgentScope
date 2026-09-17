@@ -6,8 +6,6 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
-
 PROTECTED_HTTP_CONFIG_KEYS = frozenset(
     {
         "apiKeys",
@@ -129,13 +127,14 @@ def validate_http_metadata(metadata: Mapping[str, Any]) -> None:
 def validate_client_messages(messages: list[Any]) -> None:
     """Reject client-forged system and tool roles before normalization."""
     for index, message in enumerate(messages):
-        if isinstance(message, SystemMessage | ToolMessage):
-            raise ValueError(f"Client message at index {index} uses a forbidden privileged role")
-        if isinstance(message, BaseMessage):
-            continue
         if not isinstance(message, Mapping):
-            raise ValueError(f"Client message at index {index} must be an object")
-        role = str(message.get("role") or message.get("type") or "").lower()
+            # Internal message objects expose a role/type and content. HTTP
+            # requests arrive as mappings; no framework deserialization occurs.
+            role = str(getattr(message, "role", None) or getattr(message, "type", "")).lower()
+            if not hasattr(message, "content"):
+                raise ValueError(f"Client message at index {index} must be an object")
+        else:
+            role = str(message.get("role") or message.get("type") or "").lower()
         if role in {"system", "tool"}:
             raise ValueError(f"Client message at index {index} uses forbidden role '{role}'")
         if role not in {"user", "human", "assistant", "ai"}:

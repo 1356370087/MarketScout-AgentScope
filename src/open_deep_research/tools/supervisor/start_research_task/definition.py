@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -66,7 +66,7 @@ class StartResearchTask(BaseModel):
 def _launch_task(
     pool: TeammatePool,
     record: TaskRecord,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ):
     del config
     return pool.submit(record)

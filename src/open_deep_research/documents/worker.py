@@ -12,10 +12,11 @@ import uuid
 
 from prometheus_client import start_http_server
 
+from open_deep_research.agentscope_runtime.documents import prepare_document
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import get_prometheus_metrics
 
-from . import reparse, structuring, versioning
+from . import reparse, versioning
 from .embeddings import close_embedding_clients, embed_texts
 from .metadata_suggest import build_suggestions
 from .parse_pipeline import parse_document_structured
@@ -118,16 +119,16 @@ async def _process(worker_id: str) -> bool:
             if "upstream_task_id" in job.keys() and job["upstream_task_id"]
             else None
         )
-        prepared = await parse_document_structured(
+        prepared = await prepare_document(
             path,
             document["filename"],
             document["media_type"],
             settings,
+            parse_impl=parse_document_structured,
             version_id=str(generation["version_id"]),
             resume_task_id=resume_task_id,
             on_submitted=persist_task,
         )
-        prepared = structuring.plan_segments(prepared, settings)
         vectors = await embed_texts(prepared.segment_texts, settings)
         if lease_lost.is_set():
             raise DocumentLeaseLostError("document_job_lease_lost")
@@ -149,7 +150,7 @@ async def _process(worker_id: str) -> bool:
     except DocumentLeaseLostError:
         outcome = "lease_lost"
         logger.warning("discarding result after document job lease loss job_id=%s", job["id"])
-    except Exception as exc:  # noqa: BLE001 - durable code and retry own the boundary
+    except Exception as exc:
         code = str(exc).split(":", 1)[0][:96] or "document_ingestion_failed"
         outcome = "failed"
         failure_code = code

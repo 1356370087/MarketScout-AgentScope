@@ -60,31 +60,30 @@ async def _run_daily(args: argparse.Namespace, config: Configuration) -> dict[st
     if not user_ids:
         raise RuntimeError("No users returned by Mem0; OSS maintenance requires --user-id")
 
-    model: Any = None
-    if config.model_backend == "legacy":
-        from open_deep_research.models.resolution import (
-            get_configurable_model_template,
-        )
+    from open_deep_research.agentscope_runtime.memory import MaintenanceModels
 
-        model = get_configurable_model_template()
+    model = MaintenanceModels(config)
     runnable_config: dict[str, Any] = {
         "configurable": {},
         "metadata": {"run_id": "memory-maintenance-daily"},
     }
     summaries: dict[str, Any] = {}
-    for user_id in user_ids:
-        result = await maintain_user_memories(
-            store,
-            user_id=user_id,
-            config=config,
-            model=model,
-            model_name=config.research_model,
-            model_max_tokens=config.research_model_max_tokens,
-            runnable_config=runnable_config,
-            daily=True,
-            dry_run=args.dry_run,
-        )
-        summaries[user_id] = result.model_dump()
+    try:
+        for user_id in user_ids:
+            result = await maintain_user_memories(
+                store,
+                user_id=user_id,
+                config=config,
+                model=model,
+                model_name=config.research_model,
+                model_max_tokens=config.research_model_max_tokens,
+                runnable_config=runnable_config,
+                daily=True,
+                dry_run=args.dry_run,
+            )
+            summaries[user_id] = result.model_dump()
+    finally:
+        await model.aclose()
     return {"dry_run": args.dry_run, "users": summaries}
 
 

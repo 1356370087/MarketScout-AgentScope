@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from .batch_router import router as batch_router
-from .fact_wiki_router import router as fact_wiki_router
-from .router import router
-from .search_router import router as search_router
-from .workspace_router import router as workspace_router
-
 __all__ = [
     "batch_router",
     "fact_wiki_router",
@@ -15,3 +9,13 @@ __all__ = [
     "search_router",
     "workspace_router",
 ]
+
+
+def __getattr__(name):
+    """Keep domain imports independent of HTTP authentication and router setup."""
+    if name not in __all__:
+        raise AttributeError(name)
+    from importlib import import_module
+    exports = {key: import_module(f"{__name__}.{key}").router for key in __all__}
+    globals().update(exports)
+    return exports[name]

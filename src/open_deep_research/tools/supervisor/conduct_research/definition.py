@@ -6,7 +6,7 @@ from functools import partial
 from typing import Any, cast
 
 from langchain_core.messages import BaseMessage, HumanMessage, message_to_dict
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -82,7 +82,7 @@ async def _call(
         required=quality_v4,
     )
     researcher_config = cast(
-        RunnableConfig,
+        RuntimeConfig,
         {
         **context.config,
         "metadata": {

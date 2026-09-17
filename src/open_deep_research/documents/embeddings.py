@@ -11,7 +11,10 @@ from threading import RLock
 from openai import AsyncOpenAI
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.models.gateway import current_gateway_key, current_run_key
+from open_deep_research.models.credentials_context import (
+    current_gateway_key,
+    current_run_key,
+)
 from open_deep_research.observability.telemetry import get_prometheus_metrics
 
 from .settings import DocumentSettings

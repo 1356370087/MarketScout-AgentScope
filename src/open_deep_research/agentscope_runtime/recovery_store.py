@@ -93,6 +93,7 @@ class RecoveryStore:
 
     def __init__(self, url, *, engine_kwargs=None):
         self.engine = create_async_engine(url, **(engine_kwargs or {}))
+        self.commit_guard = None
         self.meta = MetaData()
         self.runs = Table(
             "as_recovery_runs",
@@ -202,7 +203,7 @@ class RecoveryStore:
                 )
             )
 
-    async def create_from_config(self, user_id, run_id, run_config, *, messages=()):
+    async def create_from_config(self, user_id, run_id, run_config, *, messages=(), application=None):
         """Reuse project budget configuration while keeping one SQL authority."""
         import time
 
@@ -224,6 +225,7 @@ class RecoveryStore:
                 "run_config_fingerprint"
             ],
             messages=list(messages),
+            application=application or {},
         )
         await self.create_run(
             user_id,
@@ -307,6 +309,8 @@ class RecoveryStore:
             )
             if row is None:
                 raise FenceLost("expired or superseded run fence")
+            if self.commit_guard is not None:
+                await self.commit_guard(conn)
             yield conn, dict(row)
 
     async def renew(self, lease, ttl=30):
@@ -332,7 +336,7 @@ class RecoveryStore:
                 run_id=row["run_id"],
                 event_id=event_id,
                 sequence=row["revision"],
-                payload={"event_id": event_id, "type": kind, **payload},
+                payload={"event_id": event_id, "type": kind, "timestamp": await self._now(conn), **payload},
             )
         )
 

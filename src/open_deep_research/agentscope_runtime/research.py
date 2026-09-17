@@ -13,6 +13,7 @@ from open_deep_research.agentscope_runtime.research_quality import NativeResearc
 from open_deep_research.agentscope_runtime.research_stages import (
     NativeResearchStages,
 )
+from open_deep_research.configuration import Configuration
 from open_deep_research.tools.base import ToolExecutionZone
 
 
@@ -34,6 +35,11 @@ def build_research_pipeline(
     budget_available=None,
     context_chars=120_000,
     recovery=None,
+    team=None,
+    team_artifact_dir=None,
+    external_team_workers=False,
+    team_launcher=None,
+    authorized_user_id=None,
 ):
     """Bind frozen config, native model/tool adapters and stage persistence.
 
@@ -63,7 +69,19 @@ def build_research_pipeline(
         context_chars=context_chars,
         recovery=recovery,
     )
+    if Configuration.from_runnable_config(config_provider()).enable_memory:
+        from open_deep_research.agentscope_runtime.memory import ResearchMemory
+
+        user_id = recovery.lease.user_id if recovery else authorized_user_id
+        if not user_id:
+            raise ValueError("memory requires an authenticated host user")
+        memory = ResearchMemory(user_id, models)
+        memory_recall = memory_recall or memory.recall
+        memory_write = memory_write or memory.write
     quality = NativeResearchQuality(models, config_provider)
+    if report_writer is None:
+        from open_deep_research.agentscope_runtime.report import NativeReportWriter
+        report_writer = NativeReportWriter(models)
     researcher = Researcher(
         models,
         config_provider,
@@ -75,6 +93,31 @@ def build_research_pipeline(
         quality=quality,
         context_chars=context_chars,
     )
+    workers = None
+    if (
+        recovery is not None
+        and Configuration.from_runnable_config(config_provider()).enable_async_research
+        and team is None
+    ):
+        raise ValueError("durable async research requires a bound native team")
+    if team is not None:
+        from open_deep_research.agentscope_runtime.team_worker import TeamWorkers
+
+        if recovery is None or team_artifact_dir is None:
+            raise ValueError("durable teams require recovery and an artifact directory")
+        if team.lease != recovery.lease:
+            raise ValueError(
+                "team and research must share the same authorized run lease"
+            )
+        workers = TeamWorkers(
+            team,
+            recovery,
+            researcher,
+            quality,
+            team_artifact_dir,
+            external=external_team_workers,
+            launcher=team_launcher,
+        )
     supervisor = Supervisor(
         models,
         config_provider,
@@ -85,6 +128,7 @@ def build_research_pipeline(
         run_id=run_id,
         offloader=offloader,
         context_chars=context_chars,
+        team_workers=workers,
     )
     stages = NativeResearchStages(
         models,
@@ -98,17 +142,26 @@ def build_research_pipeline(
         from open_deep_research.agentscope_runtime.recovery import RecoveryStages
 
         stages = RecoveryStages(stages, recovery)
-    return ResearchPipeline(
+    pipeline = ResearchPipeline(
         state,
         stages,
         recovery.save if recovery else checkpoint.save,
         config_fingerprint=fingerprint,
         recovery=recovery,
     )
+    pipeline.team_workers = workers
+    return pipeline
 
 
 async def open_durable_research_pipeline(
-    *, store, user_id, ttl=30, approval_applier=None, public_publisher=None, **kwargs
+    *,
+    store,
+    user_id,
+    ttl=30,
+    approval_applier=None,
+    public_publisher=None,
+    team_factory=None,
+    **kwargs,
 ):
     """Rebuild an existing authorized run; release the lease if assembly fails."""
     from open_deep_research.agentscope_runtime.recovery import RecoverySession
@@ -117,6 +170,8 @@ async def open_durable_research_pipeline(
     recovery.approval_applier = approval_applier
     recovery.public_publisher = public_publisher
     try:
+        if team_factory is not None:
+            kwargs["team"] = await team_factory(recovery)
         flow = build_research_pipeline(**kwargs, recovery=recovery)
         await recovery.consume_decisions(flow)
         return flow

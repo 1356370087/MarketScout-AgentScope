@@ -772,7 +772,7 @@ async def test_complete_pipeline_recovers_after_tool_commit_without_repeating_to
 
         async def complete_with_recovery(self, *args, **kwargs):
             return ChatResponse(
-                content=[TextBlock(text="报告明确基于测试证据。")], is_last=True
+                content=[TextBlock(text="报告明确基于[测试证据](https://example.test/source)。")], is_last=True
             )
 
     async def call(*args):

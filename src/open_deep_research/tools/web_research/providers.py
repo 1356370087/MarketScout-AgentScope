@@ -12,7 +12,7 @@ from typing import Any
 from anthropic import AsyncAnthropic
 from langchain_core.messages import HumanMessage
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from openai import AsyncOpenAI
 
 from open_deep_research.budgets import BudgetGate
@@ -161,7 +161,7 @@ async def sdk_call_with_observability(
     span_name: str,
     provider: str,
     model: str,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     input_preview: Any = None,
 ) -> Any:
     """Run a native provider call with standard tracing and retry semantics."""
@@ -310,7 +310,7 @@ async def sdk_call_with_observability(
             return response
 
 
-def build_openai_client(config: RunnableConfig) -> AsyncOpenAI:
+def build_openai_client(config: RuntimeConfig) -> AsyncOpenAI:
     """Build an OpenAI search client from the configured credentials."""
     kwargs: dict[str, Any] = {
         "api_key": get_api_key_for_model("openai:gpt-4.1", config),
@@ -321,7 +321,7 @@ def build_openai_client(config: RunnableConfig) -> AsyncOpenAI:
     return AsyncOpenAI(**kwargs)
 
 
-def build_anthropic_client(config: RunnableConfig) -> AsyncAnthropic:
+def build_anthropic_client(config: RuntimeConfig) -> AsyncAnthropic:
     """Build an Anthropic search client from the configured credentials."""
     kwargs: dict[str, Any] = {
         "api_key": get_api_key_for_model("anthropic:claude-sonnet-4", config),
@@ -387,7 +387,7 @@ def deduplicate_sources(sources: list[dict[str, str]]) -> list[dict[str, str]]:
 async def format_synthesized_search(
     synthesized_text: str,
     sources: list[dict[str, str]],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> str:
     """Summarize a provider answer and format its cited source list."""
     if not sources and not synthesized_text.strip():

@@ -5,28 +5,25 @@ from __future__ import annotations
 import hashlib
 import json
 
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import ToolException, tool
+from pydantic import BaseModel
 
+from open_deep_research.config_types import RuntimeConfig
 from open_deep_research.documents.contracts import selection_from_config
 from open_deep_research.documents.database import document_schema_available
 from open_deep_research.documents.repository import run_source_document_ids
 from open_deep_research.documents.retrieval import search_document_chunks
-from open_deep_research.tools.adapters import adapt_langchain_tool
-from open_deep_research.tools.base import ToolEffect, ToolOrigin
+from open_deep_research.tools.base import ToolEffect, ToolOrigin, ToolResult, build_tool
 
 from .prompt import DESCRIPTION, render_prompt
 
 
-def _enabled(config: RunnableConfig) -> bool:
+def _enabled(config: RuntimeConfig) -> bool:
     return (
-        document_schema_available()
-        and selection_from_config(config).documents_enabled
+        document_schema_available() and selection_from_config(config).documents_enabled
     )
 
 
-@tool("search_documents", description=DESCRIPTION)
-async def _search_documents_call(query: str, config: RunnableConfig = None) -> str:
+async def _search_documents_call(query: str, config: RuntimeConfig = None) -> str:
     selection = selection_from_config(config)
     metadata = dict((config or {}).get("metadata") or {})
     owner_id = str(metadata.get("owner") or "")
@@ -35,7 +32,7 @@ async def _search_documents_call(query: str, config: RunnableConfig = None) -> s
         # KB/collection selections were expanded and frozen at run creation.
         document_ids = await run_source_document_ids(str(metadata.get("run_id") or ""))
     if not owner_id or not document_ids:
-        raise ToolException("No owner-scoped documents are selected for this run")
+        raise ValueError("No owner-scoped documents are selected for this run")
     results = await search_document_chunks(
         owner_id=owner_id,
         document_ids=document_ids,
@@ -86,8 +83,19 @@ async def _search_documents_call(query: str, config: RunnableConfig = None) -> s
     )
 
 
-search_documents = adapt_langchain_tool(
-    _search_documents_call,
+class SearchDocumentsInput(BaseModel):
+    query: str
+
+
+async def _call(input, context, progress):
+    return ToolResult(output=await _search_documents_call(input.query, context.config))
+
+
+search_documents = build_tool(
+    name="search_documents",
+    input_schema=SearchDocumentsInput,
+    description=DESCRIPTION,
+    call=_call,
     origin=ToolOrigin.LOCAL_DOCUMENT,
     effect=ToolEffect.SENSITIVE_READ,
     retryable=True,

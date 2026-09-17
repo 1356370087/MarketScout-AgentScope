@@ -13,7 +13,7 @@ from typing import Any, Callable, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, ConfigDict, Field
 
 from open_deep_research.budgets import BudgetGate
@@ -69,6 +69,7 @@ class BudgetReserveRequest(ServiceRequest):
     model_name: str
     estimated_input_tokens: int = Field(ge=1)
     estimated_output_tokens: int = Field(ge=1)
+    request_digest: str | None = None
 
 
 class TeamBridgeRequest(ServiceRequest):
@@ -131,6 +132,7 @@ class OperationGetRequest(ServiceRequest):
     run_id: str
     fence_token: int
     logical_operation_id: str
+    request_digest: str | None = None
 
 
 class UsageReportRequest(ServiceRequest):
@@ -261,7 +263,7 @@ class TaskActivityPublishRequest(ServiceRequest):
 class InternalRunContext:
     """Facts the API must authoritatively resolve for one live run."""
 
-    config: RunnableConfig
+    config: RuntimeConfig
     configurable: Configuration
     fence_token: int
     started_at: float
@@ -270,7 +272,7 @@ class InternalRunContext:
 def _journal_usage_event_kwargs(record: dict[str, Any]) -> dict[str, Any] | None:
     """Map one journal record onto usage-event kwargs (None when unusable)."""
     from open_deep_research.models.resolution import parse_model_spec
-    from open_deep_research.observability.core import TokenUsage
+    from open_deep_research.observability.tracing import TokenUsage
 
     outcome = record.get("outcome") if isinstance(record.get("outcome"), dict) else {}
     usage_map = outcome.get("usage") if isinstance(outcome.get("usage"), dict) else {}
@@ -355,7 +357,7 @@ def backfill_gateway_usage_event(
     observability backfill must never break the control plane.
     """
     try:
-        from open_deep_research.observability.core import get_trace_recorder
+        from open_deep_research.observability.tracing import get_trace_recorder
 
         recorder = get_trace_recorder(context.config)
         if recorder.store is None:
@@ -385,7 +387,7 @@ def reconcile_run_gateway_usage(
     run_id: str,
     *,
     runs_dir: str,
-    config: RunnableConfig | dict[str, Any] | None = None,
+    config: RuntimeConfig | dict[str, Any] | None = None,
 ) -> int:
     """Idempotently replay terminal journal operations into ``usage_events``.
 
@@ -403,7 +405,7 @@ def reconcile_run_gateway_usage(
         signature = (run_id, len(files), max_mtime)
         if signature in _RECONCILED_JOURNAL_SIGNATURES:
             return 0
-        from open_deep_research.observability.core import get_trace_recorder
+        from open_deep_research.observability.tracing import get_trace_recorder
 
         recorder = get_trace_recorder(
             config or {"configurable": {"runs_dir": runs_dir}}
@@ -642,7 +644,7 @@ def build_internal_sandbox_router(
         """Persist one forwarded gateway tool-side model usage row."""
         context = authority(request, request.run_id, request.fence_token)
         try:
-            from open_deep_research.observability.core import (
+            from open_deep_research.observability.tracing import (
                 TokenUsage,
                 get_trace_recorder,
             )
@@ -685,7 +687,7 @@ def build_internal_sandbox_router(
             if revision:
                 # Private helpers of observability.core are reused to keep the
                 # forwarded rows on the same SSE usage-revision stream.
-                from open_deep_research.observability.core import (
+                from open_deep_research.observability.usage_events import (
                     _publish_usage_revision,
                     _run_accounting_status,
                 )

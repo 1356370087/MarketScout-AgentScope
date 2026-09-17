@@ -23,7 +23,7 @@ from langchain_core.messages import (
     message_to_dict,
 )
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field, create_model
 
 from open_deep_research.agents.model_recovery import (
@@ -189,7 +189,7 @@ logger = logging.getLogger(__name__)
 
 def get_model_connection_kwargs(
     model_name: str,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> dict[str, str | None]:
     """Preserve the legacy patch point while delegating to shared resolution."""
     return _get_model_connection_kwargs(model_name, config)
@@ -197,7 +197,7 @@ def get_model_connection_kwargs(
 
 def _bind_run_context_fence(
     store: RunContextStore,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> RunContextStore:
     """Bind a context store to propagated Lead ownership when available."""
     metadata = config.get("metadata", {})
@@ -216,7 +216,7 @@ configurable_model = get_configurable_model_template()
 _MEMORY_MAINTENANCE_TASKS: set[asyncio.Task[Any]] = set()
 
 
-def _schedule_memory_maintenance(awaitable: Awaitable[Any], config: RunnableConfig) -> None:
+def _schedule_memory_maintenance(awaitable: Awaitable[Any], config: RuntimeConfig) -> None:
     """Keep a strong reference to advisory run-end maintenance until it finishes."""
     task = asyncio.create_task(awaitable, name="memory-run-end-maintenance")
     _MEMORY_MAINTENANCE_TASKS.add(task)
@@ -249,7 +249,7 @@ def _format_conversation_summary(summary: str | None) -> str:
     )
 
 
-def _query_compaction_enabled(configurable: Configuration, config: RunnableConfig) -> bool:
+def _query_compaction_enabled(configurable: Configuration, config: RuntimeConfig) -> bool:
     """Resolve new compaction configuration with legacy-field compatibility."""
     raw = config.get("configurable", {})
     if "query_context_compaction_enabled" in raw:
@@ -292,7 +292,7 @@ async def compact_query_context(
     *,
     research_brief: str,
     channel: Literal["lead", "supervisor"],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> dict[str, Any] | None:
     """Compact a Query channel while preserving the complete research brief."""
     configurable = Configuration.from_runnable_config(config)
@@ -424,7 +424,7 @@ async def compact_query_context(
 
 
 async def summarize_messages(
-    state: AgentState, config: RunnableConfig,
+    state: AgentState, config: RuntimeConfig,
 ) -> Command[Literal["memory_recall"]]:
     """Compact long main-graph message histories into a running summary."""
     configurable = Configuration.from_runnable_config(config)
@@ -503,7 +503,7 @@ def _format_memory_context(results: list[dict], profiles: list[dict] | None = No
 
 
 async def memory_recall(
-    state: AgentState, config: RunnableConfig,
+    state: AgentState, config: RuntimeConfig,
 ) -> Command[Literal["clarify_with_user"]]:
     """Recall relevant long-term memories at the start of research.
 
@@ -720,7 +720,7 @@ async def memory_recall(
     )
 
 
-async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
+async def clarify_with_user(state: AgentState, config: RuntimeConfig) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
     This function determines whether the user's request needs clarification before proceeding
@@ -1064,7 +1064,7 @@ def _canonicalize_supervisor_tool_call_requirements(
     return normalized_calls
 
 
-async def write_research_brief(state: AgentState, config: RunnableConfig) -> Command[Literal["research_supervisor"]]:
+async def write_research_brief(state: AgentState, config: RuntimeConfig) -> Command[Literal["research_supervisor"]]:
     """Transform user messages into a structured research brief and initialize supervisor.
     
     This function analyzes the user's messages and generates a focused research brief
@@ -1201,7 +1201,7 @@ async def write_research_brief(state: AgentState, config: RunnableConfig) -> Com
     )
 
 
-async def supervisor(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor_tools"]]:
+async def supervisor(state: SupervisorState, config: RuntimeConfig) -> Command[Literal["supervisor_tools"]]:
     """Lead research supervisor that plans research strategy and delegates to researchers.
     
     The supervisor analyzes the research brief and decides how to break down the research
@@ -1374,7 +1374,7 @@ def fetch_budget_exhausted_iteration_streak(iterations: Any) -> int:
     return streak
 
 
-async def search_provider_exhausted_streak(config: RunnableConfig) -> int:
+async def search_provider_exhausted_streak(config: RuntimeConfig) -> int:
     """Count trailing completed tasks that yielded zero sources on provider errors.
 
     A deterministic early-stop signal: when consecutive handoffs finished
@@ -1415,7 +1415,7 @@ async def search_provider_exhausted_streak(config: RunnableConfig) -> int:
     return streak
 
 
-async def fetch_budget_exhausted_task_streak(config: RunnableConfig) -> int:
+async def fetch_budget_exhausted_task_streak(config: RuntimeConfig) -> int:
     """Count trailing tasks stopped by a deterministic run fetch-budget wall.
 
     Candidate discovery can still produce many source URLs after the physical
@@ -1460,7 +1460,7 @@ async def fetch_budget_exhausted_task_streak(config: RunnableConfig) -> int:
         streak += 1
     return streak
 
-async def has_unfinished_async_tasks(config: RunnableConfig) -> bool:
+async def has_unfinished_async_tasks(config: RuntimeConfig) -> bool:
     """Return whether any async research task is still pending or active."""
     configurable = Configuration.from_runnable_config(config)
     if not configurable.enable_async_research:
@@ -1475,7 +1475,7 @@ async def has_unfinished_async_tasks(config: RunnableConfig) -> bool:
 
 async def drain_unfinished_async_tasks(
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     configurable: Configuration,
     publisher: Any,
     *,
@@ -1503,7 +1503,7 @@ async def drain_unfinished_async_tasks(
 
 
 async def finalize_interrupted_task_snapshots(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     reason: str,
 ) -> None:
@@ -1522,7 +1522,7 @@ async def finalize_interrupted_task_snapshots(
         snapshot.version += 1
         snapshot.fence_token = int(config.get("metadata", {}).get("run_fence_token", snapshot.fence_token))
         await store.upsert(snapshot)
-        task_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+        task_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
         task_config["metadata"] = {
             **(config.get("metadata") or {}),
             "task_id": task_id,
@@ -1627,7 +1627,7 @@ def _admission_verdict(
 
 async def _admit_completed_tasks_from_messages(
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     configurable: Configuration,
     publisher: Any,
@@ -1684,7 +1684,7 @@ async def _admit_completed_tasks_from_messages(
 
 async def _claim_and_admit_task_updates(
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     configurable: Configuration,
     publisher: Any,
@@ -1946,7 +1946,7 @@ async def _admit_completed_async_output(
     output: dict[str, Any],
     *,
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     configurable: Configuration,
     publisher: Any,
     snapshot: Any = None,
@@ -1964,7 +1964,7 @@ async def _admit_completed_async_output(
         admission_status = AdmissionStatus.ACCEPTED.value
         if snapshot is None:
             snapshot = await store.get(task_id, run_id=run_id)
-        task_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+        task_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
         task_config["metadata"] = {
             **(config.get("metadata") or {}),
             "task_id": task_id,
@@ -2254,7 +2254,7 @@ def _assemble_async_admission_update(
 
 async def _finalize_async_research_outputs(
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     configurable: Configuration,
     publisher: Any,
 ) -> dict[str, Any]:
@@ -2374,7 +2374,7 @@ def _research_wave_id(supervisor_messages: Iterable[BaseMessage]) -> str:
 
 async def _execute_supervisor_tools(
     state: SupervisorState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     committed_outcomes: Mapping[str, GovernedToolCallResult] | None = None,
     on_committed: Callable[
@@ -2554,7 +2554,7 @@ async def _execute_supervisor_tools(
     async def execute_one(tool_call: dict[str, Any]):
         if str(tool_call["id"]) in blocked_research:
             return blocked_research[str(tool_call["id"])]
-        call_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+        call_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
         call_config["metadata"] = {
             **(config.get("metadata") or {}),
             "research_wave_id": wave_id,
@@ -2789,7 +2789,7 @@ async def _execute_supervisor_tools(
                 coverage_contract
                 or quality_handoff.get("coverage_contract")
             )
-            task_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+            task_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
             task_config["metadata"] = {
                 **(config.get("metadata") or {}),
                 "task_id": str(call["id"]),
@@ -2971,7 +2971,7 @@ async def _execute_supervisor_tools(
                 visible_result,
                 limit=configurable.public_event_source_limit,
             )
-        task_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+        task_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
         task_config["metadata"] = {
             **(config.get("metadata") or {}),
             "task_id": str(call["id"]),
@@ -3363,7 +3363,7 @@ async def _execute_supervisor_tools(
     return Command(goto="supervisor", update=update_payload)
 
 
-async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Command[Literal["supervisor", "__end__"]]:
+async def supervisor_tools(state: SupervisorState, config: RuntimeConfig) -> Command[Literal["supervisor", "__end__"]]:
     """Execute supervisor calls through the unified Tool runtime."""
     return await _execute_supervisor_tools(state, config)
 
@@ -3371,7 +3371,7 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
 def build_researcher_system_prompt(
     configurable: Configuration,
     tools: list[Tool] | None = None,
-    config: RunnableConfig | None = None,
+    config: RuntimeConfig | None = None,
 ) -> str:
     """Build the role prompt shared by legacy and unified Researcher runtimes."""
     tool_prompt_parts = [configurable.mcp_prompt or ""]
@@ -3390,7 +3390,7 @@ def build_researcher_system_prompt(
     )
 
 
-async def researcher(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher_tools"]]:
+async def researcher(state: ResearcherState, config: RuntimeConfig) -> Command[Literal["researcher_tools"]]:
     """Individual researcher that conducts focused research on specific topics.
     
     This researcher is given a specific research topic by the supervisor and uses
@@ -3486,7 +3486,7 @@ async def prepare_researcher_tool_outcomes(
     tool_calls: list[dict[str, Any]],
     tool_outcomes: list[GovernedToolCallResult],
     tools_by_name: dict[str, Tool],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> tuple[list[ToolMessage], dict[str, Any]]:
     """Apply Researcher security and evidence policies to a governed tool batch."""
     configurable = Configuration.from_runnable_config(config)
@@ -3660,7 +3660,7 @@ async def prepare_researcher_tool_outcomes(
     }
 
 
-async def researcher_tools(state: ResearcherState, config: RunnableConfig) -> Command[Literal["researcher", "assess_research_results", "compress_research"]]:
+async def researcher_tools(state: ResearcherState, config: RuntimeConfig) -> Command[Literal["researcher", "assess_research_results", "compress_research"]]:
     """Execute tools called by the researcher, including search tools and strategic thinking.
 
     This function handles various types of researcher tool calls:
@@ -3878,7 +3878,7 @@ def _bounded_assessment_feedback(
 
 async def assess_research_results(
     state: ResearcherState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> Command[Literal["researcher", "compress_research"]]:
     """Apply a provider-neutral JSON quality decision before routing."""
     configurable = Configuration.from_runnable_config(config)
@@ -4416,7 +4416,7 @@ def _deterministic_compression_fallback(state: ResearcherState) -> str:
 
 def _compression_metrics(
     state: ResearcherState,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> dict[str, int]:
     """Calculate stable task metrics for either model or fallback compression."""
     tool_messages = [
@@ -4462,7 +4462,7 @@ def _compression_metrics(
     return metrics
 
 
-async def compress_research(state: ResearcherState, config: RunnableConfig):
+async def compress_research(state: ResearcherState, config: RuntimeConfig):
     """Compress and synthesize research findings into a concise, structured summary.
     
     This function takes all the research findings, tool outputs, and AI messages from
@@ -4601,7 +4601,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
                     if max_tokens_override is not None and not thinking_enabled:
                         model_config["max_tokens"] = max_tokens_override
                     model = configurable_model.with_config(
-                        cast(RunnableConfig, model_config)
+                        cast(RuntimeConfig, model_config)
                     )
                     return await asyncio.wait_for(
                         invoke_model_with_retry_observability(
@@ -4775,7 +4775,7 @@ async def compress_research(state: ResearcherState, config: RunnableConfig):
         }
     raise RuntimeError("research_compression_failed_after_retries") from last_error
 
-async def final_report_generation(state: AgentState, config: RunnableConfig):
+async def final_report_generation(state: AgentState, config: RuntimeConfig):
     """Generate the final research report.
 
     Delegates to the registry-based report product system
@@ -4791,7 +4791,7 @@ async def final_report_generation(state: AgentState, config: RunnableConfig):
 
 
 async def memory_extract_and_write(
-    state: AgentState, config: RunnableConfig,
+    state: AgentState, config: RuntimeConfig,
 ) -> Command[Literal["__end__"]]:
     """Extract memory candidates from user messages and write to mem0.
 
@@ -5011,7 +5011,7 @@ async def memory_extract_and_write(
     )
 
 
-async def restore_async_research_tasks(config: RunnableConfig) -> None:
+async def restore_async_research_tasks(config: RuntimeConfig) -> None:
     """Recreate async task records from checkpoints and completed task artifacts."""
     from open_deep_research.run_context import RunContextStore
 

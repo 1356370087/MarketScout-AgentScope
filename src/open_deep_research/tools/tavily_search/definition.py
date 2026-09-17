@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated, Literal
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import InjectedToolArg, tool
 
 from open_deep_research.configuration import Configuration, SearchAPI
@@ -21,7 +21,7 @@ from open_deep_research.tools.web_research import pipeline
 @tool("tavily_search", description=DESCRIPTION)
 async def _tavily_search_call(
     queries: list[str],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     max_results: Annotated[int, InjectedToolArg] = 5,
     topic: Annotated[
         Literal["general", "news", "finance"], InjectedToolArg

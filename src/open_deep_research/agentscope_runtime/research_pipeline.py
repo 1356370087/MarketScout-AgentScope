@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import UTC, datetime
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal, Protocol
@@ -70,10 +71,13 @@ class ResearchSnapshot(BaseModel):
     findings: list[dict] = Field(default_factory=list)
     outline: str = ""
     final_report: str = ""
+    report_product: dict = Field(default_factory=dict)
+    report_date: str = Field(default_factory=lambda: datetime.now(UTC).date().isoformat())
     pending: PendingDecision | None = None
     decisions: dict[str, str] = Field(default_factory=dict)
     feedback: list[str] = Field(default_factory=list)
     agent_states: dict = Field(default_factory=dict)
+    application: dict = Field(default_factory=dict)
     error: str | None = None
     revision_count: int = 0
     approvals: dict = Field(default_factory=dict)
@@ -330,6 +334,10 @@ class ResearchPipeline:
                 "cancelled",
                 "failed",
             }:
+                if self.recovery:
+                    await self.recovery.consume_decisions(self, locked=True)
+                if self.state.status in {"cancelled", "failed"}:
+                    break
                 stage = STAGES[len(self.state.completed)]
                 started = self.state.model_copy(deep=True)
                 started.status, started.inflight = "running", stage

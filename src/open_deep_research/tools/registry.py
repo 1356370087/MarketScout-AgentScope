@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterable, cast
+from typing import Iterable, cast
 
-if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
-else:
-    RunnableConfig = dict[str, Any]
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.documents.contracts import SourceMode, selection_from_config
@@ -77,7 +74,7 @@ class ToolAssembly:
     guidance: str
 
 
-def render_tool_guidance(tools: Iterable[Tool], config: RunnableConfig) -> str:
+def render_tool_guidance(tools: Iterable[Tool], config: RuntimeConfig) -> str:
     """Render detailed guidance for exactly the tools exposed to the model."""
     sections = []
     for tool in tools:
@@ -104,7 +101,7 @@ async def get_search_tool(search_api: SearchAPI) -> list[Tool]:
 
 async def assemble_toolset(
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     supervisor_tools: Iterable[Tool] | None = None,
 ) -> list[Tool]:
@@ -258,7 +255,7 @@ async def assemble_toolset(
 
 async def prepare_toolset(
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     supervisor_tools: Iterable[Tool] | None = None,
 ) -> ToolAssembly:
@@ -270,7 +267,7 @@ async def prepare_toolset(
 async def prepare_existing_toolset(
     tools: Iterable[Tool],
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> ToolAssembly:
     """Permission-filter and project an already assembled toolset."""
     candidate_tools = list(tools)
@@ -310,14 +307,14 @@ async def prepare_existing_toolset(
     )
 
 
-async def get_all_tools(config: RunnableConfig) -> list[Tool]:
+async def get_all_tools(config: RuntimeConfig) -> list[Tool]:
     """Compatibility name for researcher tool assembly."""
     return await assemble_toolset(AgentRole.RESEARCHER, config)
 
 
 async def bindable_definitions(
     role: AgentRole,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     supervisor_tools: Iterable[Tool] | None = None,
 ) -> list[dict]:

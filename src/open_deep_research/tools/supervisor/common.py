@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field, create_model
 
 from open_deep_research.configuration import Configuration
@@ -20,7 +20,7 @@ from open_deep_research.tools.base import ToolContext
 
 def bind_run_context_fence(
     store: RunContextStore,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> RunContextStore:
     """Bind a context store to propagated Lead ownership when available."""
     metadata = config.get("metadata", {})

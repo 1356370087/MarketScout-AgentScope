@@ -7,15 +7,19 @@
 import asyncio
 import json
 import os
+from contextlib import aclosing, suppress
 from pathlib import Path
 
-import httpx2
+import httpx
 from dotenv import dotenv_values
 from pydantic import BaseModel
 from agentscope.credential import OpenAICredential
 from agentscope.message import UserMsg
 from open_deep_research.agentscope_runtime.gateway import LiteLLMChatModel
-from open_deep_research.agentscope_runtime.model_policy import recover_output, ModelCallPolicy
+from open_deep_research.agentscope_runtime.model_policy import (
+    recover_output,
+    ModelCallPolicy,
+)
 
 
 class Answer(BaseModel):
@@ -25,14 +29,20 @@ class Answer(BaseModel):
 async def main():
     selected = set(
         os.environ.get(
-            "AS_LIVE_CHECKS", "plain,stream,structured,recovery,disconnect"
+            "AS_LIVE_CHECKS", "plain,stream,structured,recovery,disconnect,cancel"
         ).split(",")
     )
     config = dotenv_values(".env")
     base = config.get("LITELLM_BASE_URL", "").rstrip("/")
     key = config.get("LITELLM_SERVICE_KEY")
     route = config.get("LITELLM_SUMMARIZATION_MODEL", "if-summarization-v1")
-    result = {"source": ".env", "route": route, "checks": [], "real_model_calls": 0}
+    result = {
+        "source": ".env",
+        "route": route,
+        "transport": "httpx",
+        "checks": [],
+        "real_model_calls": 0,
+    }
 
     # asyncio.run 在 main 返回后关闭遗留生成器；保留退出阶段错误，避免只看
     # HTTP 结果就把偶发清理错误漏记为通过。回调仅用于本独立探针进程。
@@ -46,7 +56,9 @@ async def main():
     if not base or not key:
         result["blocker"] = "missing_gateway_configuration"
         return result
-    async with httpx2.AsyncClient(trust_env=False, timeout=45) as client:
+    # 与 ModelFactory 的 OpenAI 默认传输及 NativeGatewayProvider 保持一致。
+    # 显式注入 httpx2 会引入生产路径未使用的字节流生命周期。
+    async with httpx.AsyncClient(trust_env=False, timeout=45) as client:
         try:
             response = await client.get(
                 base + "/models", headers={"Authorization": "Bearer " + key}
@@ -168,18 +180,38 @@ async def main():
             result["real_model_calls"] += 1
             return await current_model(messages)
 
-        if "disconnect" in selected:
+        for shutdown_mode in ("disconnect", "cancel"):
+            if shutdown_mode not in selected:
+                continue
+            attempts.clear()
             try:
                 stream = await ModelCallPolicy([model], attempts=3).invoke(
                     handler,
                     {"messages": [UserMsg("user", "Write the numbers 1 through 100.")]},
                     {},
                 )
-                await anext(stream)
-                await stream.aclose()
+                if shutdown_mode == "disconnect":
+                    await anext(stream)
+                    await stream.aclose()
+                else:
+                    started = asyncio.Event()
+
+                    async def consume():
+                        async with aclosing(stream):
+                            await anext(stream)
+                            started.set()
+                            await asyncio.Event().wait()
+
+                    task = asyncio.create_task(consume())
+                    try:
+                        await asyncio.wait_for(started.wait(), timeout=45)
+                    finally:
+                        task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await task
                 result["checks"].append(
                     {
-                        "name": "stream_consumer_disconnect",
+                        "name": "stream_consumer_" + shutdown_mode,
                         "passed": len(attempts) == 1,
                         "attempts": len(attempts),
                     }
@@ -187,7 +219,7 @@ async def main():
             except Exception as error:
                 result["checks"].append(
                     {
-                        "name": "stream_consumer_disconnect",
+                        "name": "stream_consumer_" + shutdown_mode,
                         "passed": False,
                         "error_type": type(error).__name__,
                         "reason": str(error)
@@ -200,7 +232,12 @@ async def main():
 
 if __name__ == "__main__":
     output = asyncio.run(main())
-    path = Path("docs/agentscope-migration/implementation/m3-litellm-live.json")
+    path = Path(
+        os.environ.get(
+            "AS_LIVE_OUTPUT",
+            "docs/agentscope-migration/implementation/m3-litellm-live.json",
+        )
+    )
     path.write_text(
         json.dumps(output, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

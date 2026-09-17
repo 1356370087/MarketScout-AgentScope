@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import tool
 
 from open_deep_research.configuration import Configuration
@@ -20,7 +20,7 @@ async def _web_research_call(
     objective: str,
     queries: list[str],
     iteration: int = 1,
-    config: RunnableConfig = None,
+    config: RuntimeConfig = None,
 ) -> str:
     """Run bounded Search -> Top-K Fetch -> Evidence stages."""
     configurable = Configuration.from_runnable_config(config)

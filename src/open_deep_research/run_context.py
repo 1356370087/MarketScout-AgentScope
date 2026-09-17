@@ -12,17 +12,12 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Optional, TypeAlias
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 
 import portalocker
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    ToolMessage,
-    message_to_dict,
-    messages_from_dict,
-)
-from langchain_core.messages.utils import count_tokens_approximately
 from pydantic import BaseModel, Field
 
 from open_deep_research.models.credentials import RunKeyMetadata
@@ -552,6 +547,7 @@ class RunContextStore:
             return manifest
 
     async def _encode(self, value: Any, artifact_refs: list[str]) -> Any:
+        from langchain_core.messages import BaseMessage, message_to_dict
         if isinstance(value, BaseMessage):
             serialized = message_to_dict(value)
             content = serialized.get("data", {}).get("content", "")
@@ -579,6 +575,7 @@ class RunContextStore:
         return _sanitize(value)
 
     def _decode(self, value: Any) -> Any:
+        from langchain_core.messages import messages_from_dict
         if isinstance(value, dict):
             if "__message__" in value:
                 return messages_from_dict([value["__message__"]])[0]
@@ -857,6 +854,8 @@ class RunContextStore:
 
     def build_projection(self, channel: Literal["lead", "supervisor"], token_budget: int) -> dict[str, Any]:
         """Return the latest durable summary and recent messages for a channel."""
+        from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+        from langchain_core.messages.utils import count_tokens_approximately
         records = [record for record in self._read_records() if record.channel == channel]
         latest_summary: Optional[str] = None
         summary_seq = 0

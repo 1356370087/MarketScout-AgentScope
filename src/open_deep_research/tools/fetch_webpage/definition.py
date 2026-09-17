@@ -5,7 +5,7 @@ from __future__ import annotations
 from urllib.parse import urljoin, urlsplit
 
 import aiohttp
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import ToolException, tool
 
 from open_deep_research.configuration import Configuration
@@ -33,7 +33,7 @@ async def _fetch_webpage_call(
     url: str,
     max_chars: int = 20_000,
     summarize: bool = True,
-    config: RunnableConfig = None,
+    config: RuntimeConfig = None,
 ) -> str:
     """Fetch a known URL and return its optionally summarized text content."""
     configurable = Configuration.from_runnable_config(config)

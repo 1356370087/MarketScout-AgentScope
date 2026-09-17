@@ -11,7 +11,7 @@ import time
 from typing import Any, Callable, Coroutine, Optional
 
 from langchain_core.messages import HumanMessage, message_to_dict
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import (
@@ -34,7 +34,7 @@ from open_deep_research.tasks.state import get_task_state_store
 
 # A callable that invokes the researcher subgraph and returns its output dict.
 ExecuteResearchFn = Callable[
-    [dict[str, Any], RunnableConfig],
+    [dict[str, Any], RuntimeConfig],
     Coroutine[Any, Any, dict[str, Any]],
 ]
 
@@ -64,7 +64,7 @@ def _emit_event(
         writer.close()
 
 
-def _run_fence_token(config: RunnableConfig) -> int:
+def _run_fence_token(config: RuntimeConfig) -> int:
     """Return the ownership epoch propagated by the run orchestrator."""
     value = (config.get("metadata") or {}).get("run_fence_token", 0)
     return int(value or 0)
@@ -72,7 +72,7 @@ def _run_fence_token(config: RunnableConfig) -> int:
 
 async def _emit_state_change(
     task_record: TaskRecord,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     event_type: EventType,
     runs_dir: str,
@@ -315,7 +315,7 @@ async def _emit_state_change(
 
 async def emit_task_state_change(
     task_record: TaskRecord,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     event_type: EventType,
     runs_dir: str,
@@ -344,13 +344,13 @@ async def emit_task_state_change(
     )
 
 
-def _config_with_task_id(config: RunnableConfig, task_id: str) -> RunnableConfig:
+def _config_with_task_id(config: RuntimeConfig, task_id: str) -> RuntimeConfig:
     """Return a shallow copy of *config* with ``metadata["task_id"]`` set.
 
     Lets the tool-governance egress check locate the exact ``TaskRecord`` to
     pause for a domain decision, without mutating the caller's config.
     """
-    new_config: RunnableConfig = dict(config)  # type: ignore[assignment]
+    new_config: RuntimeConfig = dict(config)  # type: ignore[assignment]
     new_config["metadata"] = {
         **(config.get("metadata") or {}),
         "task_id": task_id,
@@ -371,7 +371,7 @@ def _clear_run_approvals_if_idle(registry: TaskRegistry, run_id: str) -> None:
 
 async def run_task(
     task_record: TaskRecord,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     registry: TaskRegistry,
     execute_research: ExecuteResearchFn,
     *,
@@ -519,7 +519,7 @@ async def run_task(
 
 async def run_task_with_control(
     task_record: TaskRecord,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     registry: TaskRegistry,
     execute_research: ExecuteResearchFn,
     *,

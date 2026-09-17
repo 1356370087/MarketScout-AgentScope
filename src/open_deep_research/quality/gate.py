@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
+    from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
@@ -293,7 +293,7 @@ machine-readable failure codes, requirement/evidence IDs, and source URLs remain
 """
 
 
-def _record_quality_scores(prefix: str, result: BaseModel, config: RunnableConfig) -> None:
+def _record_quality_scores(prefix: str, result: BaseModel, config: RuntimeConfig) -> None:
     """Attach bounded quality scores to the active research/supervisor span."""
     span = get_trace_recorder(config).active_span()
     payload = result.model_dump()
@@ -391,7 +391,7 @@ Propose rejected for unsupported exclusive requirements, unsupported factual cla
 """
 
 
-def _build_quality_model(configurable: Configuration, config: RunnableConfig):
+def _build_quality_model(configurable: Configuration, config: RuntimeConfig):
     """Create a provider-isolated evaluator model.
 
     DashScope Qwen receives its documented thinking and JSON-mode options.
@@ -605,7 +605,7 @@ def _bounded_quality_payload(
 def _quality_activity_dedupe_key(
     research_topic: str,
     tool_results: list[dict[str, Any]],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> str:
     """Build an idempotent key for replaying the same quality evaluation."""
     identity = {
@@ -631,7 +631,7 @@ async def _evaluate_json(
     schema: type[BaseModel],
     system_prompt: str,
     payload: dict[str, Any],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     span_name: str,
     protocol_validator: Callable[[BaseModel], list[str]] | None = None,
@@ -1912,7 +1912,7 @@ def _handoff_protocol_errors(
 async def _exclusive_requirement_ids(
     owned: tuple[str, ...],
     *,
-    config: RunnableConfig,
+    config: RuntimeConfig,
     configurable: Configuration,
     handoff: dict[str, Any],
 ) -> tuple[str, ...]:
@@ -2026,7 +2026,7 @@ def _protocol_errors_from_exception(exc: Exception) -> list[str]:
 def _attach_quality_provenance(
     result: ToolResultAssessment | HandoffAssessment,
     configurable: Configuration,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> None:
     """Attach non-secret model/policy provenance to every persisted assessment."""
     metadata = config.get("metadata", {})
@@ -2046,7 +2046,7 @@ def _attach_quality_provenance(
 
 def _quality_policy(
     configurable: Configuration,
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> QualityRigorPolicy:
     """Resolve current thresholds while preserving frozen v2 run semantics."""
     configurable_values = config.get("configurable", {})
@@ -2066,7 +2066,7 @@ def _quality_policy(
 async def evaluate_tool_results(
     research_topic: str,
     tool_results: list[dict[str, Any]],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     evidence_registry: list[dict[str, Any]] | None = None,
     coverage_contract: ResearchCoverageContract | dict[str, Any] | None = None,
@@ -2375,7 +2375,7 @@ def _worker_budget_telemetry(handoff: dict[str, Any]) -> dict[str, Any]:
 async def evaluate_subagent_handoff(
     research_topic: str,
     handoff: dict[str, Any],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     coverage_contract: ResearchCoverageContract | dict[str, Any] | None = None,
     requirement_ids: list[str] | tuple[str, ...] | None = None,

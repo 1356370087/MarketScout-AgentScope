@@ -6,7 +6,7 @@ import secrets
 import time
 import uuid
 from contextvars import ContextVar
-from contextlib import aclosing
+from contextlib import aclosing, contextmanager
 from copy import copy
 from dataclasses import dataclass, field
 import httpx
@@ -24,6 +24,19 @@ from agentscope.model import (
     OpenAIChatModel,
 )
 from open_deep_research.sandbox.wire import GatewayModelRequestV2, GatewayModelOutcomeV2
+
+
+_operation_scope = ContextVar("native_gateway_operation", default=None)
+
+
+@contextmanager
+def gateway_operation_scope(key):
+    """Keep physical request identities stable when a journaled stage replays."""
+    token = _operation_scope.set([key, 0])
+    try:
+        yield
+    finally:
+        _operation_scope.reset(token)
 
 
 class GatewayCallError(RuntimeError):
@@ -90,7 +103,15 @@ class SandboxChatModel(ChatModelBase):
     async def _request(
         self, messages, tools=None, tool_choice=None, structured_schema=None, **kwargs
     ):
-        operation_id = kwargs.pop("logical_operation_id", None) or uuid.uuid4().hex
+        operation_id = kwargs.pop("logical_operation_id", None)
+        scope = _operation_scope.get()
+        if operation_id is None and scope is not None:
+            operation_id = uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"{self._binding.run_id}:{scope[0]}:{scope[1]}",
+            ).hex
+            scope[1] += 1
+        operation_id = operation_id or uuid.uuid4().hex
         if set(kwargs) - {"max_tokens", "temperature"}:
             raise ValueError("unsupported sandbox model options")
         binding = self._binding
@@ -162,6 +183,10 @@ class SandboxChatModel(ChatModelBase):
         ):
             raise GatewayCallError("sandbox_gateway_response_mismatch", uncertain=True)
         if outcome.status != "completed":
+            if (outcome.error_code or "").startswith("budget_exhausted:"):
+                from open_deep_research.budgets import BudgetDimension, BudgetExhausted
+
+                raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
             raise GatewayCallError(
                 "sandbox_gateway_operation_not_completed", uncertain=True
             )
@@ -330,13 +355,20 @@ class GovernedModelMixin:
             return result
 
         async def stream():
-            token = self._call_metadata.set(metadata)
             try:
-                async for chunk in result:
+                while True:
+                    # 首包探测与消费/取消可能位于不同 Task。ContextVar token
+                    # 不能跨 yield 留存，否则关闭时会在另一 Context 中 reset。
+                    token = self._call_metadata.set(metadata)
+                    try:
+                        chunk = await anext(result)
+                    except StopAsyncIteration:
+                        break
+                    finally:
+                        self._call_metadata.reset(token)
                     chunk.metadata.update(metadata)
                     yield chunk
             finally:
-                self._call_metadata.reset(token)
                 await result.aclose()
                 for source in reversed(streams):
                     await source.aclose()

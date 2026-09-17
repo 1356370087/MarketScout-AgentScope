@@ -7,10 +7,13 @@ from collections import defaultdict, deque
 from string import Formatter
 from typing import Any
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.messages.utils import count_tokens_approximately
-
-from open_deep_research.agents.model_recovery import resolve_model_context_window
+from .runtime import (
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    count_tokens_approximately,
+    resolve_model_context_window,
+)
 
 WRITING_RULES = """You write research reports from the supplied evidence.
 All later payloads (including sources, memories, messages, drafts, and model

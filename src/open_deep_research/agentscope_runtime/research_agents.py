@@ -92,6 +92,11 @@ class _Thought(BaseModel):
     reflection: str
 
 
+class _TeamMessage(BaseModel):
+    to: str
+    content: str
+
+
 class _Completion(MiddlewareBase):
     """A domain completion signal stops reasoning without another model request."""
 
@@ -167,7 +172,7 @@ class _Observations:
             if isinstance(records, dict):
                 records = list(records.values())
             candidates = source_scoped_evidence_records(records, self.contract)
-            if name not in {"think_tool", "ResearchComplete"}:
+            if name not in {"think_tool", "ResearchComplete", "TeamSay"}:
                 assessment = None
                 if self.quality:
                     assessment = await self.quality.batch(
@@ -240,7 +245,13 @@ class Researcher:
         self.quality = quality
 
     async def run(
-        self, assignment: ResearchAssignment, contract: dict, feedback: list[str] = ()
+        self,
+        assignment: ResearchAssignment,
+        contract: dict,
+        feedback: list[str] = (),
+        *,
+        coordination_tools=(),
+        worker_middlewares=(),
     ) -> ResearchHandoff:
         def scoped_config():
             config = self.config_provider()
@@ -276,6 +287,7 @@ class Researcher:
             ]
         tools = [
             *selected_tools,
+            *coordination_tools,
             _control_tool("ResearchComplete", _Empty, complete),
             _control_tool("think_tool", _Thought, think),
         ]
@@ -302,7 +314,15 @@ class Researcher:
             raise ValueError(
                 "quality evaluation enabled but no native assessor supplied"
             )
-        toolkit.result_observer = observations.capture
+
+        async def observe(name, call_id, outcome):
+            # Journal replay skips the handler; restore this local control flag
+            # from the committed result before the native loop reasons again.
+            if name == "ResearchComplete" and outcome.error is None:
+                completion.finished = True
+            await observations.capture(name, call_id, outcome)
+
+        toolkit.result_observer = observe
         toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
         agent = Agent(
@@ -319,6 +339,7 @@ class Researcher:
             context_config=ContextConfig(compression_tool_enabled=False),
             offloader=self.offloader,
             middlewares=[
+                *worker_middlewares,
                 *self.models.agent_middlewares("researcher", model),
                 completion,
                 ToolGovernanceMiddleware(),
@@ -403,6 +424,7 @@ class Supervisor:
         quality=None,
         completion_policy=False,
         budget_available=None,
+        team_workers=None,
     ):
         self.models, self.config_provider, self.researcher = (
             models,
@@ -411,6 +433,7 @@ class Supervisor:
         )
         self.quality, self.completion_policy = quality, completion_policy
         self.budget_available = budget_available or (lambda: True)
+        self.team_workers = team_workers
         self.run_id, self.offloader, self.context_chars = (
             run_id,
             offloader,
@@ -420,6 +443,12 @@ class Supervisor:
     async def run(
         self, brief: str, contract: dict, feedback: list[str] = ()
     ) -> tuple[list[dict], dict]:
+        if self.team_workers is not None:
+            with self.team_workers.recovery.task("supervisor"):
+                return await self._run(brief, contract, feedback)
+        return await self._run(brief, contract, feedback)
+
+    async def _run(self, brief, contract, feedback):
         cfg = Configuration.from_runnable_config(self.config_provider())
         coverage = ResearchCoverageContract.model_validate(contract)
         available_ids = list(coverage.delegable_requirement_ids())
@@ -511,9 +540,20 @@ class Supervisor:
         async def execute_inner(assignment):
             nonlocal ledger
             async with semaphore:
-                outcome = await self.researcher.run(assignment, contract, feedback)
+                outcome = (
+                    await self.team_workers.dispatch(assignment, contract, feedback)
+                    if self.team_workers is not None
+                    else await self.researcher.run(assignment, contract, feedback)
+                )
                 if self.quality and cfg.quality_evaluation_enabled:
-                    assessment = await self.quality.handoff(outcome, contract)
+                    if self.team_workers is not None:
+                        from open_deep_research.quality.gate import HandoffAssessment
+
+                        assessment = HandoffAssessment.model_validate(
+                            outcome.assessment["handoff"]
+                        )
+                    else:
+                        assessment = await self.quality.handoff(outcome, contract)
                     assessments[assignment.task_id] = assessment.model_dump(mode="json")
                     outcome.assessment["handoff"] = assessments[assignment.task_id]
                     if not assessment.accepted:
@@ -587,10 +627,23 @@ class Supervisor:
             return await task_list(input, context, progress)
 
         async def task_stop(input, context, progress):
+            if self.team_workers is not None:
+                await self.team_workers.stop(input.task_id)
             task = tasks[input.task_id]
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             return ToolResult(output=snapshot(input.task_id))
+
+        async def team_say(input, context, progress):
+            team = self.team_workers.team
+            return ToolResult(
+                output=await team.say(
+                    team.leader,
+                    "supervisor-say:" + context.tool_call_id,
+                    input.to,
+                    input.content,
+                )
+            )
 
         async def complete(input, context, progress):
             if any(not task.done() for task in tasks.values()):
@@ -624,6 +677,8 @@ class Supervisor:
                 _control_tool("WaitForTeamEvents", _Empty, task_wait),
                 _control_tool("TaskStop", _TaskId, task_stop),
             ]
+        if self.team_workers is not None:
+            tools.append(_control_tool("TeamSay", _TeamMessage, team_say))
         toolkit = await prepare_toolkit(
             tools,
             role=AgentRole.SUPERVISOR,
@@ -646,6 +701,11 @@ class Supervisor:
                 max_react_tool_calls=cfg.max_react_tool_calls,
             )
         model = self.models.agent_model("supervisor", "supervisor")
+        team_middlewares = []
+        if self.team_workers is not None:
+            from open_deep_research.agentscope_runtime.team_worker import LeaderInbox
+
+            team_middlewares.append(LeaderInbox(self.team_workers))
         agent = Agent(
             name="supervisor",
             model=model,
@@ -656,6 +716,7 @@ class Supervisor:
             context_config=ContextConfig(compression_tool_enabled=False),
             offloader=self.offloader,
             middlewares=[
+                *team_middlewares,
                 *self.models.agent_middlewares("supervisor", model),
                 completion,
                 ToolGovernanceMiddleware(),
@@ -685,6 +746,8 @@ class Supervisor:
             # Iteration exhaustion/no-tool completion must still join launched work.
             if tasks:
                 await asyncio.gather(*tasks.values(), return_exceptions=True)
+            if self.team_workers is not None:
+                await self.team_workers.consume_leader_inputs()
             recovery = getattr(self.models, "recovery", None)
             if recovery and recovery.problem:
                 raise recovery.problem

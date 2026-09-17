@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 import portalocker
-from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -397,7 +396,7 @@ class TaskActivityPublisher:
 
 
 def task_activity_store_from_config(
-    config: RunnableConfig | dict[str, Any],
+    config: dict[str, Any],
     task_id: str | None = None,
 ) -> TaskActivityStore | None:
     """Create a task-local store using run metadata in a runnable config."""
@@ -414,7 +413,7 @@ def task_activity_store_from_config(
 
 
 def task_activity_publisher_from_config(
-    config: RunnableConfig | dict[str, Any],
+    config: dict[str, Any],
     task_id: str | None = None,
 ) -> TaskActivityPublisher | None:
     """Create a fail-open publisher when run and task metadata are available."""
@@ -433,7 +432,7 @@ def gateway_physical_process() -> bool:
 
 
 async def _publish_via_internal_api(
-    config: RunnableConfig | dict[str, Any],
+    config: dict[str, Any],
     event_type: str,
     *,
     task_id: str | None,
@@ -483,7 +482,7 @@ async def _publish_via_internal_api(
 
 
 async def publish_task_activity(
-    config: RunnableConfig | dict[str, Any],
+    config: dict[str, Any],
     event_type: str,
     *,
     task_id: str | None = None,

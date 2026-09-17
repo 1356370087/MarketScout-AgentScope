@@ -16,6 +16,7 @@ from open_deep_research.models.resolution import (
 
 # 角色 -> 模型字段、空值回退字段、输出上限字段。
 ROLES = {
+    "memory": ("research_model", "research_model", "research_model_max_tokens"),
     "supervisor": ("supervisor_model", "research_model", "research_model_max_tokens"),
     "researcher": ("research_model", "research_model", "research_model_max_tokens"),
     "summarization": (
@@ -49,9 +50,9 @@ ROLES = {
         "report_review_model_max_tokens",
     ),
     "report_revisor": (
-        "report_review_model",
-        "quality_evaluation_model",
-        "report_review_model_max_tokens",
+        "final_report_model",
+        "final_report_model",
+        "final_report_model_max_tokens",
     ),
     "web_rerank": (
         "web_rerank_model",

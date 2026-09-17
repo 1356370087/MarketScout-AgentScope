@@ -7,7 +7,6 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
-    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
@@ -19,10 +18,7 @@ from typing import (
     runtime_checkable,
 )
 
-if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
-else:
-    RunnableConfig = dict[str, Any]
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel
 
 InputT = TypeVar("InputT", bound=BaseModel)
@@ -66,7 +62,7 @@ class ToolExecutionZone(str, Enum):
 class ToolContext:
     """Runtime facts shared with every tool invocation."""
 
-    config: RunnableConfig
+    config: RuntimeConfig
     role: str
     tool_call_id: str
     operation_id: str = ""
@@ -82,8 +78,8 @@ class ToolResult(Generic[OutputT]):
 
 ProgressCallback = Callable[[ProgressT], Union[Awaitable[None], None]]
 DescriptionFn = Callable[[Optional[InputT]], Union[str, Awaitable[str]]]
-PromptFn = Callable[[RunnableConfig], Optional[str]]
-EnabledFn = Callable[[RunnableConfig], bool]
+PromptFn = Callable[[RuntimeConfig], Optional[str]]
+EnabledFn = Callable[[RuntimeConfig], bool]
 EgressUrlsFn = Callable[[dict[str, Any]], list[str]]
 
 
@@ -131,11 +127,11 @@ class Tool(Protocol, Generic[InputT, OutputT, ProgressT_co]):
         """Return the per-tool serialized output budget, if configured."""
         ...
 
-    def prompt(self, config: RunnableConfig) -> Optional[str]:
+    def prompt(self, config: RuntimeConfig) -> Optional[str]:
         """Return detailed model guidance for this tool, if any."""
         ...
 
-    def is_enabled(self, config: RunnableConfig) -> bool:
+    def is_enabled(self, config: RuntimeConfig) -> bool:
         """Return whether this tool is enabled for the supplied run config."""
         ...
 
@@ -186,12 +182,12 @@ class BuiltTool(Generic[InputT, OutputT, ProgressT]):
             value = await value
         return str(value)
 
-    def prompt(self, config: RunnableConfig) -> Optional[str]:
+    def prompt(self, config: RuntimeConfig) -> Optional[str]:
         """Resolve detailed model guidance for the supplied run config."""
         value = self._prompt(config)
         return None if value is None else str(value)
 
-    def is_enabled(self, config: RunnableConfig) -> bool:
+    def is_enabled(self, config: RuntimeConfig) -> bool:
         """Resolve declarative availability for the supplied run config."""
         return bool(self._is_enabled(config))
 
@@ -261,12 +257,12 @@ def build_tool(
     if isinstance(prompt, str):
         static_prompt = prompt
 
-        def render_prompt(_: RunnableConfig) -> str:
+        def render_prompt(_: RuntimeConfig) -> str:
             return static_prompt
 
         prompt_fn: PromptFn = render_prompt
     elif prompt is None:
-        def no_prompt(_: RunnableConfig) -> None:
+        def no_prompt(_: RuntimeConfig) -> None:
             return None
 
         prompt_fn = no_prompt

@@ -99,23 +99,14 @@ async def _call_answer_model(question: str, evidence: list[dict[str, Any]]) -> d
         raise AnswerUnavailableError(str(exc)) from exc
     base_url = (os.getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
     try:
-        from openai import AsyncOpenAI
+        from open_deep_research.agentscope_runtime.service_models import service_text
 
-        client = AsyncOpenAI(base_url=base_url, api_key=service_key, timeout=120.0)
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": _evidence_prompt(question, evidence)},
-                ],
-            )
-        finally:
-            await client.close()
+        content = await service_text(model=model, api_key=service_key, base_url=base_url,
+            system=_SYSTEM_PROMPT, prompt=_evidence_prompt(question, evidence), timeout=120)
     except Exception as exc:  # noqa: BLE001 - distinct upstream failure code
         raise AnswerUnavailableError(f"answer_upstream_unavailable:{type(exc).__name__}") from exc
     try:
-        payload = json.loads(response.choices[0].message.content or "{}")
+        payload = json.loads(content or "{}")
     except ValueError as exc:
         raise AnswerUnavailableError("answer_invalid_response") from exc
     return payload if isinstance(payload, dict) else {}

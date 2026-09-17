@@ -15,34 +15,14 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, message_to_dict, messages_from_dict
-from langchain_core.messages.utils import count_tokens_approximately
 from pydantic import ConfigDict, Field
-
 from open_deep_research.configuration import Configuration
-from open_deep_research.models.codec import (
-    STRUCTURED_OUTPUT_TOOL_NAME,
-    decode_message,
+from open_deep_research.models.protocol_errors import ModelGatewayError
+from open_deep_research.agentscope_runtime.sandbox_provider import (
+    NativeGatewayProvider, STRUCTURED_OUTPUT_TOOL_NAME,
 )
-from open_deep_research.models.fallback import (
-    ModelErrorKind,
-    classify_model_error,
-    invoke_with_model_fallback,
-)
-from open_deep_research.models.gateway import (
-    LiteLLMModelGateway,
-    ModelGatewayError,
-    ModelRequest,
-    attach_result_metadata,
-)
-from open_deep_research.models.resolution import (
-    build_model_config,
-    get_configurable_model_template,
-)
-from open_deep_research.observability import (
-    apply_helicone_config,
-    invoke_model_with_retry_observability,
-)
+
+from open_deep_research.agentscope_runtime.sandbox_catalog import native_tools_scope
 from open_deep_research.sandbox.approvals import SecurityApproval, SecurityApprovalStore
 from open_deep_research.sandbox.crypto import (
     NonceReplayCache,
@@ -323,6 +303,7 @@ class RemoteBudgetGate:
         estimated_input_tokens: int,
         estimated_output_tokens: int,
         model_name: str,
+        request_digest: str | None = None,
     ) -> None:
         """Reserve one deterministic physical model attempt before dispatch."""
         self._counter += 1
@@ -342,6 +323,7 @@ class RemoteBudgetGate:
             model_name=model_name,
             estimated_input_tokens=max(1, estimated_input_tokens),
             estimated_output_tokens=max(1, estimated_output_tokens),
+            request_digest=request_digest,
         )
         self._enqueue("/internal/sandbox/budgets/reserve", request)
         transition = self.internal.signed(
@@ -400,8 +382,10 @@ class GatewayRuntime:
         self.keys = SandboxDerivedKeys.from_root(configurable.sandbox_root_signing_key or "")
         self.runs: dict[str, GatewayRunContext] = {}
         self.operation_locks: dict[tuple[str, str], asyncio.Lock] = {}
-        self.model_gateways: dict[str, LiteLLMModelGateway] = {}
+        self.model_gateways: dict[str, NativeGatewayProvider] = {}
         self.egress_classifiers: dict[str, EgressClassifier] = {}
+        self.native_fetch_ledgers = {}
+        self._native_model_app = None
         self._egress_classifier_locks: dict[str, asyncio.Lock] = {}
         self._egress_mode_cache: dict[str, tuple[float, str | None]] = {}
         self.nonces = NonceReplayCache()
@@ -551,11 +535,10 @@ class GatewayRuntime:
         for key in [key for key in self.operation_locks if key[0] == run_id]:
             self.operation_locks.pop(key, None)
         if clear_fetch_budget:
-            from open_deep_research.tools.web_research.pipeline import (
-                clear_run_web_budget,
-            )
+            from open_deep_research.web.pipeline import clear_run_web_cache
 
-            clear_run_web_budget(run_id)
+            self.native_fetch_ledgers.pop(run_id, None)
+            clear_run_web_cache(run_id)
         return context is not None
 
     def evict_expired_runs(self, *, now: float | None = None) -> list[str]:
@@ -688,6 +671,7 @@ class GatewayRuntime:
             ),
         )
 
+    @native_tools_scope
     async def tool_catalog(
         self,
         request: GatewayToolCatalogRequestV1,
@@ -702,7 +686,7 @@ class GatewayRuntime:
             AgentRole,
             filter_tools_by_permission,
         )
-        from open_deep_research.tools.registry import assemble_toolset
+        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
         role = AgentRole(request.role)
         assembled = await assemble_toolset(role, context.config)
@@ -1247,6 +1231,9 @@ class GatewayRuntime:
                     content=_wire_message_text(outcome.message),
                     served_model=outcome.served_model,
                 )
+            from langchain_core.messages import message_to_dict
+            from open_deep_research.models.codec import decode_message
+
             tools: list[dict[str, Any]] = []
             tool_choice: str | dict[str, Any] | bool | None = None
             if call.structured_schema is not None:
@@ -1412,13 +1399,14 @@ class GatewayRuntime:
             verdict = "deny"
         return EgressPrecheck(decision=verdict, source=result.detail or "classifier")
 
+    @native_tools_scope
     async def invoke_tool(
         self,
         request: GatewayToolRequestV1,
         context: GatewayRunContext,
     ) -> GatewayToolOutcomeV1:
         """Scope nested tool model calls to the authenticated Run's credential."""
-        from open_deep_research.models.gateway import bind_run_key, reset_run_key
+        from open_deep_research.models.credentials_context import bind_run_key, reset_run_key
 
         token = bind_run_key(context.api_keys.get("LITELLM_RUN_KEY", ""))
         try:
@@ -1434,9 +1422,9 @@ class GatewayRuntime:
         """Execute one authoritative Gateway-zone tool operation."""
         from open_deep_research.tools.governance import (
             AgentRole,
-            execute_governed_tool_call,
+            execute_governed_tool_call_native as execute_governed_tool_call,
         )
-        from open_deep_research.tools.registry import assemble_toolset
+        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
         if request.execution_zone != "gateway":
             return GatewayToolOutcomeV1(
@@ -1797,6 +1785,7 @@ class GatewayRuntime:
             output=governed.result.output if governed.result is not None else governed.message.content,
         )
 
+    @native_tools_scope
     async def authorize_local_tool(
         self,
         request: GatewayToolRequestV1,
@@ -1809,7 +1798,7 @@ class GatewayRuntime:
             AgentRole,
             filter_tools_by_permission,
         )
-        from open_deep_research.tools.registry import assemble_toolset
+        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
         if request.execution_zone != "sandbox_local":
             return GatewayToolOutcomeV1(
@@ -2036,12 +2025,16 @@ class GatewayRuntime:
                 configuration.quality_evaluation_model_max_tokens,
             ),
         }
+        mapping.update({
+            "web_rerank": (configuration.web_rerank_model or configuration.summarization_model, configuration.summarization_model_max_tokens),
+            "web_evidence": (configuration.web_evidence_model or configuration.summarization_model, configuration.summarization_model_max_tokens),
+        })
         if role not in mapping or not mapping[role][0]:
             raise ValueError(f"sandbox_gateway_unknown_model_role:{role}")
         return str(mapping[role][0]), int(mapping[role][1])
 
     @staticmethod
-    def _usage(message: AIMessage) -> dict[str, int]:
+    def _usage(message: Any) -> dict[str, int]:
         usage = getattr(message, "usage_metadata", None) or {}
         response_usage = message.response_metadata.get("token_usage", {})
         return {
@@ -2066,6 +2059,10 @@ class GatewayRuntime:
         context: GatewayRunContext,
     ) -> GatewayModelOutcomeV1:
         """Execute or recover one idempotent logical model operation."""
+        from langchain_core.messages import AIMessage, message_to_dict, messages_from_dict
+        from open_deep_research.models.fallback import ModelErrorKind, classify_model_error, invoke_with_model_fallback
+        from open_deep_research.models.resolution import build_model_config, get_configurable_model_template
+        from open_deep_research.observability import apply_helicone_config, invoke_model_with_retry_observability
         lookup = self.internal.signed(
             OperationGetRequest,
             run_id=request.run_id,
@@ -2292,6 +2289,7 @@ class GatewayRuntime:
             run_id=request.run_id,
             fence_token=context.fence_token,
             logical_operation_id=request.logical_operation_id,
+            request_digest=hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
         )
         existing = await self.internal.post("/internal/sandbox/operations/get", lookup)
         prior_attempt_count = 0
@@ -2309,8 +2307,8 @@ class GatewayRuntime:
                     error_code="model_operation_uncertain",
                 )
 
-        messages = [decode_message(item) for item in request.messages]
-        estimated_input = max(1, count_tokens_approximately(messages))
+        # Conservative reservation only; settlement uses the provider's measured usage.
+        estimated_input = max(1, len(json.dumps(request.messages, ensure_ascii=False).encode("utf-8")))
         estimated_output = max(1, int(request.max_output_tokens or 1024))
         budget = RemoteBudgetGate(
             internal=self.internal,
@@ -2324,7 +2322,7 @@ class GatewayRuntime:
         operation_key = f"gateway-v2:{request.logical_operation_id}"
         gateway = self.model_gateways.get(request.run_id)
         if gateway is None:
-            gateway = LiteLLMModelGateway(api_key=litellm_key)
+            gateway = NativeGatewayProvider(api_key=litellm_key)
             self.model_gateways[request.run_id] = gateway
         tools = list(request.tools)
         tool_choice = request.tool_choice
@@ -2348,6 +2346,7 @@ class GatewayRuntime:
                 "type": "function",
                 "function": {"name": STRUCTURED_OUTPUT_TOOL_NAME},
             }
+        dispatched = False
         try:
             # Reservation and dispatch journaling stay inside the try: any
             # escape path (Worker killed, transient internal 5xx, construction
@@ -2358,70 +2357,18 @@ class GatewayRuntime:
                 estimated_input_tokens=estimated_input,
                 estimated_output_tokens=estimated_output,
                 model_name=request.model,
+                request_digest=hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
             )
             await budget.flush_pending()
-            result = await gateway.complete(
-                ModelRequest(
-                    run_id=request.run_id,
-                    task_id=request.task_id,
-                    logical_operation_id=request.logical_operation_id,
-                    role=request.role,
-                    stage=request.stage,
-                    model=request.model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                    max_output_tokens=request.max_output_tokens,
-                    temperature=request.temperature,
-                    trace_metadata=request.trace_metadata,
-                )
-            )
-            response = attach_result_metadata(result)
+            dispatched = True
+            outcome = await gateway.complete(request.model_copy(update={"tools": tools, "tool_choice": tool_choice}))
             budget.settle_model_call(
                 operation_key,
-                input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens,
+                input_tokens=outcome.usage.get("input_tokens", 0),
+                output_tokens=outcome.usage.get("output_tokens", 0),
                 model_name=request.model,
             )
             await budget.flush_pending()
-            outcome = GatewayModelOutcomeV2(
-                logical_operation_id=request.logical_operation_id,
-                status="completed",
-                message={
-                    "role": "assistant",
-                    "content": response.content,
-                    "tool_calls": [
-                        {
-                            "id": call.get("id"),
-                            "type": "function",
-                            "function": {
-                                "name": call.get("name"),
-                                "arguments": json.dumps(
-                                    call.get("args") or {},
-                                    ensure_ascii=False,
-                                    separators=(",", ":"),
-                                ),
-                            },
-                        }
-                        for call in response.tool_calls
-                    ],
-                },
-                usage={
-                    "input_tokens": result.usage.input_tokens,
-                    "output_tokens": result.usage.output_tokens,
-                    "total_tokens": result.usage.total_tokens,
-                    "cached_input_tokens": result.usage.cached_input_tokens,
-                    "reasoning_tokens": result.usage.reasoning_tokens,
-                },
-                response_cost_usd=result.response_cost_usd,
-                request_id=result.request_id,
-                requested_model=result.route.requested_model,
-                served_model=result.route.served_model,
-                provider=result.route.provider,
-                deployment_id=result.route.deployment_id,
-                finish_reason=result.finish_reason,
-                latency_ms=result.latency_ms,
-            )
             if request.structured_schema is not None:
                 outcome.structured = _wire_structured_args(outcome.message)
             transition = self.internal.signed(
@@ -2463,14 +2410,21 @@ class GatewayRuntime:
                 )
             raise
         except Exception as exc:
-            uncertain = isinstance(exc, ModelGatewayError) and exc.code in {
-                "gateway_unavailable",
-                "gateway_connection_failed",
+            # Once dispatched, only an explicit provider rejection proves that
+            # no billable response was produced. Transport/receipt failures do not.
+            definite_rejection = isinstance(exc, ModelGatewayError) and exc.code in {
+                "invalid_request", "authentication", "model_unavailable",
+                "budget_or_rate_limit", "gateway_budget_exceeded",
             }
+            uncertain = dispatched and not definite_rejection
             budget.fail_model_call(operation_key, uncertain=uncertain)
             with suppress(httpx.HTTPError, ValueError, KeyError):
                 await budget.flush_pending()
             error_code = exc.code if isinstance(exc, ModelGatewayError) else "gateway_model_failed"
+            if not dispatched and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+                detail = exc.response.json().get("detail", "")
+                if isinstance(detail, str) and detail.startswith("budget_exhausted:"):
+                    error_code = detail
             outcome = GatewayModelOutcomeV2(
                 logical_operation_id=request.logical_operation_id,
                 status="uncertain" if uncertain else "failed",
@@ -2712,6 +2666,7 @@ def create_gateway_app(
         "/v1/tools/catalog",
         response_model=GatewayToolCatalogOutcomeV1,
     )
+    @native_tools_scope
     async def tool_catalog(
         request: GatewayToolCatalogRequestV1,
         authorization: str = Header(default="", alias="Authorization"),
@@ -2751,6 +2706,7 @@ def create_gateway_app(
         ))
 
     @app.post("/v1/tools/call", response_model=GatewayToolOutcomeV1)
+    @native_tools_scope
     async def invoke_tool(
         request: GatewayToolRequestV1,
         authorization: str = Header(default="", alias="Authorization"),
@@ -2769,6 +2725,7 @@ def create_gateway_app(
         return await runtime.invoke_tool(request, context)
 
     @app.post("/v1/tools/authorize-local", response_model=GatewayToolOutcomeV1)
+    @native_tools_scope
     async def authorize_local_tool(
         request: GatewayToolRequestV1,
         authorization: str = Header(default="", alias="Authorization"),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -36,8 +36,8 @@ class LangChainToolAdapter:
     supports_idempotency: bool = False
     auth_satisfied: bool = False
     max_output_chars: Optional[int] = None
-    _prompt: Callable[[RunnableConfig], Optional[str]] = lambda _: None
-    _is_enabled: Callable[[RunnableConfig], bool] = lambda _: True
+    _prompt: Callable[[RuntimeConfig], Optional[str]] = lambda _: None
+    _is_enabled: Callable[[RuntimeConfig], bool] = lambda _: True
     _egress_urls: Callable[[dict[str, Any]], list[str]] = lambda _: []
 
     @property
@@ -67,12 +67,12 @@ class LangChainToolAdapter:
         del input
         return self.adapted.description or self.name
 
-    def prompt(self, config: RunnableConfig) -> Optional[str]:
+    def prompt(self, config: RuntimeConfig) -> Optional[str]:
         """Return detailed model guidance declared by the adapter."""
         value = self._prompt(config)
         return None if value is None else str(value)
 
-    def is_enabled(self, config: RunnableConfig) -> bool:
+    def is_enabled(self, config: RuntimeConfig) -> bool:
         """Return whether this adapted tool is enabled."""
         return bool(self._is_enabled(config))
 
@@ -106,23 +106,23 @@ def adapt_langchain_tool(
     supports_idempotency: bool = False,
     auth_satisfied: bool = False,
     prompt: Union[
-        str, Callable[[RunnableConfig], Optional[str]], None
+        str, Callable[[RuntimeConfig], Optional[str]], None
     ] = None,
-    is_enabled: Optional[Callable[[RunnableConfig], bool]] = None,
+    is_enabled: Optional[Callable[[RuntimeConfig], bool]] = None,
     egress_urls: Optional[Callable[[dict[str, Any]], list[str]]] = None,
     max_output_chars: Optional[int] = None,
 ) -> LangChainToolAdapter:
     """Create a LangChain Adapter with explicit governance metadata."""
-    prompt_fn: Callable[[RunnableConfig], Optional[str]]
+    prompt_fn: Callable[[RuntimeConfig], Optional[str]]
     if isinstance(prompt, str):
         static_prompt = prompt
 
-        def render_prompt(_: RunnableConfig) -> str:
+        def render_prompt(_: RuntimeConfig) -> str:
             return static_prompt
 
         prompt_fn = render_prompt
     elif prompt is None:
-        def no_prompt(_: RunnableConfig) -> None:
+        def no_prompt(_: RuntimeConfig) -> None:
             return None
 
         prompt_fn = no_prompt

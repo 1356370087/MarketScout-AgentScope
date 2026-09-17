@@ -22,8 +22,15 @@ from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 RUNTIME_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def runtime_data_dir() -> Path:
+    """Use the application data volume, including non-root container deployments."""
+    import os
+
+    return Path(os.environ.get("RUNS_DIR") or RUNTIME_REPO_ROOT / ".runs").resolve()
+
+
 def _sqlite_demo_path() -> Path:
-    db = RUNTIME_REPO_ROOT / ".runs" / "agentscope-runtime.db"
+    db = runtime_data_dir() / "agentscope-runtime.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     return db
 

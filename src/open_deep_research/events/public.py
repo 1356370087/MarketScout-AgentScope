@@ -21,7 +21,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 import portalocker
 
 if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
+    from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -402,7 +402,7 @@ def extract_public_sources(result: dict[str, Any], *, limit: int = 10) -> list[d
 
 async def summarize_public_findings(
     result: dict[str, Any],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> Optional[str]:
     """Create a bounded public summary; failure never exposes raw findings."""
     compressed = str(result.get("compressed_research") or "").strip()
@@ -782,7 +782,7 @@ class RunEventPublisher:
         )
 
 
-def event_store_from_config(config: RunnableConfig | dict[str, Any]) -> RunEventStore:
+def event_store_from_config(config: RuntimeConfig | dict[str, Any]) -> RunEventStore:
     """Build a run-scoped store from runtime configuration."""
     configurable = Configuration.from_runnable_config(config)
     metadata = config.get("metadata") or {}
@@ -800,7 +800,7 @@ def event_store_from_config(config: RunnableConfig | dict[str, Any]) -> RunEvent
     )
 
 
-def event_publisher_from_config(config: RunnableConfig | dict[str, Any]) -> RunEventPublisher:
+def event_publisher_from_config(config: RuntimeConfig | dict[str, Any]) -> RunEventPublisher:
     """Build a run-scoped public event publisher from runtime config."""
     return RunEventPublisher(event_store_from_config(config))
 

@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import StructuredTool, ToolException
 from mcp import MCPError
 from mcp.types import URL_ELICITATION_REQUIRED
@@ -69,7 +69,7 @@ async def exchange_mcp_subject_token(
     return None
 
 
-async def get_tokens(config: RunnableConfig) -> dict[str, Any] | None:
+async def get_tokens(config: RuntimeConfig) -> dict[str, Any] | None:
     """Retrieve a user's cached MCP tokens when they have not expired."""
     metadata = config.get("metadata", {})
     if metadata.get("sandbox_gateway_physical"):
@@ -105,7 +105,7 @@ async def get_tokens(config: RunnableConfig) -> dict[str, Any] | None:
     return tokens.value
 
 
-async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]) -> None:
+async def set_tokens(config: RuntimeConfig, tokens: dict[str, Any]) -> None:
     """Store MCP tokens in the configured per-user token store."""
     metadata = config.get("metadata", {})
     if metadata.get("sandbox_gateway_physical"):
@@ -127,7 +127,7 @@ async def set_tokens(config: RunnableConfig, tokens: dict[str, Any]) -> None:
         await get_token_store().set(str(user_id), tokens)
 
 
-async def fetch_tokens(config: RunnableConfig) -> dict[str, Any] | None:
+async def fetch_tokens(config: RuntimeConfig) -> dict[str, Any] | None:
     """Return cached tokens or perform RFC 8693 exchange when configured."""
     current_tokens = await get_tokens(config)
     if current_tokens:

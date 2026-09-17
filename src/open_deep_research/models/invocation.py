@@ -12,7 +12,7 @@ from typing import Any, TypeVar, cast, overload
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, ValidationError
 
 from open_deep_research.configuration import Configuration
@@ -43,7 +43,7 @@ _RUN_GATEWAYS: dict[str, ModelGateway] = {}
 _STREAM_DOWNGRADE_CODES = {"gateway_stream_unsupported"}
 
 
-def _identity(config: RunnableConfig, role: str, stage: str, span_name: str) -> tuple[str, str, str]:
+def _identity(config: RuntimeConfig, role: str, stage: str, span_name: str) -> tuple[str, str, str]:
     metadata = config.get("metadata", {})
     configurable = config.get("configurable", {})
     run_id = str(metadata.get("run_id") or configurable.get("thread_id") or "service")
@@ -84,7 +84,7 @@ def _logical_operation_id(
     return f"model:{digest}"
 
 
-def get_model_gateway(config: RunnableConfig) -> ModelGateway:
+def get_model_gateway(config: RuntimeConfig) -> ModelGateway:
     """Return the connection-pooled Gateway for one Run or Sandbox task."""
     run_id = str(
         config.get("metadata", {}).get("run_id")
@@ -117,7 +117,7 @@ async def close_run_gateway(run_id: str) -> None:
 @overload
 async def complete_model(
     messages: Sequence[BaseMessage],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     role: str,
     stage: str,
@@ -137,7 +137,7 @@ async def complete_model(
 @overload
 async def complete_model(
     messages: Sequence[BaseMessage],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     role: str,
     stage: str,
@@ -156,7 +156,7 @@ async def complete_model(
 
 async def complete_model(
     messages: Sequence[BaseMessage],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     role: str,
     stage: str,
@@ -375,7 +375,7 @@ async def complete_model(
 
 async def _complete_model_non_streaming(
     messages: Sequence[BaseMessage],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     role: str,
     stage: str,
@@ -403,7 +403,7 @@ async def _complete_model_non_streaming(
 
 async def complete_model_stream(
     messages: Sequence[BaseMessage],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     *,
     role: str,
     stage: str,

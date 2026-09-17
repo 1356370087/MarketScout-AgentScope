@@ -50,6 +50,7 @@ class TeamStore:
     async def commit(
         self, event: TeamEvent,
         mutate: Callable[[asyncpg.Connection], Awaitable[Any]],
+        *, durable_recipients: bool = False,
     ) -> Any:
         """Commit mutation and its transaction outcome atomically."""
         async with self.pool.acquire() as db, db.transaction():
@@ -78,6 +79,12 @@ class TeamStore:
                    VALUES ($1,$2,$3::jsonb) ON CONFLICT(event_id) DO NOTHING""",
                 event.event_id, event.run_id, event.model_dump_json(),
             )
+            if durable_recipients and event.recipients:
+                await db.executemany(
+                    """INSERT INTO research_coordination_receipts(event_id,recipient)
+                       VALUES ($1,$2) ON CONFLICT DO NOTHING""",
+                    [(event.event_id, recipient) for recipient in event.recipients],
+                )
             return result
 
     async def abort(self, event: TeamEvent) -> None:

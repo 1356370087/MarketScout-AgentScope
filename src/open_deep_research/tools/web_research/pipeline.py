@@ -18,7 +18,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
 )
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
 from tavily import AsyncTavilyClient  # type: ignore[import-untyped]
 
@@ -159,7 +159,7 @@ def clear_run_web_budget(run_id: str) -> None:
         _WEB_TASK_TRANSPORT_FAILURES.pop(key, None)
 
 
-def _record_transport_failures(config: RunnableConfig, count: int) -> None:
+def _record_transport_failures(config: RuntimeConfig, count: int) -> None:
     """Charge refunded transport failures to the bounded failure allowance."""
     if count <= 0:
         return
@@ -177,7 +177,7 @@ def _record_transport_failures(config: RunnableConfig, count: int) -> None:
     )
 
 
-def _record_physical_fetch(config: RunnableConfig) -> None:
+def _record_physical_fetch(config: RuntimeConfig) -> None:
     """Reset a task's zero-allocation wall after real network progress."""
     metadata = config.get("metadata", {})
     task_key = (
@@ -236,7 +236,7 @@ def _candidate(provider: str, url: str, title: str, snippet: str, rank: int, que
     )
 
 
-async def _discover_web_candidates(request: SearchRequest, config: RunnableConfig) -> SearchBatch:
+async def _discover_web_candidates(request: SearchRequest, config: RuntimeConfig) -> SearchBatch:
     """Normalize Tavily/OpenAI/Anthropic discovery into one candidate contract."""
     configurable = Configuration.from_runnable_config(config)
     selection = selection_from_config(config)
@@ -420,7 +420,7 @@ def _search_error_code(exc: Exception) -> str:
 async def _rerank_web_candidates(
     objective: str,
     candidates: list[CandidateSource],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> dict[str, tuple[float, float, float]]:
     """Score candidates with a fixed structured-output model and temperature zero."""
     configurable = Configuration.from_runnable_config(config)
@@ -505,7 +505,7 @@ async def _extract_web_evidence(
     objective: str,
     documents: dict[str, ExtractedDocument],
     chunks: list[DocumentChunk],
-    config: RunnableConfig,
+    config: RuntimeConfig,
 ) -> list[EvidenceRecord]:
     """Extract claim-level evidence while enforcing chunk/source provenance."""
     safe_chunks = [chunk for chunk in chunks if not inspect_untrusted_content(chunk.text)]
@@ -627,7 +627,7 @@ async def _extract_web_evidence(
     return evidence
 
 
-def resolved_run_identity(config: RunnableConfig) -> str:
+def resolved_run_identity(config: RuntimeConfig) -> str:
     """Return the authoritative run identity for budget and approval keys.
 
     Most caller configs already carry ``metadata.run_id``. When they do not
@@ -654,7 +654,7 @@ def resolved_run_identity(config: RunnableConfig) -> str:
 
 
 async def _approve_candidate_batch(
-    candidates: list[CandidateSource], iteration: int, config: RunnableConfig
+    candidates: list[CandidateSource], iteration: int, config: RuntimeConfig
 ) -> DomainApprovalBatch:
     """Evaluate all Top-K logical target domains as one approval batch."""
     configurable = Configuration.from_runnable_config(config)
@@ -713,7 +713,7 @@ def _external_document(url: str, markdown: str, adapter: str) -> ExtractedDocume
     )
 
 
-async def _tavily_extract(url: str, config: RunnableConfig) -> ExtractedDocument | None:
+async def _tavily_extract(url: str, config: RuntimeConfig) -> ExtractedDocument | None:
     """Use Tavily Extract when configured, normalizing its response."""
     api_key = get_tavily_api_key(config)
     if not api_key:
@@ -729,7 +729,7 @@ async def _tavily_extract(url: str, config: RunnableConfig) -> ExtractedDocument
     return _external_document(url, content, "tavily_extract") if content else None
 
 
-async def _firecrawl_extract(url: str, config: RunnableConfig) -> ExtractedDocument | None:
+async def _firecrawl_extract(url: str, config: RuntimeConfig) -> ExtractedDocument | None:
     """Use Firecrawl Scrape through its HTTP API when a key is configured."""
     api_key = resolve_named_api_key("FIRECRAWL_API_KEY", config)
     if not api_key:
@@ -751,7 +751,7 @@ async def _firecrawl_extract(url: str, config: RunnableConfig) -> ExtractedDocum
     return _external_document(url, markdown, "firecrawl") if markdown else None
 
 
-async def _render_with_browser_mcp(url: str, config: RunnableConfig) -> str | None:
+async def _render_with_browser_mcp(url: str, config: RuntimeConfig) -> str | None:
     """Navigate and snapshot an approved URL using only read-only browser tools."""
     configurable = Configuration.from_runnable_config(config)
     if not configurable.browser_mcp_enabled or not configurable.browser_render_fallback_enabled:
@@ -784,7 +784,7 @@ def _web_pipeline_settings(configurable: Configuration) -> WebPipelineSettings:
     )
 
 
-def _configured_external_extractors(configurable: Configuration, config: RunnableConfig):
+def _configured_external_extractors(configurable: Configuration, config: RuntimeConfig):
     """Return remote extractors in the administrator-configured fallback order."""
     available = {
         "tavily_extract": lambda url: _tavily_extract(url, config),
@@ -822,7 +822,7 @@ def _shrink_candidate_text(payload: dict, snippet_chars: int) -> None:
                 candidate[field] = value[:snippet_chars]
 
 
-def _compact_web_result(result, config: RunnableConfig | None = None) -> str:
+def _compact_web_result(result, config: RuntimeConfig | None = None) -> str:
     """Serialize evidence and audit metadata inside the governed char budget.
 
     Slimming is structural and happens before serialization: audit lists
@@ -906,7 +906,7 @@ def _compact_web_result(result, config: RunnableConfig | None = None) -> str:
     return text if len(text) <= budget else "{}"
 
 
-def _record_web_pipeline_metrics(result, config: RunnableConfig) -> None:
+def _record_web_pipeline_metrics(result, config: RuntimeConfig) -> None:
     """Attach candidate-to-evidence funnel metrics to the active tool span."""
     span = get_trace_recorder(config).active_span()
     span.score("web.candidate_count", len(result.candidates))
@@ -928,7 +928,7 @@ def _record_web_pipeline_metrics(result, config: RunnableConfig) -> None:
 
 
 async def _record_shadow_candidates(
-    candidates: list[CandidateSource], config: RunnableConfig
+    candidates: list[CandidateSource], config: RuntimeConfig
 ) -> None:
     """Sample candidate normalization/Top-K selection without affecting legacy output."""
     configurable = Configuration.from_runnable_config(config)
@@ -981,7 +981,7 @@ def _followup_fetch_reserve(configurable: Configuration) -> int:
 
 
 async def _reserve_fetch_budget(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     requested: int,
 ) -> FetchBudgetReservation:
     """Atomically reserve run/task fetch attempts and return a release callback."""

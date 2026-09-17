@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
@@ -14,7 +14,7 @@ from open_deep_research.quality.contract import (
 )
 
 ResearcherInvoker = Callable[
-    [dict[str, Any], RunnableConfig], Coroutine[Any, Any, dict[str, Any]]
+    [dict[str, Any], RuntimeConfig], Coroutine[Any, Any, dict[str, Any]]
 ]
 HandoffEvaluator = Callable[..., Awaitable[Any]]
 

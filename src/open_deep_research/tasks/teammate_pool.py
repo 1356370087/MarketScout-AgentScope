@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 import portalocker
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
@@ -26,7 +26,7 @@ from open_deep_research.tasks.registry import TaskRecord, TaskRegistry, TaskStat
 from open_deep_research.tasks.state import get_task_state_store
 
 ExecuteResearchFn = Callable[
-    [dict[str, Any], RunnableConfig],
+    [dict[str, Any], RuntimeConfig],
     Coroutine[Any, Any, dict[str, Any]],
 ]
 
@@ -65,7 +65,7 @@ class TeammatePool:
     def __init__(
         self,
         *,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         registry: TaskRegistry,
         execute_research: ExecuteResearchFn,
     ) -> None:
@@ -525,7 +525,7 @@ def find_active_teammate_pool(run_id: str) -> TeammatePool | None:
 
 
 def get_teammate_pool(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     registry: TaskRegistry,
     execute_research: ExecuteResearchFn,
 ) -> TeammatePool:
@@ -539,7 +539,7 @@ def get_teammate_pool(
     return _POOLS[key]
 
 
-async def shutdown_teammate_pool(config: RunnableConfig) -> None:
+async def shutdown_teammate_pool(config: RuntimeConfig) -> None:
     """Shutdown and remove one run's pool."""
     configurable = Configuration.from_runnable_config(config)
     run_id = str(config.get("metadata", {}).get("run_id", "default"))

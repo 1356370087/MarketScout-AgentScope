@@ -113,6 +113,23 @@ def _extract_visible_text(html: bytes) -> str:
 class WebAdapter(SourceAdapter):
     """Plain-web adapter: conditional GET, no login, no JS rendering."""
 
+    def __init__(self, authorize_url=None):
+        self.authorize_url = authorize_url
+
+    async def _get(self, client, url, headers):
+        if self.authorize_url is None:
+            return await client.get(url, headers=headers)
+        for _ in range(6):
+            await self.authorize_url(url)
+            response = await client.get(url, headers=headers, follow_redirects=False)
+            if not response.is_redirect:
+                return response
+            location = response.headers.get("location")
+            if not location:
+                raise SyncError("sync_redirect_missing_location")
+            url = str(response.url.join(location))
+        raise SyncError("sync_too_many_redirects")
+
     async def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
         """Validate the URL and return its normalized form."""
         url = str(config.get("url") or "").strip()
@@ -133,7 +150,7 @@ class WebAdapter(SourceAdapter):
             headers["If-Modified-Since"] = source.last_modified
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                response = await client.get(source.input_url, headers=headers)
+                response = await self._get(client, source.input_url, headers)
         except httpx.TimeoutException as exc:
             raise SyncError("sync_timeout") from exc
         except (httpx.HTTPError, OSError) as exc:
@@ -271,7 +288,7 @@ async def create_sync_source(
     return {"id": str(source_id), "normalized_url": config["normalized_url"]}
 
 
-async def run_sync(actor_id: str, source_id: str) -> dict[str, Any]:
+async def run_sync(actor_id: str, source_id: str, *, authorize_url=None) -> dict[str, Any]:
     """Execute one sync: fetch, detect change, optionally create a version.
 
     Returns ``{"status": "unchanged"|"updated"|"error", ...}``. Body changes
@@ -279,7 +296,7 @@ async def run_sync(actor_id: str, source_id: str) -> dict[str, Any]:
     the previous published version keeps serving retrieval until the draft
     is human-published (plan KB-10 §6).
     """
-    adapter = WebAdapter()
+    adapter = WebAdapter(authorize_url)
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         row = await connection.fetchrow(

@@ -11,7 +11,7 @@ import time
 from typing import Any, Callable, Coroutine, Optional
 
 from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import (
@@ -36,14 +36,14 @@ from open_deep_research.tasks.state import (
 )
 
 
-def _run_fence_token(config: RunnableConfig | None) -> int:
+def _run_fence_token(config: RuntimeConfig | None) -> int:
     """Read the current run ownership epoch from propagated metadata."""
     value = ((config or {}).get("metadata") or {}).get("run_fence_token", 0)
     return int(value or 0)
 
 # Type alias for the function that actually launches a background researcher.
 LaunchTaskFn = Callable[
-    [TaskRecord, RunnableConfig],
+    [TaskRecord, RuntimeConfig],
     Coroutine[Any, Any, None],
 ]
 
@@ -225,7 +225,7 @@ async def _publish_snapshot_update(
 
 async def handle_start_research_task(
     tool_call: dict[str, Any],
-    config: RunnableConfig,
+    config: RuntimeConfig,
     registry: TaskRegistry,
     launch_task: LaunchTaskFn,
     event_writer: Optional[JSONLEventWriter] = None,

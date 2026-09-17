@@ -15,8 +15,6 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
 from open_deep_research import prompts as _prompts
@@ -28,16 +26,6 @@ from open_deep_research.configuration import (
 from open_deep_research.events.public import canonical_local_source
 from open_deep_research.evidence import (
     source_scoped_evidence_records,
-)
-from open_deep_research.models.fallback import invoke_with_model_fallback
-from open_deep_research.models.invocation import complete_model
-from open_deep_research.models.resolution import (
-    build_model_config,
-    get_configurable_model_template,
-)
-from open_deep_research.observability import (
-    apply_helicone_config,
-    invoke_model_with_retry_observability,
 )
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
@@ -59,6 +47,18 @@ from .models import (
     ReportDraft,
     ReportReview,
     ReportReviewIssue,
+)
+from .runtime import (
+    HumanMessage,
+    RunnableConfig,
+    SystemMessage,
+    apply_helicone_config,
+    build_model_config,
+    complete_model,
+    get_configurable_model_template,
+    invoke_model_with_retry_observability,
+    invoke_with_model_fallback,
+    native_report,
 )
 from .writing import WRITING_RULES
 
@@ -573,7 +573,7 @@ def _candidate_payload(raw: Any) -> Any:
         return raw.model_dump(mode="json")
     if isinstance(raw, Mapping):
         return dict(raw)
-    if isinstance(raw, AIMessage):
+    if getattr(raw, "type", None) == "ai":
         tool_calls = getattr(raw, "tool_calls", None)
         if isinstance(tool_calls, list) and len(tool_calls) == 1:
             arguments = tool_calls[0].get("args") if isinstance(tool_calls[0], Mapping) else None
@@ -1449,6 +1449,8 @@ async def _invoke_reviewer(
     attempt: int,
 ) -> Any:
     """Invoke the structured Reviewer through the shared model gateway."""
+    if native_report.get() is not None:
+        return await native_report.get().invoke("report_review", [SystemMessage(content=_REVIEW_SECURITY_SYSTEM_PROMPT), HumanMessage(content=_review_prompt({**payload, "review_attempt": attempt}, max_chars=cfg.report_review_max_input_chars))], cfg, span_name="lead.report_review", schema=ReportReview)
     model = _model_name(cfg)
     max_tokens = int(getattr(cfg, "report_review_model_max_tokens", 3_072) or 3_072)
     temperature = getattr(cfg, "report_review_temperature", None)
@@ -1645,6 +1647,8 @@ async def _invoke_reviser(
     cfg: Configuration,
 ) -> str:
     """Invoke the final-report writer for one bounded revision."""
+    if native_report.get() is not None:
+        return (await native_report.get().invoke("report_revisor", [SystemMessage(content=WRITING_RULES), HumanMessage(content=prompt)], cfg, span_name="lead.report_revision")).content
     model = str(getattr(cfg, "final_report_model", "") or _model_name(cfg))
     max_tokens = int(getattr(cfg, "final_report_model_max_tokens", 10_000) or 10_000)
     budget_gate = _report_budget_gate(config, cfg)

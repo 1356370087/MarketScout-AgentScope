@@ -8,7 +8,7 @@ from typing import Any
 
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import BaseMessage, HumanMessage
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.models.fallback import invoke_with_model_fallback
@@ -20,7 +20,7 @@ from open_deep_research.state import Summary
 from open_deep_research.tools.legacy_shims import get_today_str
 
 
-def build_summarization_model(config: RunnableConfig) -> Any:
+def build_summarization_model(config: RuntimeConfig) -> Any:
     """Build the structured-output summarization model used by search tools."""
     configurable = Configuration.from_runnable_config(config)
     if configurable.model_backend == "litellm":
@@ -40,7 +40,7 @@ async def summarize_webpage(
     model: Any,
     webpage_content: str,
     *,
-    config: RunnableConfig = None,
+    config: RuntimeConfig = None,
     model_name: str | None = None,
 ) -> str:
     """Summarize untrusted webpage content without ever failing open."""

@@ -7,7 +7,7 @@ import warnings
 from functools import partial
 from typing import Any, cast
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import StructuredTool
 
 from open_deep_research.configuration import BrowserMCPConfig, Configuration
@@ -35,7 +35,7 @@ def _constant_egress_url(url: str, args: dict[str, Any]) -> list[str]:
 
 
 async def load_mcp_tools(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     existing_tool_names: set[str],
 ) -> list[Tool]:
     """Discover configured MCP tools after validating trust boundaries."""
@@ -110,7 +110,7 @@ async def load_mcp_tools(
 
 
 async def load_browser_mcp_tools(
-    config: RunnableConfig,
+    config: RuntimeConfig,
     existing_tool_names: set[str],
 ) -> list[Tool]:
     """Discover optional browser MCP tools after validating server policy."""

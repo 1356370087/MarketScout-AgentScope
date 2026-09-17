@@ -1,12 +1,5 @@
 """Stable evaluation contracts for research runs."""
 
-from .judge import (
-    JUDGE_SECURITY_PROTOCOL,
-    JudgeConfig,
-    build_judge_model,
-    invoke_judge_structured,
-    invoke_judge_structured_sync,
-)
 from .metrics import (
     EvaluationMetric,
     MetricStatus,
@@ -28,3 +21,12 @@ __all__ = [
     "langsmith_metric",
     "normalize_evaluator_metric",
 ]
+
+
+def __getattr__(name):
+    if name not in {"JUDGE_SECURITY_PROTOCOL", "JudgeConfig", "build_judge_model", "invoke_judge_structured", "invoke_judge_structured_sync"}:
+        raise AttributeError(name)
+    from . import judge
+    value = getattr(judge, name)
+    globals()[name] = value
+    return value

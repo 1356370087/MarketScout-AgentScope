@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 from langchain_core.tools import ToolException, tool
 
 from open_deep_research.configuration import Configuration
@@ -29,7 +29,7 @@ def _egress_urls(args: dict) -> list[str]:
 async def _fetch_url_call(
     url: str,
     objective: str,
-    config: RunnableConfig = None,
+    config: RuntimeConfig = None,
 ) -> str:
     """Fetch one known URL without running discovery or unrelated reranking."""
     configurable = Configuration.from_runnable_config(config)

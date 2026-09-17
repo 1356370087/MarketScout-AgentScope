@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from langchain_core.messages import message_to_dict
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.task_activity import (
@@ -357,7 +357,7 @@ class DockerSandboxManager:
     async def run_researcher_task(
         self,
         task_record: TaskRecord,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         researcher_state: dict[str, Any],
         *,
         runs_dir: str = ".runs",
@@ -613,7 +613,7 @@ class DockerSandboxManager:
         *,
         workspace: SandboxWorkspace,
         task_record: TaskRecord,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         researcher_state: dict[str, Any],
         profile_id: str | None = None,
     ) -> Path:
@@ -632,7 +632,7 @@ class DockerSandboxManager:
         self,
         *,
         task_record: TaskRecord,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         researcher_state: dict[str, Any],
         profile_id: str | None = None,
         policy_digest_value: str | None = None,
@@ -711,7 +711,7 @@ class DockerSandboxManager:
     def build_spec(
         self,
         configurable: Configuration,
-        config: RunnableConfig,
+        config: RuntimeConfig,
     ) -> SandboxSpec:
         """Build the container spec from runtime configuration."""
         bundle, _profile_id, profile = resolve_profile(configurable)
@@ -1080,7 +1080,7 @@ class DockerSandboxManager:
     def _build_environment(
         self,
         configurable: Configuration,
-        config: RunnableConfig,
+        config: RuntimeConfig,
         profile: SandboxProfile,
     ) -> dict[str, str]:
         del config

@@ -10,8 +10,6 @@ import signal
 import traceback
 from pathlib import Path
 
-from langchain_core.messages import messages_from_dict
-
 from open_deep_research.events.task_activity import task_activity_store_from_config
 from open_deep_research.sandbox.wire import (
     WORKER_EXIT_CODE_PATH,
@@ -66,11 +64,6 @@ async def _run() -> int:
             payload_path.read_text(encoding="utf-8")
         )
         task_id = payload.task_id
-        state = dict(payload.researcher_state)
-        state["researcher_messages"] = messages_from_dict(
-            state.get("researcher_messages", [])
-        )
-
         configurable = dict(payload.runtime_config)
         configurable["sandbox_enabled"] = False
         configurable["enable_memory"] = False
@@ -89,12 +82,7 @@ async def _run() -> int:
         }
 
         logging.info("Starting sandbox worker for task_id=%s", task_id)
-        if configurable.get("team_coordination_enabled"):
-            from open_deep_research.tasks.team_bridge import worker_request
-            async def save_team_checkpoint(query_state):
-                await worker_request(config, "checkpoint", {"query_state": query_state.to_snapshot()})
-            state["_query_checkpoint_callback"] = save_team_checkpoint
-        from open_deep_research.agents.deep_researcher import researcher_runtime
+        from open_deep_research.agentscope_runtime.sandbox_worker import execute_worker
         from open_deep_research.observability import bind_span_context
 
         with bind_span_context(
@@ -102,7 +90,7 @@ async def _run() -> int:
             config["metadata"].get("trace_parent_span_id"),
             config["metadata"].get("langfuse_parent_span_id"),
         ):
-            result = await researcher_runtime.ainvoke(state, config)
+            result = await execute_worker(payload, config)
         raw_notes = result.get("raw_notes", [])
         compressed_research = result.get("compressed_research", "")
         result_metrics = dict(result.get("metrics", {}))

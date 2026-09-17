@@ -9,37 +9,35 @@ from collections import defaultdict, deque
 from typing import Any, cast
 from urllib.parse import urlsplit
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.messages.utils import count_tokens_approximately
-from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
-from open_deep_research.agents.model_recovery import resolve_model_context_window
-from open_deep_research.agents.research_context import (
-    response_was_truncated,
-)
 from open_deep_research.configuration import Configuration
 from open_deep_research.evidence import source_scoped_evidence_records
-from open_deep_research.models.fallback import invoke_with_model_fallback
-from open_deep_research.models.invocation import complete_model
-from open_deep_research.models.resolution import (
-    build_model_config,
-    get_configurable_model_template,
-)
-from open_deep_research.observability import (
-    invoke_model_with_retry_observability,
-)
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
     aggregate_dimension_coverage,
     coverage_requirement_display_text,
 )
-from open_deep_research.quality.gate import _evaluate_json
 from open_deep_research.report.recovery import (
     build_evidence_recovery_report,
 )
 from open_deep_research.security.content import sanitize_report_markdown
 
+from .runtime import (
+    HumanMessage,
+    RunnableConfig,
+    SystemMessage,
+    _evaluate_json,
+    build_model_config,
+    complete_model,
+    count_tokens_approximately,
+    get_configurable_model_template,
+    invoke_model_with_retry_observability,
+    invoke_with_model_fallback,
+    native_report,
+    resolve_model_context_window,
+    response_was_truncated,
+)
 from .writing import (
     WRITING_RULES,
     fit_writing_messages,
@@ -270,6 +268,8 @@ async def _invoke_draft(
         guidance="Return exactly this JSON schema: " + json.dumps(EvidenceSynthesisDraft.model_json_schema(), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )
 
+    if native_report.get() is not None:
+        return await native_report.get().invoke("final_report", messages, configurable, span_name="lead.evidence_limited_writer", schema=EvidenceSynthesisDraft)
     if configurable.model_backend == "litellm":
         messages, _ = fit_writing_messages(
             messages, model_name, configurable,
@@ -331,6 +331,8 @@ async def _invoke_grounding_judge(
     payload: dict[str, Any],
     config: RunnableConfig,
 ) -> EvidenceSynthesisGroundingAssessment:
+    if native_report.get() is not None:
+        return await native_report.get().invoke("quality_evaluation", [SystemMessage(content=WRITING_RULES + "\n" + _GROUNDING_PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Configuration.from_runnable_config(config), span_name="lead.evidence_limited_grounding", schema=EvidenceSynthesisGroundingAssessment)
     result = await _evaluate_json(
         EvidenceSynthesisGroundingAssessment,
         WRITING_RULES + "\n" + _GROUNDING_PROMPT,

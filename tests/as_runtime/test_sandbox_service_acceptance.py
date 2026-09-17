@@ -9,10 +9,6 @@ import pytest
 from pydantic import SecretStr
 from agentscope.message import UserMsg
 
-pytest.importorskip(
-    "langchain_core",
-    reason="既有 Gateway 服务尚依赖旧环境；使用 .venv-legacy 依赖补充执行本协议测试",
-)
 from open_deep_research.configuration import Configuration
 from open_deep_research.agentscope_runtime.gateway import (
     SandboxChatModel,

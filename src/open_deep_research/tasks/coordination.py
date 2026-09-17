@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.tasks.events import EventType
@@ -42,7 +42,7 @@ def _verify_result_artifact(
         raise CoordinationError(f"Task {snapshot.task_id} result artifact hash mismatch")
 
 
-def get_run_id(config: RunnableConfig) -> str:
+def get_run_id(config: RuntimeConfig) -> str:
     """Return the run identifier used to isolate coordination state."""
     return str(config.get("metadata", {}).get("run_id", "default"))
 

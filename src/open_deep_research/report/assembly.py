@@ -6,42 +6,40 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Protocol, cast
 
-from langchain_core.messages import BaseMessage, get_buffer_string
-from langchain_core.runnables import RunnableConfig
-
 from open_deep_research import prompts as _prompts
-from open_deep_research.agents.model_recovery import (
-    invoke_with_output_recovery,
-    resolve_model_max_output_tokens,
-)
 from open_deep_research.configuration import Configuration
 from open_deep_research.evidence import (
     contract_has_source_constraints,
     source_scoped_evidence_records,
 )
 from open_deep_research.models.errors import is_token_limit_exceeded
-from open_deep_research.models.fallback import invoke_with_model_fallback
-from open_deep_research.models.invocation import complete_model, complete_model_stream
-from open_deep_research.models.resolution import (
-    build_model_config,
-    get_configurable_model_template,
-)
-from open_deep_research.observability import (
-    apply_helicone_config,
-    get_trace_recorder,
-    invoke_model_with_retry_observability,
-)
 from open_deep_research.prompts import (
     final_section_writer_prompt,
     report_outline_planner_prompt,
     section_writer_prompt,
 )
 from open_deep_research.skills import get_skill_report_context
-from open_deep_research.tools.legacy_shims import get_today_str
 
 from .coverage import render_state_coverage_checklist
 from .models import ReportOutline, SectionSpec, SourceRef, WrittenSection
 from .profiles import AssemblyMode, ReportProfile
+from .runtime import (
+    BaseMessage,
+    LazyWriterTemplate,
+    RunnableConfig,
+    apply_helicone_config,
+    build_model_config,
+    complete_model,
+    complete_model_stream,
+    get_buffer_string,
+    get_today_str,
+    get_trace_recorder,
+    invoke_model_with_retry_observability,
+    invoke_with_model_fallback,
+    invoke_with_output_recovery,
+    native_report,
+    resolve_model_max_output_tokens,
+)
 from .writing import (
     fit_writing_messages,
     order_evidence,
@@ -49,7 +47,7 @@ from .writing import (
     writing_messages,
 )
 
-_writer_model_template = get_configurable_model_template()
+_writer_model_template = LazyWriterTemplate()
 
 
 def _build_findings(state: dict) -> str:
@@ -137,6 +135,7 @@ class ReportContext:
         """Build a stage from trusted template instructions and separate data."""
         payload = {
             **payload,
+            **({"approved_outline": self.state.get("report_outline", ""), "completion_outcome": self.state.get("completion_outcome", {})} if native_report.get() is not None else {}),
             "coverage": render_state_coverage_checklist(self.state),
             "requirement_to_evidence": self.requirement_to_evidence,
             "evidence_mode": "accepted_records" if self.strict_evidence else "historical_notes_compatibility",
@@ -290,6 +289,8 @@ class ReportContext:
         span_name: str,
     ) -> BaseMessage:
         """Invoke a report writer without accepting truncated output."""
+        if native_report.get() is not None:
+            return await native_report.get().invoke("final_report", messages, self.configurable, span_name=span_name)
 
         async def invoke_writer_candidate(
             candidate_model: str,
@@ -399,6 +400,8 @@ class ReportContext:
         span_name: str,
     ):
         """Invoke a structured report stage through the final-report chain."""
+        if native_report.get() is not None:
+            return await native_report.get().invoke("final_report", messages, self.configurable, span_name=span_name, schema=schema)
         async def invoke_raw_candidate(
             candidate_model: str,
             request_messages: list[BaseMessage],

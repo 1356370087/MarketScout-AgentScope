@@ -88,20 +88,10 @@ async def rerank_segments(
         raise RerankUnavailableError(str(exc)) from exc
     base_url = (os.getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
     try:
-        from openai import AsyncOpenAI
+        from open_deep_research.agentscope_runtime.service_models import service_text
 
-        client = AsyncOpenAI(base_url=base_url, api_key=service_key, timeout=60.0)
-        try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": _batch_prompt(question, candidates)},
-                ],
-            )
-        finally:
-            await client.close()
+        content = await service_text(model=model, api_key=service_key, base_url=base_url,
+            system=_SYSTEM_PROMPT, prompt=_batch_prompt(question, candidates), timeout=60)
     except Exception as exc:  # noqa: BLE001 - upstream failures degrade, never crash
         raise RerankUnavailableError(f"rerank_upstream_unavailable:{type(exc).__name__}") from exc
-    content = response.choices[0].message.content or ""
     return parse_rerank_response(content, candidates)

@@ -14,7 +14,7 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig
 
 from open_deep_research.agents.context_compiler import ContextCompiler
 from open_deep_research.agents.model_recovery import (
@@ -181,9 +181,9 @@ class ToolResultsHookResult:
     approval_pending_turns: int | None = None
 
 
-StopHook = Callable[[list[BaseMessage], RunnableConfig], Awaitable[StopHookResult | None]]
+StopHook = Callable[[list[BaseMessage], RuntimeConfig], Awaitable[StopHookResult | None]]
 BeforeTurnHook = Callable[
-    [list[BaseMessage], int, RunnableConfig],
+    [list[BaseMessage], int, RuntimeConfig],
     Awaitable[BeforeTurnHookResult | None],
 ]
 ToolResultsHook = Callable[
@@ -193,7 +193,7 @@ ToolResultsHook = Callable[
         list[GovernedToolCallResult],
         dict[str, Tool],
         int,
-        RunnableConfig,
+        RuntimeConfig,
     ],
     Awaitable[ToolResultsHookResult | None],
 ]
@@ -203,7 +203,7 @@ ToolBatchHook = Callable[
         list[dict[str, Any]],
         dict[str, Tool],
         int,
-        RunnableConfig,
+        RuntimeConfig,
     ],
     Awaitable[ToolResultsHookResult],
 ]
@@ -217,7 +217,7 @@ DurableToolBatchHook = Callable[
         list[dict[str, Any]],
         dict[str, Tool],
         int,
-        RunnableConfig,
+        RuntimeConfig,
         dict[str, GovernedToolCallResult],
         ToolCommitCallback,
     ],
@@ -225,7 +225,7 @@ DurableToolBatchHook = Callable[
 ]
 CallModel = Callable[[list[BaseMessage]], Awaitable[BaseMessage]]
 TurnAdvancePolicy = Callable[
-    [list[BaseMessage], "QueryLoopState", RunnableConfig],
+    [list[BaseMessage], "QueryLoopState", RuntimeConfig],
     Awaitable[int],
 ]
 
@@ -268,7 +268,7 @@ class QueryParams:
     messages: list[Any]
     system_prompt: str | BaseMessage | None
     model: Any
-    config: RunnableConfig
+    config: RuntimeConfig
     tools: Sequence[Tool] = field(default_factory=list)
     execution_tools: Sequence[Tool] | None = None
     role: AgentRole = AgentRole.RESEARCHER
