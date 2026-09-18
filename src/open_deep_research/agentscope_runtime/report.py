@@ -110,8 +110,8 @@ class _ReportRun:
                     if schema is not None:
                         policy = factory.policy_middleware(role, candidates=candidates)
 
-                        async def invoke(model, messages, **kwargs):
-                            return await model.generate_structured_output(
+                        async def invoke(current_model, messages, **kwargs):
+                            return await current_model.generate_structured_output(
                                 messages, schema
                             )
 

@@ -6,16 +6,17 @@ import secrets
 import time
 import uuid
 from contextvars import ContextVar
+from collections.abc import Callable
 from contextlib import aclosing, contextmanager
 from copy import copy
 from dataclasses import dataclass, field
 import httpx
 import jsonschema
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, ValidationError
 from agentscope.credential import CredentialBase
 from agentscope.formatter import OpenAIChatFormatter
 from agentscope.tool import ToolChoice
-from agentscope.message import TextBlock, ToolCallBlock
+from agentscope.message import TextBlock, ToolCallBlock, UserMsg
 from agentscope.model import (
     ChatModelBase,
     ChatResponse,
@@ -51,7 +52,7 @@ class SandboxBinding:
     run_id: str
     task_id: str
     role: str
-    stage: str
+    stage: str | Callable[[], str]
     token: SecretStr = field(repr=False)
 
 
@@ -63,7 +64,7 @@ class SandboxServiceBinding:
     run_id: str
     task_id: str
     role: str
-    stage: str
+    stage: str | Callable[[], str]
     fence_token: int
     service_key: bytes = field(repr=False)
 
@@ -86,6 +87,7 @@ class SandboxChatModel(ChatModelBase):
         stream=True,
         client=None,
         context_size=32768,
+        structured_attempts=1,
     ):
         super().__init__(
             CredentialBase(),
@@ -99,6 +101,7 @@ class SandboxChatModel(ChatModelBase):
         self.client = client or httpx.AsyncClient(base_url=binding.url, timeout=120)
         self._owns_client = client is None
         self.formatter = OpenAIChatFormatter()
+        self.structured_attempts = structured_attempts
 
     async def _request(
         self, messages, tools=None, tool_choice=None, structured_schema=None, **kwargs
@@ -132,7 +135,7 @@ class SandboxChatModel(ChatModelBase):
             run_id=binding.run_id,
             task_id=binding.task_id,
             role=binding.role,
-            stage=binding.stage,
+            stage=binding.stage() if callable(binding.stage) else binding.stage,
             logical_operation_id=operation_id,
             model=self.model,
             messages=await self.formatter.format(messages),
@@ -266,23 +269,38 @@ class SandboxChatModel(ChatModelBase):
             if isinstance(structured_model, type)
             else structured_model
         )
-        outcome = await self._request(messages, structured_schema=schema, **kwargs)
-        if outcome.finish_reason in {"length", "max_tokens"}:
-            raise GatewayCallError("structured_output_truncated")
-        content = outcome.structured
-        if content is None:
-            calls = (outcome.message or {}).get("tool_calls") or []
-            matches = [
-                c
-                for c in calls
-                if c["function"]["name"] == "__insightforge_structured_output"
-            ]
-            if len(matches) != 1:
-                raise GatewayCallError("structured_output_missing")
-            content = json.loads(matches[0]["function"]["arguments"])
-        jsonschema.validate(content, schema)
-        if isinstance(structured_model, type):
-            content = structured_model.model_validate(content).model_dump(mode="json")
+        messages = list(messages)
+        for attempt in range(max(1, self.structured_attempts)):
+            outcome = await self._request(messages, structured_schema=schema, **kwargs)
+            if outcome.finish_reason in {"length", "max_tokens"}:
+                raise GatewayCallError("structured_output_truncated")
+            try:
+                content = outcome.structured
+                if content is None:
+                    calls = (outcome.message or {}).get("tool_calls") or []
+                    matches = [
+                        c for c in calls
+                        if c["function"]["name"] == "__insightforge_structured_output"
+                    ]
+                    if len(matches) != 1:
+                        raise GatewayCallError("structured_output_missing")
+                    content = json.loads(matches[0]["function"]["arguments"])
+                jsonschema.validate(content, schema)
+                if isinstance(structured_model, type):
+                    content = structured_model.model_validate(content).model_dump(mode="json")
+                break
+            except (json.JSONDecodeError, jsonschema.ValidationError, ValidationError, GatewayCallError):
+                if attempt + 1 >= self.structured_attempts:
+                    raise
+                # 格式修复发生在持久化逻辑调用内；每次物理请求仍经 Gateway
+                # 领取独立操作 ID 并计账，不将缺失字段伪造成合法评分。
+                messages.append(UserMsg(
+                    "user",
+                    "The previous response did not satisfy the required schema. "
+                    "Call __insightforge_structured_output exactly once and include "
+                    "every required property with the declared types. Required: "
+                    + json.dumps(schema.get("required", [])),
+                ))
         return StructuredResponse(
             content=content,
             usage=self._usage(outcome),

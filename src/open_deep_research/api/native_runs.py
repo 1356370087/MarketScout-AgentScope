@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import time
+import traceback
 from contextlib import suppress
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -216,6 +217,12 @@ class NativeRuns:
             # has already fenced the executor in RecoveryStore.request_cancel.
             raise
         except Exception as exc:  # noqa: BLE001 - persist a sanitized execution failure
+            # 只记录调用帧和异常类型，避免上游异常文本中的凭据进入日志。
+            logging.getLogger(__name__).error(
+                "Native execution failed (%s):\n%s",
+                type(exc).__name__,
+                "".join(traceback.format_tb(exc.__traceback__)),
+            )
             state = recovery.snapshot.model_copy(deep=True)
             state.status, state.error = "failed", type(exc).__name__
             with suppress(FenceLost):

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from open_deep_research.agentscope_runtime.context import RunContextOffloader
 from open_deep_research.agentscope_runtime.gateway_ledger import SQLGatewayLedger
 from open_deep_research.agentscope_runtime.research import build_research_pipeline
 from open_deep_research.configuration import Configuration
@@ -59,10 +60,11 @@ class ProductionRunFactory:
     is restored from checkpoints and no sandbox failure falls back to host models.
     """
 
-    def __init__(self, runtime, authorize, open_resources, *, runs_dir):
+    def __init__(self, runtime, authorize, open_resources, *, runs_dir, worker_only=False):
         self.runtime, self.authorize = runtime, authorize
         self.open_resources = open_resources
         self.runs_dir = Path(runs_dir)
+        self.worker_only = worker_only
         self.active = {}
 
     async def gateway_ledger(self, run_id):
@@ -133,6 +135,7 @@ class ProductionRunFactory:
                 tools_for=ports.tools_for,
                 model_for=ports.model_for,
                 dispatcher=ports.dispatcher,
+                offloader=RunContextOffloader(self.runs_dir, recovery),
                 local_zones=ports.local_zones,
                 checkpoint_path=self.runs_dir
                 / recovery.lease.run_id
@@ -142,6 +145,7 @@ class ProductionRunFactory:
                 team_artifact_dir=self.runs_dir,
                 external_team_workers=ports.team_launcher is not None,
                 team_launcher=ports.team_launcher,
+                worker_only=self.worker_only,
             )
             self.active[recovery.lease.run_id] = {
                 "team": team,
@@ -160,3 +164,6 @@ class ProductionRunFactory:
                 self.active.pop(recovery.lease.run_id, None)
                 if pipeline.team_workers:
                     await pipeline.team_workers.aclose()
+                from open_deep_research.agentscope_runtime.telemetry import flush
+                import asyncio
+                await asyncio.to_thread(flush)

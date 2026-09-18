@@ -53,6 +53,7 @@ async def execute(request):
             authorize_run_owner,
             production_resources(root, worker_task_id=task_id),
             runs_dir=root,
+            worker_only=True,
         )
         config = RunConfig.restore(state.application["configuration"])
         async with factory(state, config, recovery) as pipeline:

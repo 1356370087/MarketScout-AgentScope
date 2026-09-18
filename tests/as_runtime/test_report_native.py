@@ -28,7 +28,7 @@ class Factory:
 
     def policy_middleware(self, role, candidates=None):
         async def invoke(handler, kwargs, state):
-            return await handler(self, **kwargs)
+            return await handler(current_model=self, **kwargs)
 
         return SimpleNamespace(policy=SimpleNamespace(invoke=invoke))
 

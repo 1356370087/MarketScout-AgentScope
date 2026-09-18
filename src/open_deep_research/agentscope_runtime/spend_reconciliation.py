@@ -128,6 +128,11 @@ async def reconciliation_loop(service, interval=60):
                             .where(
                                 store.ops.c.kind == "gateway:model",
                                 store.ops.c.state == "committed",
+                                # 等待用户的运行随时可能恢复，后台补账不得占用
+                                # 它的执行租约，导致已入库审批返回 409。
+                                store.runs.c.snapshot["status"].as_string().in_(
+                                    ["completed", "failed", "cancelled"]
+                                ),
                             )
                         )
                     )

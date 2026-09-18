@@ -1,9 +1,35 @@
 """原生消息的有限上下文裁剪；领域层显式指定必须保留的消息。"""
 
+import json
+from pathlib import Path
+
 from agentscope.message import ToolCallBlock, ToolResultBlock
 from open_deep_research.agentscope_runtime.messages import validate_tool_pairs
 from agentscope.middleware import MiddlewareBase
 from uuid import uuid4
+
+
+class RunContextOffloader:
+    """Persist trusted orchestration context beside the run's recovery artifacts.
+
+    This is a host control-plane artifact writer, not a sandbox file-tool fallback.
+    The factory supplies an authorized run lease; stale owners cannot write.
+    """
+
+    def __init__(self, runs_dir, recovery):
+        self.directory = Path(runs_dir) / recovery.lease.run_id / "context"
+        self.recovery = recovery
+
+    async def offload_context(self, session_id, msgs):
+        name = f"{uuid4().hex}.json"
+        body = json.dumps({
+            "session_id": str(session_id),
+            "messages": [message.model_dump(mode="json") for message in msgs],
+        }, ensure_ascii=False)
+        async with self.recovery.store.transaction(self.recovery.lease):
+            self.directory.mkdir(parents=True, exist_ok=True)
+            (self.directory / name).write_text(body, encoding="utf-8")
+        return f"run-context://{self.recovery.lease.run_id}/{name}"
 
 
 class NativeContextCompactor:

@@ -359,6 +359,54 @@ async def test_fetch_url_rejects_out_of_boundary_url(monkeypatch, no_models):
 # ------------------------------------------------------------------ robots
 
 
+async def test_native_candidate_approval_uses_gateway_authority():
+    from open_deep_research.agentscope_runtime.web_tools import _approve_candidate_batch
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    decisions = {"allow.example": "allow", "ask.example": "ask", "deny.example": "deny"}
+
+    async def authorize(url, capability, consume):
+        assert capability == "tool.egress"
+        assert consume is False
+        return decisions[url.split("/")[2]]
+
+    token = egress_authorizer.set(authorize)
+    try:
+        candidates = [_candidate(f"https://{domain}/doc") for domain in decisions]
+        batch = await _approve_candidate_batch(candidates, 1, _config(), "run-1")
+        assert batch.pending_domains == ["ask.example"]
+        assert batch.denied_domains == ["deny.example"]
+        assert len(batch.urls) == 3
+    finally:
+        egress_authorizer.reset(token)
+
+
+async def test_direct_url_fetch_retains_egress_check_without_discovery_threshold(
+    monkeypatch, no_models,
+):
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    url = "https://official.example/doc"
+    cfg = _config(web_min_source_authority=0.99, sandbox_enabled=False)
+    _patch_engine(monkeypatch, documents_by_url={url: "Official documentation sentence. " * 20})
+    checked = []
+
+    async def authorize(target, capability, consume):
+        checked.append(target)
+        return "allow"
+
+    token = egress_authorizer.set(authorize)
+    try:
+        tool = fetch_url_tool(lambda: cfg, _StubFactory(), WebFetchLedger())
+        result = await tool.call(tool.input_schema.model_validate({"url": url}), _ctx(cfg))
+        payload = json.loads(result.output)
+        assert payload["documents"]
+        assert url in checked
+        assert "no_candidates_met_source_authority_threshold" not in payload["errors"]
+    finally:
+        egress_authorizer.reset(token)
+
+
 class _FakeRobotsResponse:
     def __init__(self, status, body=b""):
         self.status = status

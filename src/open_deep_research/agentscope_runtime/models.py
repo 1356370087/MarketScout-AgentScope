@@ -292,6 +292,7 @@ class ModelFactory:
                 model=self.run.get(field) or self.run.get(fallback),
                 parameters=SandboxChatModel.Parameters(max_tokens=self.run.get(tokens)),
                 client=client,
+                structured_attempts=self.run.get("max_structured_output_retries"),
             )
         return self._models[key]
 

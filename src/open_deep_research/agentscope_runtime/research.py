@@ -1,6 +1,7 @@
 """Composition root for an authorized native research run."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from open_deep_research.agentscope_runtime.research_agents import Researcher, Supervisor
 from open_deep_research.agentscope_runtime.research_models import ResearchModels
@@ -40,6 +41,7 @@ def build_research_pipeline(
     external_team_workers=False,
     team_launcher=None,
     authorized_user_id=None,
+    worker_only=False,
 ):
     """Bind frozen config, native model/tool adapters and stage persistence.
 
@@ -118,6 +120,12 @@ def build_research_pipeline(
             external=external_team_workers,
             launcher=team_launcher,
         )
+    if worker_only:
+        # Worker 借用正在运行的领队租约，只装配子任务执行器；不能恢复或
+        # 执行领队尚在 inflight 的外层阶段。
+        if workers is None:
+            raise ValueError("team executor requires a bound native team")
+        return SimpleNamespace(team_workers=workers)
     supervisor = Supervisor(
         models,
         config_provider,

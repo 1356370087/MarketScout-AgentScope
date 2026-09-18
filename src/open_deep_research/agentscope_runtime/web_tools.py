@@ -36,6 +36,7 @@ from open_deep_research.documents.contracts import (
     selection_from_config,
     source_url_identity,
 )
+from open_deep_research.sandbox.egress_context import authorize_url, egress_authorizer
 from open_deep_research.sandbox.policy import allowed_domains, network_policy_mode
 from open_deep_research.security.content import inspect_untrusted_content
 from open_deep_research.tools.base import (
@@ -554,12 +555,24 @@ def _approved_domains(config: dict[str, Any]) -> list[str]:
 async def _approve_candidate_batch(
     candidates: list[CandidateSource], iteration: int, config: dict[str, Any], run_id: str
 ) -> DomainApprovalBatch:
-    """静态域准入：offline/gateway-only 全拒；不在白名单的域拒绝。"""
+    """优先使用网关绑定的准入策略；独立执行时回退静态白名单。"""
     configurable = Configuration.from_runnable_config(config)
     mode = network_policy_mode(configurable)
     batch = DomainApprovalBatch(
-        run_id=run_id, iteration=iteration, domains=sorted({c.domain for c in candidates})
+        run_id=run_id, iteration=iteration, domains=sorted({c.domain for c in candidates}),
+        urls=[c.canonical_url for c in candidates],
     )
+    if egress_authorizer.get() is not None:
+        decisions = await asyncio.gather(*(authorize_url(url) for url in batch.urls))
+        batch.pending_domains = sorted({
+            candidate.domain for candidate, decision in zip(candidates, decisions)
+            if decision == "ask"
+        })
+        batch.denied_domains = sorted({
+            candidate.domain for candidate, decision in zip(candidates, decisions)
+            if decision not in {"allow", "ask"}
+        })
+        return batch
     if mode == "disabled":
         return batch
     if mode in {"offline", "gateway-only"}:
@@ -855,10 +868,15 @@ def fetch_url_tool(
         run_id = _resolve_run_identity(config)
         task_id = _resolve_task_identity(config)
         settings = _settings(config, run_id)
+        # 显式 URL 不参与发现候选的权威度筛选；网络准入仍由网关决定。
+        settings.fetch_top_k = 1
+        settings.min_source_authority = 0.0
         pipeline = WebResearchPipeline(
             search=_direct_search(input.url),
             settings=settings,
-            approve=None,
+            approve=lambda items, index: _approve_candidate_batch(
+                items, index, config, run_id
+            ),
             evidence_extractor=NativeEvidenceExtractor(factory),
         )
         request = SearchRequest(

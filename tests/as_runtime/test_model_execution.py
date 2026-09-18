@@ -97,6 +97,47 @@ async def test_sandbox_wire_v2_auth_and_result(mode):
         assert not client.is_closed
 
 
+@pytest.mark.parametrize("invalid", [None, {}])
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(invalid, repair_succeeds):
+    import jsonschema
+
+    from open_deep_research.agentscope_runtime.gateway import gateway_operation_scope
+
+    seen = []
+
+    def serve(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(200, json={
+            "protocol_version": 2,
+            "logical_operation_id": body["logical_operation_id"],
+            "requested_model": "fixture", "status": "completed",
+            "message": {"role": "assistant", "content": "output"},
+            "structured": {"value": 1} if repair_succeeds and len(seen) == 2 else invalid,
+            "finish_reason": "stop", "usage": {"input_tokens": 2, "output_tokens": 1},
+        })
+
+    class Answer(BaseModel):
+        value: int
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="https://gateway.invalid") as client:
+        model = SandboxChatModel(
+            binding=SandboxBinding("https://gateway.invalid", "run", "task", "quality_evaluation", "researching", SecretStr("fixture")),
+            model="fixture", client=client, structured_attempts=2,
+        )
+        with gateway_operation_scope("quality"):
+            if repair_succeeds:
+                result = await model.generate_structured_output([UserMsg("user", "judge")], Answer)
+                assert result.content == {"value": 1}
+            else:
+                with pytest.raises((GatewayCallError, jsonschema.ValidationError)):
+                    await model.generate_structured_output([UserMsg("user", "judge")], Answer)
+        assert len(seen) == 2
+        assert len({row["logical_operation_id"] for row in seen}) == 2
+        assert "every required property" in str(seen[1]["messages"])
+
+
 async def test_sandbox_uncertain_is_not_retried():
     calls = []
 

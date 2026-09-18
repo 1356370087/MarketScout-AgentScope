@@ -537,9 +537,31 @@ class Supervisor:
             assignments[assignment.task_id] = assignment
             return assignment
 
+        async def publish_task(assignment, status):
+            recovery = getattr(self.models, "recovery", None)
+            if recovery is None:
+                return
+            from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+
+            event = {
+                "pending": "created", "running": "started",
+            }.get(status, status)
+            await NativeEventPublisher(recovery.store, recovery.lease).publish(
+                f"research.task.{event}",
+                stage="researching",
+                payload={
+                    "task_id": assignment.task_id,
+                    "title": assignment.research_topic,
+                    "mode": "async" if cfg.enable_async_research else "sync",
+                    "status": status,
+                },
+                dedupe_key=f"task:{assignment.task_id}:{event}",
+            )
+
         async def execute_inner(assignment):
             nonlocal ledger
             async with semaphore:
+                await publish_task(assignment, "running")
                 outcome = (
                     await self.team_workers.dispatch(assignment, contract, feedback)
                     if self.team_workers is not None
@@ -571,16 +593,27 @@ class Supervisor:
 
         async def execute(assignment):
             recovery = getattr(self.models, "recovery", None)
-            if recovery:
-                with recovery.task(assignment.task_id):
-                    return await execute_inner(assignment)
-            return await execute_inner(assignment)
+            try:
+                if recovery:
+                    with recovery.task(assignment.task_id):
+                        result = await execute_inner(assignment)
+                else:
+                    result = await execute_inner(assignment)
+            except asyncio.CancelledError:
+                # 用户取消会撤销 fence；终态由 run.cancelled 投影。
+                raise
+            except Exception:
+                await publish_task(assignment, "failed")
+                raise
+            await publish_task(assignment, "completed")
+            return result
 
         async def conduct(input, context, progress):
             assignment = assign(input)
             recovery = getattr(self.models, "recovery", None)
             if recovery:
                 await recovery.store.register_task(recovery.lease, assignment.task_id)
+            await publish_task(assignment, "pending")
             task = asyncio.create_task(execute(assignment))
             tasks[assignment.task_id] = task
             if cfg.enable_async_research:
@@ -622,7 +655,7 @@ class Supervisor:
             pending = [task for task in tasks.values() if not task.done()]
             if pending:
                 await asyncio.wait(
-                    pending, timeout=1.0, return_when=asyncio.FIRST_COMPLETED
+                    pending, timeout=30.0, return_when=asyncio.FIRST_COMPLETED
                 )
             return await task_list(input, context, progress)
 

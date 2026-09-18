@@ -20,6 +20,28 @@ from open_deep_research.agentscope_runtime.spend_reconciliation import reconcile
 pytestmark = pytest.mark.asyncio
 
 
+async def test_production_context_offload_preserves_history_and_rejects_stale_owner(store, tmp_path):
+    import json
+    from agentscope.message import UserMsg
+    from open_deep_research.agentscope_runtime.context import ResearchContextMiddleware, RunContextOffloader
+    from open_deep_research.agentscope_runtime.recovery_store import FenceLost
+
+    state, lease = await create(store)
+    offloader = RunContextOffloader(tmp_path, SimpleNamespace(store=store, lease=lease))
+    messages = [UserMsg("user", "question"), UserMsg("user", "x" * 10000), UserMsg("user", "continue")]
+    agent = SimpleNamespace(state=SimpleNamespace(context=messages, session_id="session", middle_context={}))
+    await ResearchContextMiddleware(max_chars=2000, offloader=offloader).on_compress_context(agent, {}, None)
+    files = list((tmp_path / state.run_id / "context").glob("*.json"))
+    assert len(files) == 1
+    assert len(json.loads(files[0].read_text(encoding="utf-8"))["messages"]) == 3
+    assert len(agent.state.context) == 2
+    assert agent.state.middle_context["research_context_refs"] == [f"run-context://{state.run_id}/{files[0].name}"]
+    await store.release(lease)
+    with pytest.raises(FenceLost):
+        await offloader.offload_context("session", messages)
+    assert len(list(files[0].parent.glob("*.json"))) == 1
+
+
 async def test_creation_freezes_document_generation_and_default_proxy_budget(
     monkeypatch,
 ):
@@ -223,6 +245,81 @@ async def test_proxy_bill_does_not_resolve_unknown_execution_or_accept_other_run
     ] == "started"
 
 
+async def test_background_billing_does_not_acquire_waiting_run(store, monkeypatch):
+    import asyncio
+
+    from open_deep_research.agentscope_runtime import spend_reconciliation as billing
+
+    run_ids = {}
+    for status in ("waiting", "completed"):
+        state, lease = await create(store)
+        state.status = status
+        await store.save(lease, state)
+        await store.begin_operation(lease, "model", "gateway:model", {})
+        await store.commit_operation(lease, "model", {"status": "completed"})
+        await store.release(lease)
+        run_ids[status] = state.run_id
+
+    calls = []
+    cycles = 0
+
+    async def sleep(_interval):
+        nonlocal cycles
+        cycles += 1
+        if cycles > 1:
+            raise asyncio.CancelledError
+
+    async def collect(_store, lease):
+        calls.append(lease.run_id)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(billing, "collect_spend", collect)
+    with pytest.raises(asyncio.CancelledError):
+        await billing.reconciliation_loop(SimpleNamespace(store=store))
+    assert calls == [run_ids["completed"]]
+
+
+async def test_supervisor_task_lifecycle_reaches_public_projection(store):
+    from agentscope.message import TextBlock
+    from test_research_migration import Models, cfg, contract, tool_call
+
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+    from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
+    from open_deep_research.events.public import PublicEvent, project_public_events
+
+    state, lease = await create(store)
+    models = Models({"supervisor": [
+        [tool_call("TaskCreate", "one", research_topic="official evidence")],
+        [TextBlock(text="done")],
+    ]})
+    models.recovery = RecoverySession(store, lease, state)
+
+    class Worker:
+        async def run(self, assignment, contract, feedback):
+            return ResearchHandoff(**assignment.model_dump(), compressed_research="done")
+
+    try:
+        results, _ = await Supervisor(
+            models, lambda: cfg(enable_async_research=True), Worker(), run_id=state.run_id,
+        ).run("brief", contract())
+        events = [mapped for event in await store.events(state.run_id, "owner")
+                  for mapped in public_events(event) if mapped[0].startswith("research.task.")]
+        assert [item[0] for item in events] == [
+            "research.task.created", "research.task.started", "research.task.completed",
+        ]
+        projected = project_public_events([
+            PublicEvent(run_id=state.run_id, event_id=str(i), sequence=i + 1,
+                        timestamp="2026-09-18T00:00:00Z", type=kind, stage=stage,
+                        payload=payload, dedupe_key=str(i))
+            for i, (kind, stage, payload) in enumerate(events)
+        ])
+        task = projected.task_items[results[0]["task_id"]]
+        assert task["status"] == "completed"
+        assert task["title"] == "official evidence"
+    finally:
+        await models.recovery.close()
+
+
 async def test_controller_team_boundary_signatures_fixed_command_and_cleanup(
     monkeypatch, tmp_path
 ):
@@ -304,5 +401,7 @@ async def test_controller_team_boundary_signatures_fixed_command_and_cleanup(
             "open_deep_research.agentscope_runtime.team_executor",
         ]
         assert created[0][2]["cap_drop"] == ["ALL"]
+        assert created[0][2]["auto_remove"] is False
+        assert created[0][2]["healthcheck"] == {"test": ["NONE"]}
         await launcher.aclose()
         assert not containers
