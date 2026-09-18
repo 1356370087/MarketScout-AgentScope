@@ -4,7 +4,15 @@
 
 ## 当前收口状态（2026-09-18）
 
-以当前工作区实现与本轮测试为准。正式实施完成数保持 **37/81**，加权约 **45.1%**，端到端业务验收仍为 **0/75**；这是原任务的验收计数，不是代码实现比例。此次用户授权对 E2E P0/P1 编码并执行一次本地提交。
+原生可观测性迁移：已补 AgentScope 生命周期内容最小化 OTel/Langfuse 导出、SQL 权威统计到 Prometheus 及专用 Grafana 看板；修复预算 undefined 标签、工具成功率、角色/任务分组、时间桶和任务级调用计数。当前本地 `.env` 的 `LANGFUSE_ENABLED / OTEL_ENABLED / PROMETHEUS_ENABLED` 均为 false，未擅自开启或声称生产平台验收通过。实施与验证边界见 [原生观测迁移记录](implementation/native-observability-20260918.md)。
+
+异步团队架构已完成代码核查及 Agent Teams 对照：当前为主管集中调度 + 成员点对点通信能力。拟迁移到成员自主认领的协作模式，AT-1～AT-4 均处于**待用户审批，未编码**；详见 [拓扑调整方案](implementation/agent-teams-topology-proposal.md)。
+
+后续 Docker 真实复验已通过 Playwright 弹出浏览器执行公开网络异步研究，知识库关闭。发现并修复镜像依赖、迁移 schema、Worker 装配、工具路由、冻结配置、Web 准入、审批租约、Controller 并发连接及任务事件等实际联调问题；原生统一专项 **210 passed**，其后上下文归档与生产装配专项分别 **47 / 4 passed**（存在重叠）。实际搜索、抓取、证据抽取与质量拒绝已取得真实回执，完整报告交付以 [Docker 真实复验记录](implementation/docker-web-live-20260918.md) 为准。以下表格保留上一轮编码提交时的验收快照，不代表这些 live 实验尚未尝试。
+
+以当前工作区实现与本轮测试为准。正式实施完成数 **39/81**，加权约 **47.6%**，端到端业务验收仍为 **0/75**；这是原任务的验收计数，不是代码实现比例。此次用户授权对 E2E P0/P1 编码并执行一次本地提交；同日按用户要求完成 M5 T035/T036 复验验收（见 [M5 复验验收记录](implementation/m5-t035-t036-reacceptance.md)），完成数 37/81 → 39/81。
+
+最新真实运行 `e290e2054b18532c94d93e89631d1ed4` 已 `completed`：异步双任务、动态出网审批、上下文归档、质量门禁降级、证据恢复报告、刷新和 Markdown/JSON 下载闭环完成。质量仍为 `degraded / research_incomplete`，不是完整技术简报验收通过；该运行发现的细粒度用量投影和预算标签缺口已在本轮编码修复，后端 138 项、前端 9 项回归及 TypeScript 检查通过，真实观测栈联调仍待验收。旧记录缺失的维度不伪造回填。
 
 | 收口项 | 当前实现 | 验收状态 |
 |---|---|---|
@@ -32,7 +40,7 @@
 | 九份主文档与任务定义落盘 | 已完成 | [文档验证通过](evidence/validation-results.json)：编号/链接/依赖/配置/源码依据均完整 |
 | 旧系统回归基线及分阶段真实设施验证 | 已执行，覆盖仍有缺口 | M0 回归与 M1/M2、M3 Docker、M5/M6 分阶段记录见下表；不是整仓库无失败或生产切换通过 |
 
-业务功能迁移 **0/75**；实施任务完成 **37/81**（M0/M1/M2、M4 全部；M3 的 T017～T022；M5 的 T033/T034/T037～T040 组件验收完成）。T035/T036 旧路径退出尚待验收；T021 原生组件已验收，T023 已按用户最新要求恢复实施。加权实施进度 **约 45.1%**。本地组件及真实模型部分成功不等同业务切换完成，实际人日未记录。
+业务功能迁移 **0/75**；实施任务完成 **39/81**（M0/M1/M2、M4 全部；M3 的 T017～T022；M5 全部验收完成，其中 T035/T036 于 2026-09-18 复验关闭）。T021 原生组件已验收，T023 已按用户最新要求恢复实施。加权实施进度 **约 47.6%**。本地组件及真实模型部分成功不等同业务切换完成，实际人日未记录。
 
 M6 八项任务均已推进并于 2026-09-17 在当前代码树完成组件验收复验：AS-A041～A048 全部通过（35 项故障矩阵 + 470 项全套件联合回归，含真实 PostgreSQL）；但按原定义的依赖与旧路径退出条件（T023 暂缓、默认入口仍为 QueryEngine、真实出网审批与部署故障矩阵未接线），无任务登记已完成，T041/T043/T044/T046 维持待验收、T042/T045/T047/T048 维持进行中，详见 [M6 验收复验记录](implementation/m6-acceptance-report.md)与 [M6 实施报告](implementation/m6-recovery-report.md)。
 
@@ -103,13 +111,13 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 | [AS-T032](05-migration-roadmap.md#as-t032) 接入沙箱权限与网络网关 | M4 | 用户+编码 Agent | 1～2 | — | 已完成 | [M4 收尾报告](implementation/m4-t026-t032-report.md)：能力令牌签发/回验/过期、manual/auto/open 最窄合成与封顶、审批版本冲突与 allow/block、auto 分类器带缓存、Worker 密钥形状键拒绝 | 2026-09-15 |
 | [AS-T033](05-migration-roadmap.md#as-t033) 实现完整研究阶段 Pipeline | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T034](05-migration-roadmap.md#as-t034) 迁移澄清与研究简报 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
-| [AS-T035](05-migration-roadmap.md#as-t035) 迁移 Supervisor | M5 | 用户+编码 Agent | 1～2 | — | 待验收 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；旧执行路径退出及恢复集成仍待验证 | 2026-09-15 |
-| [AS-T036](05-migration-roadmap.md#as-t036) 迁移 Researcher | M5 | 用户+编码 Agent | 1～2 | — | 待验收 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；旧执行路径退出及恢复集成仍待验证 | 2026-09-15 |
+| [AS-T035](05-migration-roadmap.md#as-t035) 迁移 Supervisor | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 复验验收](implementation/m5-t035-t036-reacceptance.md)：AS-A035 组件标准通过；引擎路由缝、M6 三窗口强杀恢复、M7 持久异步团队与 2026-09-18 真实异步双任务运行覆盖原扣验项；旧 supervisor 循环物理删除由 T081 跟踪 | 2026-09-18 |
+| [AS-T036](05-migration-roadmap.md#as-t036) 迁移 Researcher | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 复验验收](implementation/m5-t035-t036-reacceptance.md)：AS-A036 组件标准通过；每主题独立 Worker 上下文、真实工具轮次与证据抽取、压缩归档及错误终态经 2026-09-18 真实链路复核；旧 researcher 循环物理删除由 T081 跟踪 | 2026-09-18 |
 | [AS-T037](05-migration-roadmap.md#as-t037) 迁移上下文压缩及外置 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T038](05-migration-roadmap.md#as-t038) 接入覆盖与来源契约 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T039](05-migration-roadmap.md#as-t039) 接入证据及内外质量门禁 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T040](05-migration-roadmap.md#as-t040) 实现补研与业务完成策略 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
-| [AS-T041](05-migration-roadmap.md#as-t041) 实现框架与业务检查点 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；整项仍依赖 T036 验收与旧 QueryLoopState 写入退出 | 2026-09-17 |
+| [AS-T041](05-migration-roadmap.md#as-t041) 实现框架与业务检查点 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；整项仍依赖旧 QueryLoopState 写入退出（T036 验收已于 2026-09-18 满足）| 2026-09-17 |
 | [AS-T042](05-migration-roadmap.md#as-t042) 接入模型及工具提交账本 | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [T048 部署与账本记录](implementation/m6-t048-deployment-closeout.md)：扩展 SQL 工具回执、批量 fetch 实测量和模型失败尝试计费；T023 进行中、生产资源提供器及全链路未知结果对账仍未关闭；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
 | [AS-T043](05-migration-roadmap.md#as-t043) 实现领域 outbox 和事件重放 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；等 T042 全调用链与旧事件入口退出 | 2026-09-17 |
 | [AS-T044](05-migration-roadmap.md#as-t044) 接入运行租约与 fencing | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；旧运行路由/锁退出仍待集成 | 2026-09-17 |
@@ -214,3 +222,5 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 - 2026-09-17：推进生产资源提供器、Web Gateway 显式任务凭据及正式 team_executor 入口；内部出网端点接原生 SQL 租约。38 项早期联合、19 项真实 PG/容器专项通过；真实 LiteLLM 冻结 10 个目录并创建/封禁测试 Key。完整真实研究 E2E 未通过，状态不升级，详见 [生产接线记录](implementation/m10-production-resources-report.md)。
 
 - 生产接线补验：原生全量 508 passed/1 failed/2 skipped；新 Worker 测试夹具的冻结指纹错误修正后真库专项 1 passed。真实研究生成、正式 Worker 命令的容器联调及长时凭据续期仍未关闭，不升级任务完成状态。
+
+- 2026-09-18：按用户要求对 M5 T035/T036 执行复验验收：2026-09-15 扣验的三项（旧研究入口退出、工具级确认/外部执行恢复、持久异步团队）分别被引擎路由缝与 migration_check 守卫、M6 部署矩阵三窗口强杀恢复（489/515 全量）、M7 Worker 与正式 Controller 团队通道，及当日真实公开网络异步双任务运行（`e290e205…`，`completed`）覆盖；两项登记已完成，完成数 39/81、加权约 47.6%。旧循环物理删除仍由 T081 跟踪，业务验收 0/75 不变。见 [M5 复验验收记录](implementation/m5-t035-t036-reacceptance.md)。
