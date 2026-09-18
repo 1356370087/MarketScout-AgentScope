@@ -143,7 +143,8 @@ class TeamWorkers:
         for event in await self.team.pending("lead"):
 
             async def apply(db, item):
-                if item.type == "message":
+                if item.type in {"message", "send_message"}:
+                    from open_deep_research.tasks.team_messages import message_text
                     await db.execute(
                         """UPDATE research_team_members SET session=jsonb_set(session,'{_native_inbox}',
                            coalesce(session->'_native_inbox','[]'::jsonb) || $2::jsonb)
@@ -151,7 +152,7 @@ class TeamWorkers:
                         self.team.lease.run_id,
                         json.dumps(
                             [
-                                f"TeamSay {item.sender}: {item.payload.get('content', '')}"
+                                f"SendMessage {item.sender}: {message_text(item)}; request_id={item.payload.get('request_id', item.event_id)}; version={item.payload.get('version', '')}"
                             ]
                         ),
                     )
@@ -429,8 +430,22 @@ class _Worker:
                 if state in {"cancelled", "failed", "timed_out"}:
                     raise TaskStopped(state)
                 raise WorkerBusy(self.task_id)
+            # A member can restart without changing the Lead's run fence. The
+            # atomic task lease above fences the previous Worker, so only its
+            # replay-safe unfinished receipts may cross this attempt boundary.
+            operation_table = self.team.transport.run_table.replace(
+                '"as_recovery_runs"', '"as_recovery_operations"'
+            )
+            await db.execute(
+                f"""UPDATE {operation_table} SET fence=0
+                    WHERE run_id=$1 AND starts_with(key,$2) AND state='started'
+                      AND replay_safe=1 AND fence=$3""",
+                self.team.lease.run_id,
+                f"team-worker:0:{self.task_id}:",
+                self.team.lease.fence,
+            )
             self.member_id = row["owner"]
-            return json.loads(row["snapshot"])
+            return {**json.loads(row["snapshot"]), "execution_mode": row["execution_mode"], "phase": row["phase"]}
 
     async def guard(self, db):
         await self.parent_guard(db)
@@ -453,13 +468,19 @@ class _Worker:
                 f"""SELECT task_id FROM {self.task_table} WHERE run_id=:run AND task_id=:task
                 AND owner=:member AND status='running'
                 AND snapshot->'_native_worker'->>'token'=:token
-                AND (snapshot->'_native_worker'->>'expires')::double precision>extract(epoch from clock_timestamp())"""
+                AND (snapshot->'_native_worker'->>'expires')::double precision>extract(epoch from clock_timestamp())
+                AND (CAST(:member_token AS text) IS NULL OR EXISTS (
+                    SELECT 1 FROM {self.task_table.replace('research_team_tasks', 'research_team_members')} m
+                    WHERE m.run_id=:run AND m.member_id=:member AND m.execution_token=:member_token
+                      AND m.lease_expires>clock_timestamp() AND m.status NOT IN ('closed','failed') FOR SHARE))
+                FOR SHARE"""
             ),
             {
                 "run": self.team.lease.run_id,
                 "task": self.task_id,
                 "member": self.member_id,
                 "token": self.token,
+                "member_token": getattr(self.host, "member_token", None),
             },
         )
         if current is None:
@@ -470,25 +491,30 @@ class _Worker:
             await self.guard(db)
         for event in await self.team.pending(self.member_id):
 
+            stop = event.type == "cancel_request" or (
+                event.type == "task_stop" and event.payload.get("task_id") == self.task_id
+            )
+
             async def apply(db, item):
-                if item.is_control:
+                if stop:
                     await db.execute(
                         "UPDATE research_team_tasks SET status='cancelled',version=version+1 WHERE run_id=$1 AND task_id=$2 AND status='running'",
                         self.team.lease.run_id,
                         self.task_id,
                     )
-                elif item.type == "message":
+                elif item.type in {"message", "send_message"}:
+                    from open_deep_research.tasks.team_messages import message_text
                     await db.execute(
                         """UPDATE research_team_tasks SET snapshot=jsonb_set(snapshot,'{_team_feedback}',
                            coalesce(snapshot->'_team_feedback','[]'::jsonb) || $3::jsonb)
                            WHERE run_id=$1 AND task_id=$2""",
                         self.team.lease.run_id,
                         self.task_id,
-                        json.dumps([str(item.payload.get("content", ""))]),
+                        json.dumps([message_text(item)]),
                     )
 
             await self.team.apply_input(self.member_id, event.event_id, apply)
-            if event.is_control:
+            if stop:
                 raise TaskStopped(event.type)
         async with self.team.transport.store.pool.acquire() as db:
             feedback = await db.fetchval(
@@ -597,11 +623,20 @@ class _Worker:
                         snapshot["_native_handoff"]
                     )
                 else:
+                    execution_feedback = list(snapshot.get("pending_update_instructions", []))
+                    if snapshot.get("execution_mode") == "plan_approval":
+                        from open_deep_research.agentscope_runtime.teams_planning import wait_for_plan
+                        approved_plan = await wait_for_plan(self, researcher, snapshot)
+                        execution_feedback.append("按 Lead 已批准的当前计划执行；超出计划范围须先向 Lead 提出修改：" +
+                                                  json.dumps(approved_plan, ensure_ascii=False))
+                    coordination = [self.say_tool()]
+                    from open_deep_research.agentscope_runtime.teams_tools import member_tools
+                    coordination = member_tools(self)
                     outcome = await researcher.run(
                         assignment,
                         snapshot["coverage_contract"],
-                        snapshot.get("pending_update_instructions", []),
-                        coordination_tools=[self.say_tool()],
+                        execution_feedback,
+                        coordination_tools=coordination,
                         worker_middlewares=[_Inputs(self)],
                     )
                     async with (
@@ -618,6 +653,11 @@ class _Worker:
                             ),
                         )
                     await self.host.hit("handoff_prepared")
+                if snapshot.get("execution_mode"):
+                    async with self.team.transport.store.pool.acquire() as db, db.transaction():
+                        await self.guard(db)
+                        await db.execute("UPDATE research_team_tasks SET phase='assessing',version=version+1 WHERE run_id=$1 AND task_id=$2",
+                            self.team.lease.run_id, self.task_id)
                 await self.team.admit_handoff(
                     "handoff:" + self.task_id,
                     self.member_id,

@@ -77,5 +77,6 @@ class TeamMessageRequest(BaseModel):
     """Human direction to a member, scoped to the authenticated run owner."""
 
     to: str
-    message: str = Field(min_length=1, max_length=12000)
+    message: str | dict
+    summary: str = ""
     command_id: str = Field(min_length=1, max_length=256)

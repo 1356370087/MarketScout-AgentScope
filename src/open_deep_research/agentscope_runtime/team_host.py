@@ -1,5 +1,6 @@
 """Deployment-owned team resources and deterministic run/session binding."""
 
+import asyncio
 import json
 from uuid import NAMESPACE_URL, uuid5
 
@@ -20,6 +21,9 @@ class NativeTeamHost:
     def __init__(self, pool, storage, message_bus, *, recovery_schema, owns_pool=False):
         self.pool, self.storage, self.message_bus = pool, storage, message_bus
         self.recovery_schema, self.owns_pool = recovery_schema, owns_pool
+        self.delivery = None
+        self.delivery_lock = asyncio.Lock()
+        self.settings = None
 
     @classmethod
     async def start(cls, runtime):
@@ -39,19 +43,31 @@ class NativeTeamHost:
                 await db.fetchval(
                     "SELECT count(*) FROM research_coordination_transactions WHERE false"
                 )
-            return cls(
+            host = cls(
                 pool,
                 runtime.storage,
                 runtime.message_bus,
                 recovery_schema=settings.database_schema,
                 owns_pool=True,
             )
+            host.settings = settings
+            return host
         except BaseException:
             await pool.close()
             raise
 
     async def bind(self, recovery, *, max_iters=10):
         lease = recovery.lease
+        from open_deep_research.agentscope_runtime.run_config import RunConfig
+        frozen = getattr(getattr(recovery, "snapshot", None), "application", {}).get("configuration")
+        teams = bool(frozen and RunConfig.restore(frozen).get("async_research_mode") == "teams")
+        if teams and self.settings is not None:
+            async with self.delivery_lock:
+                if self.delivery is None:
+                    from open_deep_research.tasks.team_delivery import TeamDelivery
+                    delivery = TeamDelivery(self.pool, self.settings)
+                    await delivery.start()
+                    self.delivery = delivery
 
         def identity(kind):
             return uuid5(
@@ -65,7 +81,11 @@ class NativeTeamHost:
             lease,
             recovery_schema=self.recovery_schema,
             message_bus=self.message_bus,
+            reliable=teams,
         )
+        from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+        if hasattr(recovery, "store"):
+            transport.publisher = NativeEventPublisher(recovery.store, recovery.lease)
         async with self.pool.acquire() as db, db.transaction():
             await transport.guard(db)
         existing = await self.storage.get_agent(lease.user_id, agent_id)
@@ -97,9 +117,12 @@ class NativeTeamHost:
             leader_session_id=session_id,
             template=research_member_template(max_iters=max_iters),
         )
-        await team.create("research", "Evidence-based research")
+        if not teams:
+            await team.create("research", "Evidence-based research")
         return team
 
     async def aclose(self):
+        if self.delivery:
+            await self.delivery.aclose()
         if self.owns_pool:
             await self.pool.close()

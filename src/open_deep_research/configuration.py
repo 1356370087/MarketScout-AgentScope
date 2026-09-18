@@ -16,7 +16,7 @@ from open_deep_research.quality.policy import (
     rigor_from_legacy_min_score,
 )
 
-RUN_CONFIG_SCHEMA_VERSION = 13
+RUN_CONFIG_SCHEMA_VERSION = 14
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
@@ -103,6 +103,8 @@ RUN_CONFIG_FROZEN_FIELDS = (
     "egress_classifier_max_consecutive_failures",
     "sandbox_enabled",
     "enable_async_research",
+    "async_research_mode",
+    "team_execution_mode",
     "sandbox_profile_id",
     "sandbox_policy_digest",
     "sandbox_runtime_digest",
@@ -169,8 +171,12 @@ _V12_ONWARD_FROZEN_FIELDS = {
     "sandbox_egress_pending_wait_seconds",
 }
 _V13_ONWARD_FROZEN_FIELDS = {"report_section_concurrency"}
+_V14_ONWARD_FROZEN_FIELDS = {"async_research_mode", "team_execution_mode"}
+RUN_CONFIG_FROZEN_FIELDS_V13 = tuple(
+    name for name in RUN_CONFIG_FROZEN_FIELDS if name not in _V14_ONWARD_FROZEN_FIELDS
+)
 RUN_CONFIG_FROZEN_FIELDS_V12 = tuple(
-    name for name in RUN_CONFIG_FROZEN_FIELDS if name not in _V13_ONWARD_FROZEN_FIELDS
+    name for name in RUN_CONFIG_FROZEN_FIELDS_V13 if name not in _V13_ONWARD_FROZEN_FIELDS
 )
 RUN_CONFIG_FROZEN_FIELDS_V7 = tuple(
     field_name
@@ -207,6 +213,8 @@ RUN_CONFIG_FROZEN_FIELDS_V6 = tuple(
         "sandbox_profile_id",
         "sandbox_enabled",
         "enable_async_research",
+        "async_research_mode",
+        "team_execution_mode",
         "sandbox_policy_digest",
         "sandbox_runtime_digest",
         "gateway_protocol_version",
@@ -1168,6 +1176,8 @@ class Configuration(BaseModel):
     )
     """Map of user role (from JWT app_metadata) to blocked tool origins. None = no role-based blocking."""
     # Async SubAgent Configuration
+    async_research_mode: Literal["collaborator", "teams"] = "collaborator"
+    team_execution_mode: Literal["direct", "plan_approval"] = "direct"
     enable_async_research: bool = Field(
         default=False,
         metadata={
@@ -2269,6 +2279,8 @@ def frozen_run_config_values(config: RuntimeConfig) -> dict[str, Any]:
         if schema_version == 11
         else RUN_CONFIG_FROZEN_FIELDS_V12
         if schema_version == 12
+        else RUN_CONFIG_FROZEN_FIELDS_V13
+        if schema_version == 13
         else RUN_CONFIG_FROZEN_FIELDS
     )
     return {
@@ -2337,6 +2349,8 @@ def freeze_run_config(
             if schema_version == 11
             else RUN_CONFIG_FROZEN_FIELDS_V12
             if schema_version == 12
+            else RUN_CONFIG_FROZEN_FIELDS_V13
+            if schema_version == 13
             else RUN_CONFIG_FROZEN_FIELDS
         )
         missing = [

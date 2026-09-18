@@ -5,6 +5,10 @@
     {"id": 1, "title": "运行状态（持久化）", "type": "timeseries", "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_runs", "legendFormat": "{{status}}"}]},
     {"id": 2, "title": "物理工具结果（持久化）", "type": "timeseries", "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_tools", "legendFormat": "{{status}}"}]},
     {"id": 3, "title": "已结算 Token（含保守估算）", "type": "timeseries", "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_tokens", "legendFormat": "{{direction}}"}]},
-    {"id": 4, "title": "操作状态与未知隔离", "type": "timeseries", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_operations", "legendFormat": "{{kind}} / {{state}}"}]}
+    {"id": 4, "title": "操作状态与未知隔离", "type": "timeseries", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_operations", "legendFormat": "{{kind}} / {{state}}"}]},
+    {"id": 5, "title": "任务领取冲突", "type": "timeseries", "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_team_claim_conflicts"}]},
+    {"id": 6, "title": "团队消息积压", "type": "timeseries", "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_team_message_backlog"}]},
+    {"id": 7, "title": "成员恢复次数", "type": "timeseries", "gridPos": {"x": 0, "y": 24, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_team_member_recoveries"}]},
+    {"id": 8, "title": "平均计划审核耗时（秒）", "type": "timeseries", "gridPos": {"x": 12, "y": 24, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_team_plan_review_seconds"}]}
   ]
 }

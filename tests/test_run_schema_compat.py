@@ -103,7 +103,7 @@ def test_schema_below_minimum_is_rejected_with_accurate_message() -> None:
 
 def test_v7_frozen_set_matches_historical_contract() -> None:
     """The derived v7 set must not contain fields introduced in v8+."""
-    assert RUN_CONFIG_SCHEMA_VERSION == 13
+    assert RUN_CONFIG_SCHEMA_VERSION == 14
     assert _V8_ONWARD == {
         "model_backend",
         "litellm_policy_revision",

@@ -66,6 +66,9 @@ def install_team_routes(app, runtime):
                 return {"status": "stopped"}
             if container.status == "running":
                 return {"status": "running"}
+            if not request.allow_start:
+                # Keep the exhausted attempt available for operational diagnosis.
+                raise ValueError("team_container_restart_limit")
             container.remove()
         if request.stop:
             return {"status": "stopped"}
@@ -80,7 +83,8 @@ def install_team_routes(app, runtime):
             raise ValueError("team_worker_environment_missing")
         environment = dict(dotenv_values(env_file))
         environment["AS_TEAM_EXECUTION"] = json.dumps(
-            {"lease": lease, "task_id": request.task_id}
+            {"lease": lease, **({"member_id": request.task_id.removeprefix("member:")}
+                if request.task_id.startswith("member:") else {"task_id": request.task_id})}
         )
         mounts = [
             Mount(**item)

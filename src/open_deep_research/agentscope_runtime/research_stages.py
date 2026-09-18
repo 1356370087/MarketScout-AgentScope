@@ -147,8 +147,13 @@ class NativeResearchStages:
             return PendingDecision(stage="plan_approval", question=state.research_brief)
 
     async def research_supervisor(self, state):
+        cfg = Configuration.from_runnable_config(self.config_provider())
+        feedback = list(state.feedback)
+        if cfg.enable_async_research and cfg.async_research_mode == "teams":
+            feedback.extend("用户原始协作要求：" + message.get_text_content()
+                for message in state.messages if message.role == "user")
         state.findings, agent_state = await self.supervisor.run(
-            state.research_brief, state.coverage_contract, state.feedback
+            state.research_brief, state.coverage_contract, feedback
         )
         state.agent_states["supervisor"] = agent_state
         state.completion_outcome = agent_state.get("middle_context", {}).get(

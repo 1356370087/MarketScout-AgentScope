@@ -158,6 +158,7 @@ class ProductionRunFactory:
             ledger = self.active[recovery.lease.run_id]["ledger"]
             if ledger is not None:
                 ledger.config = config
+                ledger.team = team
             try:
                 yield pipeline
             finally:

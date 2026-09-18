@@ -358,6 +358,16 @@ class RecoveryStore:
             await conn.execute(
                 update(self.runs).where(self._identity(lease)).values(snapshot=body)
             )
+            configuration = body.get("application", {}).get("configuration", {}).get("contract", {}).get("configurable", {})
+            if snapshot.status == "failed" and self.engine.dialect.name == "postgresql" and configuration.get("async_research_mode") == "teams":
+                # A failed Lead cannot leave tasks or approvals apparently active.
+                params = {"run": lease.run_id}
+                await conn.execute(text("""UPDATE research_team_tasks SET status='failed',phase=NULL,version=version+1
+                    WHERE run_id=:run AND status IN ('pending','running','waiting_for_confirmation')"""), params)
+                await conn.execute(text("UPDATE research_team_plans SET status='superseded' WHERE run_id=:run AND status='pending'"), params)
+                await conn.execute(text("UPDATE research_team_proposals SET status='cancelled' WHERE run_id=:run AND status='pending'"), params)
+                await conn.execute(text("UPDATE research_team_members SET status='failed',execution_token=NULL,lease_expires=NULL WHERE run_id=:run AND status<>'closed'"), params)
+                await conn.execute(text("UPDATE research_teams SET status='failed' WHERE run_id=:run"), params)
             if limits is not None:
                 for dimension, maximum in limits.items():
                     BudgetDimension(dimension)
@@ -960,6 +970,15 @@ class RecoveryStore:
             state.status, state.pending, state.inflight = "cancelled", None, None
             state.approvals.clear()
             state.error = "user_cancelled"
+            configuration = state.application.get("configuration", {}).get("contract", {}).get("configurable", {})
+            if self.engine.dialect.name == "postgresql" and configuration.get("async_research_mode") == "teams":
+                # Same transaction as fence revocation: cancelled runs cannot leave a live board.
+                await conn.execute(text("""UPDATE research_team_tasks SET status='cancelled',phase=NULL,version=version+1
+                    WHERE run_id=:run AND status IN ('pending','running','waiting_for_confirmation')"""), {"run": run_id})
+                await conn.execute(text("UPDATE research_team_plans SET status='superseded' WHERE run_id=:run AND status='pending'"), {"run": run_id})
+                await conn.execute(text("UPDATE research_team_proposals SET status='cancelled' WHERE run_id=:run AND status='pending'"), {"run": run_id})
+                await conn.execute(text("UPDATE research_team_members SET status='stopping',execution_token=NULL,lease_expires=NULL WHERE run_id=:run AND member_id<>'lead' AND status<>'closed'"), {"run": run_id})
+                await conn.execute(text("UPDATE research_teams SET status='cancelled' WHERE run_id=:run"), {"run": run_id})
             await conn.execute(
                 update(self.runs)
                 .where(self.runs.c.run_id == run_id)

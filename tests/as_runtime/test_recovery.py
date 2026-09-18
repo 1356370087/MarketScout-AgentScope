@@ -51,6 +51,54 @@ async def create(store, **kwargs):
     return state, lease
 
 
+async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
+    import jsonschema
+    from pydantic import BaseModel
+    from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
+
+    class Rating(BaseModel):
+        relevance: int
+
+    state, lease = await create(store)
+    calls = []
+
+    async def invalid_judge():
+        calls.append(1)
+        jsonschema.validate({}, Rating.model_json_schema())
+
+    async def next_operation():
+        return {"continued": True}
+
+    session = RecoverySession(store, lease, state, model_accounting="gateway")
+    with pytest.raises(ModelOutputProtocolError, match="relevance"):
+        await session.model("quality_evaluation", [UserMsg("user", "judge")], invalid_judge, schema=Rating)
+    assert session.problem is None
+    assert await session.operation("next", {}, next_operation) == {"continued": True}
+    await session.close()
+    replay = await RecoverySession.open(store, state.run_id, "owner")
+    replay.model_accounting = "gateway"
+    try:
+        with pytest.raises(ModelOutputProtocolError, match="relevance"):
+            await replay.model("quality_evaluation", [UserMsg("user", "judge")], invalid_judge, schema=Rating)
+        assert replay.problem is None and calls == [1]
+    finally:
+        await replay.close()
+
+
+async def test_uncertain_judge_gateway_still_fences_session(store):
+    from open_deep_research.agentscope_runtime.gateway import GatewayCallError
+    state, lease = await create(store)
+    session = RecoverySession(store, lease, state, model_accounting="gateway")
+    async def uncertain():
+        raise GatewayCallError("sandbox_gateway_outcome_unknown", uncertain=True)
+    try:
+        with pytest.raises(GatewayCallError):
+            await session.model("quality_evaluation", [], uncertain)
+        assert isinstance(session.problem, GatewayCallError)
+    finally:
+        await session.close()
+
+
 @pytest.mark.parametrize(
     "stage", ["memory_extract_and_write", "final_report_generation"]
 )
@@ -1087,6 +1135,29 @@ async def test_tool_rejection_releases_budget_but_uncertain_write_is_quarantined
         budget = await store.budget(state.run_id, "owner")
         assert budget["reserved"]["tool_calls"] == 0
         assert budget["used"]["tool_calls"] == 0
+
+
+async def test_team_message_error_has_durable_receipt_without_unknown_write(store):
+    from open_deep_research.agentscope_runtime.teams_tools import communication_tools
+    from open_deep_research.tools.governance import ToolError
+
+    state, lease = await create(store)
+    sender = next(t for t in communication_tools(None, None, "test:") if t.name == "SendMessage")
+    calls = []
+
+    async def handler():
+        calls.append(1)
+        return GovernedToolCallResult(
+            ToolOutcomeMessage("error", "SendMessage", "bad"),
+            error=ToolError(error_type="network_error", tool_name="SendMessage", message="PG receipt temporarily unavailable"),
+        )
+
+    session = RecoverySession(store, lease, state)
+    first = await session.tool(sender, "bad", {}, handler)
+    replay = await session.tool(sender, "bad", {}, handler)
+    assert first.error.error_type == replay.error.error_type
+    assert calls == [1]
+    assert session.problem is None
 
 
 async def test_public_approval_projection_retains_unresolved_item(store, tmp_path):

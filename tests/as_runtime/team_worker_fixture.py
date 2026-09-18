@@ -51,9 +51,9 @@ class Model(ScriptedModel):
         ]
         if "web_research" not in prior:
             blocks = [tool_call("web_research", "search")]
-        elif "TeamSay" not in prior:
+        elif "SendMessage" not in prior:
             blocks = [
-                tool_call("TeamSay", "report", to="lead", content="Evidence ready")
+                tool_call("SendMessage", "report", to="lead", message="Evidence ready")
             ]
         else:
             blocks = [tool_call("ResearchComplete", "done")]
@@ -176,6 +176,12 @@ async def child(request_path):
 
         async def failpoint(point):
             should_stop = point == request["window"]
+            if request["window"] == "tool_planned" and point == "operation_planned":
+                async with pool.acquire() as db:
+                    should_stop = bool(await db.fetchval(
+                        "SELECT 1 FROM as_recovery_operations WHERE run_id=$1 AND kind='tool' AND state='started' AND replay_safe=1 LIMIT 1",
+                        lease.run_id,
+                    ))
             if request["window"] == "tool_committed" and point == "operation_committed":
                 async with pool.acquire() as db:
                     should_stop = (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import asyncio
 import secrets
 import time
 import uuid
@@ -28,6 +29,7 @@ from open_deep_research.sandbox.wire import GatewayModelRequestV2, GatewayModelO
 
 
 _operation_scope = ContextVar("native_gateway_operation", default=None)
+RECEIPT_LOOKUP_SECONDS = 60
 
 
 @contextmanager
@@ -145,6 +147,42 @@ class SandboxChatModel(ChatModelBase):
             max_output_tokens=kwargs.get("max_tokens", self.parameters.max_tokens),
             temperature=kwargs.get("temperature", self.parameters.temperature),
         )
+        try:
+            response = await self.client.post(
+                "/v2/models/complete",
+                json=request.model_dump(mode="json"),
+                headers=self._headers(request),
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            outcome = await self._lookup_outcome(request) if exc.response.status_code >= 500 else None
+            if outcome is None:
+                raise GatewayCallError(
+                    "sandbox_gateway_http_error",
+                    status_code=exc.response.status_code,
+                    uncertain=exc.response.status_code >= 500,
+                ) from None
+        except httpx.RequestError:
+            outcome = await self._lookup_outcome(request)
+            if outcome is None:
+                raise GatewayCallError("sandbox_gateway_outcome_unknown", uncertain=True) from None
+        else:
+            outcome = GatewayModelOutcomeV2.model_validate(response.json())
+        if (
+            outcome.logical_operation_id != operation_id
+            or outcome.requested_model != self.model
+        ):
+            raise GatewayCallError("sandbox_gateway_response_mismatch", uncertain=True)
+        if outcome.status != "completed":
+            if (outcome.error_code or "").startswith("budget_exhausted:"):
+                from open_deep_research.budgets import BudgetDimension, BudgetExhausted
+
+                raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
+            raise GatewayCallError("sandbox_gateway_operation_not_completed", uncertain=True)
+        return outcome
+
+    def _headers(self, request):
+        binding = self._binding
         timestamp, nonce = time.time(), secrets.token_urlsafe(24)
         headers = {"X-Sandbox-Timestamp": str(timestamp), "X-Sandbox-Nonce": nonce}
         if isinstance(binding, SandboxServiceBinding):
@@ -163,38 +201,27 @@ class SandboxChatModel(ChatModelBase):
         else:
             token = binding.token() if callable(binding.token) else binding.token
             headers["Authorization"] = f"Bearer {token.get_secret_value()}"
-        try:
-            response = await self.client.post(
-                "/v2/models/complete",
-                json=request.model_dump(mode="json"),
-                headers=headers,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise GatewayCallError(
-                "sandbox_gateway_http_error",
-                status_code=exc.response.status_code,
-                uncertain=exc.response.status_code >= 500,
-            ) from None
-        except httpx.RequestError:
-            raise GatewayCallError(
-                "sandbox_gateway_outcome_unknown", uncertain=True
-            ) from None
-        outcome = GatewayModelOutcomeV2.model_validate(response.json())
-        if (
-            outcome.logical_operation_id != operation_id
-            or outcome.requested_model != self.model
-        ):
-            raise GatewayCallError("sandbox_gateway_response_mismatch", uncertain=True)
-        if outcome.status != "completed":
-            if (outcome.error_code or "").startswith("budget_exhausted:"):
-                from open_deep_research.budgets import BudgetDimension, BudgetExhausted
+        return headers
 
-                raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
-            raise GatewayCallError(
-                "sandbox_gateway_operation_not_completed", uncertain=True
-            )
-        return outcome
+    async def _lookup_outcome(self, request):
+        deadline = time.monotonic() + RECEIPT_LOOKUP_SECONDS
+        while (remaining := deadline - time.monotonic()) > 0:
+            try:
+                response = await self.client.post(
+                    "/v2/models/lookup", json=request.model_dump(mode="json"),
+                    headers=self._headers(request), timeout=min(5, remaining),
+                )
+                response.raise_for_status()
+                body = response.json()
+                if body is not None:
+                    return GatewayModelOutcomeV2.model_validate(body)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500:
+                    return None
+            except httpx.RequestError:
+                pass
+            await asyncio.sleep(min(2, max(0, deadline - time.monotonic())))
+        return None
 
     @staticmethod
     def _metadata(outcome):
@@ -289,7 +316,7 @@ class SandboxChatModel(ChatModelBase):
                 if isinstance(structured_model, type):
                     content = structured_model.model_validate(content).model_dump(mode="json")
                 break
-            except (json.JSONDecodeError, jsonschema.ValidationError, ValidationError, GatewayCallError):
+            except (json.JSONDecodeError, jsonschema.ValidationError, ValidationError, GatewayCallError) as exc:
                 if attempt + 1 >= self.structured_attempts:
                     raise
                 # 格式修复发生在持久化逻辑调用内；每次物理请求仍经 Gateway
@@ -299,7 +326,9 @@ class SandboxChatModel(ChatModelBase):
                     "The previous response did not satisfy the required schema. "
                     "Call __insightforge_structured_output exactly once and include "
                     "every required property with the declared types. Required: "
-                    + json.dumps(schema.get("required", [])),
+                    + json.dumps(schema.get("required", []))
+                    + "\nValidation error: "
+                    + (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:1000],
                 ))
         return StructuredResponse(
             content=content,

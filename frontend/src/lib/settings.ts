@@ -26,7 +26,7 @@ export function applyPublicationThemePreset(theme: PublicationTheme, preset: Pub
 }
 
 export const settingGroups: Array<{ id: string; label: string; keys: string[] }> = [
-  { id: "basic", label: "研究流程", keys: ["allow_clarification", "enable_async_research"] },
+  { id: "basic", label: "研究流程", keys: ["allow_clarification", "enable_async_research", "async_research_mode", "team_execution_mode"] },
   { id: "models", label: "模型与 Token 预算", keys: ["summarization_model", "summarization_model_max_tokens", "research_model", "research_model_max_tokens", "compression_model", "compression_model_max_tokens", "final_report_model", "final_report_model_max_tokens"] },
   { id: "evidence", label: "来源与证据", keys: ["search_api", "web_pipeline_mode", "web_pipeline_shadow_sample_rate", "web_min_source_authority", "search_candidate_limit", "max_fetches_per_researcher"] },
   { id: "agents", label: "并行研究团队", keys: ["max_concurrent_research_units", "max_researcher_iterations", "max_react_tool_calls"] },

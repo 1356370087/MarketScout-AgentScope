@@ -156,7 +156,7 @@ def flush():
 async def prometheus_snapshot(store):
     """Aggregate all API/worker receipts without per-run metric labels or replay counts."""
     from prometheus_client import CollectorRegistry, Gauge, generate_latest
-    from sqlalchemy import func, select
+    from sqlalchemy import func, select, text
 
     registry = CollectorRegistry()
     count = Gauge(
@@ -225,4 +225,13 @@ async def prometheus_snapshot(store):
             counts["unknown" if ok is None else "success" if ok else "error"] += 1
         for status, total in counts.items():
             tools.labels(status).set(total)
+        if store.engine.dialect.name == "postgresql" and await conn.scalar(text("SELECT to_regclass('research_team_plans')")):
+            queries = {
+                "claim_conflicts": ("CAS task claim conflicts.", "SELECT count(*) FROM research_coordination_transactions WHERE event->>'type'='task_claim' AND result->>'claimed'='false'"),
+                "message_backlog": ("Unpublished durable team messages.", "SELECT count(*) FROM research_coordination_outbox WHERE published_at IS NULL"),
+                "member_recoveries": ("Persisted member restart count.", "SELECT coalesce(sum(greatest(execution_epoch-1,0)),0) FROM research_team_members"),
+                "plan_review_seconds": ("Mean persisted plan review duration in seconds.", "SELECT coalesce(avg(extract(epoch FROM reviewed_at-created_at)),0) FROM research_team_plans WHERE reviewed_at IS NOT NULL"),
+            }
+            for name, (description, query) in queries.items():
+                Gauge("insightforge_team_" + name, description, registry=registry).set(float(await conn.scalar(text(query))))
     return generate_latest(registry)

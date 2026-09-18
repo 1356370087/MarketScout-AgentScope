@@ -99,6 +99,9 @@ async def env(pg_url):
     )
     async with pool.acquire() as db:
         await db.execute(ddl)
+        import importlib
+        migration = importlib.import_module("security.rbac.migrations.versions.0017_agent_teams")
+        await db.execute(migration.DDL)
     kwargs = {"connect_args": {"server_settings": {"search_path": schema}}}
     recovery = RecoveryStore(pg_url, engine_kwargs=kwargs)
     await recovery.create_tables()

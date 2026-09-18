@@ -130,6 +130,29 @@ async def test_atomic_receipt_replay_and_no_outer_double_charge(host):
     assert calls == ["stable"]
 
 
+async def test_v2_receipt_lookup_is_read_only_and_checks_request_digest(host):
+    from open_deep_research.agentscope_runtime.recovery_store import RecoveryConflict
+    gateway, ledger, _ = host
+    calls = []
+    class Provider:
+        async def complete(self, request):
+            calls.append(request.logical_operation_id)
+            return GatewayModelOutcomeV2(logical_operation_id=request.logical_operation_id,
+                requested_model=request.model, status="completed", message={"role": "assistant", "content": "answer"})
+    gateway.model_gateways["r"] = Provider()
+    request = GatewayModelRequestV2(run_id="r", task_id="pipeline", role="researcher", stage="researching",
+        logical_operation_id="stable", model="model", messages=[{"role": "user", "content": "q"}])
+    context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300, api_keys={"LITELLM_RUN_KEY": "test"})
+    assert await gateway.lookup_model_operation_v2(request, context) is None
+    assert calls == []
+    result = await gateway.invoke_model_operation_v2(request, context)
+    assert await gateway.lookup_model_operation_v2(request, context) == result
+    assert calls == ["stable"]
+    with pytest.raises(RecoveryConflict, match="input changed"):
+        await gateway.lookup_model_operation_v2(request.model_copy(update={"messages": [{"role": "user", "content": "different"}]}), context)
+    assert calls == ["stable"]
+
+
 async def test_signed_boundary_rejects_nonce_replay_and_old_fence(host):
     gateway, ledger, client = host
     body = gateway.internal.signed(

@@ -524,6 +524,16 @@
     "target": "RunConfig.coordination.enable_async_research",
     "handling": "业务保留并接入"
   },
+  "async_research_mode": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.async_research_mode",
+    "handling": "业务保留并接入"
+  },
+  "team_execution_mode": {
+    "group": "coordination",
+    "target": "RunConfig.coordination.team_execution_mode",
+    "handling": "业务保留并接入"
+  },
   "runs_dir": {
     "group": "runtime",
     "target": "RunConfig.runtime.runs_dir",

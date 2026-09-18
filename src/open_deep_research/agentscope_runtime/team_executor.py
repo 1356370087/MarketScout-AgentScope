@@ -25,7 +25,10 @@ from open_deep_research.agentscope_runtime.run_config import RunConfig
 
 async def execute(request):
     lease = RunLease(**request["lease"])
-    task_id = request["task_id"]
+    task_id = request.get("task_id")
+    member_id = request.get("member_id")
+    if not task_id and not member_id:
+        raise ValueError("team_execution_identity_required")
     async with AsyncExitStack() as stack:
         from dataclasses import replace
         from uuid import uuid4
@@ -51,7 +54,7 @@ async def execute(request):
         factory = ProductionRunFactory(
             runtime,
             authorize_run_owner,
-            production_resources(root, worker_task_id=task_id),
+            production_resources(root, worker_task_id=task_id, worker_member_id=member_id),
             runs_dir=root,
             worker_only=True,
         )
@@ -61,7 +64,10 @@ async def execute(request):
                 raise ValueError(
                     "team executor requires a persisted async research run"
                 )
-            execution = asyncio.create_task(pipeline.team_workers.execute(task_id))
+            execution = asyncio.create_task(
+                pipeline.team_workers.run_member(member_id) if member_id
+                else pipeline.team_workers.execute(task_id)
+            )
             async def watch_leader():
                 while not execution.done():
                     await asyncio.sleep(5)

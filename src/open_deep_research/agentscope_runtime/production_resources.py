@@ -114,7 +114,7 @@ async def prepare_production_config(request, principal):
     return config
 
 
-def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None):
+def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None, worker_member_id=None):
     """Own registration on the API only; child workers attach to its live vault."""
 
     @asynccontextmanager
@@ -150,7 +150,7 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
             return tokens[task_id][0]
 
         async with AsyncExitStack() as stack:
-            if worker_task_id is None:
+            if worker_task_id is None and worker_member_id is None:
                 settings = RunKeySettings.from_env()
                 manager = RunKeyManager(
                     settings,
@@ -287,6 +287,9 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
             stack.push_async_callback(models.aclose)
 
             def task_identity(task_id):
+                if worker_member_id:
+                    from open_deep_research.agentscope_runtime.teams_worker import member_task
+                    return member_task.get()
                 return worker_task_id or (
                     "supervisor" if task_id == "pipeline" else task_id
                 )
@@ -353,6 +356,7 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
                 if launcher_factory
                 and cfg.enable_async_research
                 and worker_task_id is None
+                and worker_member_id is None
                 else None
             )
             if launcher:

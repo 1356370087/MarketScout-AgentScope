@@ -114,7 +114,7 @@ class RunConfig:
         contract = snapshot["contract"]
         if (
             contract.get("metadata", {}).get("run_config_schema_version")
-            != RUN_CONFIG_SCHEMA_VERSION
+            not in {13, RUN_CONFIG_SCHEMA_VERSION}
         ):
             raise ValueError("unsupported native frozen contract version")
         if not contract["metadata"].get("run_config_fingerprint"):
@@ -122,6 +122,10 @@ class RunConfig:
         if contract["metadata"].get("runtime_config_frozen") is not True:
             raise ValueError("native configuration must be frozen")
         for key, value in (overrides or {}).items():
+            if contract["metadata"]["run_config_schema_version"] == 13 and key in {
+                "async_research_mode", "team_execution_mode"
+            } and value != {"async_research_mode": "collaborator", "team_execution_mode": "direct"}[key]:
+                raise ValueError(f"frozen configuration conflict: {key}")
             if (
                 key in contract["configurable"]
                 and value != contract["configurable"][key]
@@ -129,7 +133,7 @@ class RunConfig:
                 raise ValueError(f"frozen configuration conflict: {key}")
         return cls.compile(
             {
-                "configurable": {**(overrides or {}), **contract["configurable"]},
+                "configurable": {"async_research_mode": "collaborator", "team_execution_mode": "direct", **(overrides or {}), **contract["configurable"]},
                 "metadata": contract["metadata"],
             }
         )

@@ -40,9 +40,15 @@ class NativeResearchQuality:
         )
         errors = []
         for attempt in range(max(1, cfg.max_structured_output_retries)):
-            result = await self.models.structured(
-                "quality_evaluation", prompt, schema, {}
-            )
+            from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
+            try:
+                result = await self.models.structured(
+                    "quality_evaluation", prompt, schema, {}
+                )
+            except ModelOutputProtocolError as exc:
+                # Gateway already exhausted format repair. Let the domain's
+                # fail-open/closed policy decide; never poison the run lease.
+                raise QualityProtocolError([str(exc)]) from exc
             # Model output cannot supply runtime diagnostics or hard-check results.
             allowed = schema.model_json_schema()["properties"]
             result = schema.model_validate(

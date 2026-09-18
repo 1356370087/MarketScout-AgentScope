@@ -73,8 +73,10 @@ async def settle(service):
     await asyncio.sleep(0)
 
 
-async def test_native_feedback_budget_and_team_ownership(host):
+async def test_native_feedback_budget_and_team_ownership(host, monkeypatch):
     from open_deep_research.agentscope_runtime.recovery import RecoverySession
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     service, client, app, _closed = host
     response = await client.post("/runs", json={"messages": [{"role": "user", "content": "Question"}]})
@@ -83,10 +85,13 @@ async def test_native_feedback_budget_and_team_ownership(host):
     recovery = await RecoverySession.open(service.store, run_id, "alice")
     await service.store.register_task(recovery.lease, "supervisor")
     await recovery.close()
+    uncreated_team = SimpleNamespace(members=AsyncMock(return_value=[]), say=AsyncMock())
+    monkeypatch.setattr(service.pipeline_factory, "active", {run_id: {"team": uncreated_team}}, raising=False)
     body = {"type": "direction", "message": "Focus on evidence", "command_id": "feedback-1"}
     first = await client.post(f"/runs/{run_id}/feedback", json=body)
     second = await client.post(f"/runs/{run_id}/feedback", json=body)
     assert first.status_code == 200 and second.json() == first.json()
+    uncreated_team.say.assert_not_called()
     assert (await client.get(f"/runs/{run_id}/budget")).status_code == 200
     app.dependency_overrides[get_current_principal] = lambda: research_principal("foreign")
     for suffix in ["budget", "team"]:

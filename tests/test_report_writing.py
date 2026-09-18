@@ -241,7 +241,7 @@ def test_shared_citation_validation(body, valid):
 def test_concurrency_freezing_and_v12_resume():
     frozen = freeze_run_config({"configurable": {"report_section_concurrency": 3}})
     assert frozen["configurable"]["report_section_concurrency"] == 3
-    assert frozen["metadata"]["run_config_schema_version"] == 13
+    assert frozen["metadata"]["run_config_schema_version"] == 14
     values = Configuration().model_dump()
     values.pop("report_section_concurrency")
     historical = {"configurable": values, "metadata": {"runtime_config_frozen": True, "run_config_schema_version": 12}}

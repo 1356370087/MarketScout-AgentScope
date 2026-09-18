@@ -201,6 +201,11 @@ class ASRuntime:
 
     async def bind_research_team(self, recovery, *, max_iters=10):
         """Bind an authenticated recovery lease to deployment-owned team resources."""
+        host = await self.team_host()
+        return await host.bind(recovery, max_iters=max_iters)
+
+    async def team_host(self):
+        """Open SQL team infrastructure for both active runs and history views."""
         if self.gate.closed:
             raise RuntimeError("runtime_shutting_down")
         async with self._team_start_lock:
@@ -211,7 +216,7 @@ class ASRuntime:
 
                 self._team_host = await NativeTeamHost.start(self)
                 self.shutdown_stack.push_base("native_team_pool", self._team_host.aclose)
-        return await self._team_host.bind(recovery, max_iters=max_iters)
+        return self._team_host
 
     def start_command_consumer(
         self, command_key: str, applier: Any, *, poll_seconds: float = 1.0

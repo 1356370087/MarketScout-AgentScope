@@ -42,7 +42,8 @@ class TeamStore:
                    WHERE run_id=$1 AND operation_id=$2""", event.run_id, event.operation_id,
             )
         original = TeamEvent.model_validate_json(row["event"])
-        if original.model_dump(exclude={"event_id", "fence_token"}) != event.model_dump(exclude={"event_id", "fence_token"}):
+        excluded = {"event_id", "fence_token", "trace_context", "execution_epoch"}
+        if original.model_dump(exclude=excluded) != event.model_dump(exclude=excluded):
             raise ValueError("coordination_operation_input_mismatch")
         event.event_id = original.event_id
         return row["state"], json.loads(row["result"]) if row["result"] else None
@@ -50,7 +51,7 @@ class TeamStore:
     async def commit(
         self, event: TeamEvent,
         mutate: Callable[[asyncpg.Connection], Awaitable[Any]],
-        *, durable_recipients: bool = False,
+        *, durable_recipients: bool = False, outbox: bool = False,
     ) -> Any:
         """Commit mutation and its transaction outcome atomically."""
         async with self.pool.acquire() as db, db.transaction():
@@ -85,6 +86,8 @@ class TeamStore:
                        VALUES ($1,$2) ON CONFLICT DO NOTHING""",
                     [(event.event_id, recipient) for recipient in event.recipients],
                 )
+            if outbox:
+                await db.execute("INSERT INTO research_coordination_outbox(event_id) VALUES($1) ON CONFLICT DO NOTHING", event.event_id)
             return result
 
     async def abort(self, event: TeamEvent) -> None:
@@ -129,7 +132,8 @@ class TeamStore:
                 """SELECT e.event FROM research_coordination_events e
                    JOIN research_coordination_receipts r USING(event_id)
                    WHERE e.run_id=$1 AND r.recipient=$2 AND NOT r.applied
-                   ORDER BY CASE WHEN e.event->>'type' IN
+                   ORDER BY CASE WHEN e.event->'payload'->'message'->>'type' IN
+                     ('plan_approval_response','shutdown_request','shutdown_response') OR e.event->>'type' IN
                      ('cancel_request','task_stop','shutdown_request','shutdown_response','shutdown_ack')
                      THEN 0 ELSE 1 END, e.sequence LIMIT 100""", run_id, recipient,
             )

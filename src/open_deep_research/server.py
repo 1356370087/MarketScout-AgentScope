@@ -249,7 +249,7 @@ async def _lifespan(_app: FastAPI):
     document_schema_error: str | None = None
     if get_document_settings().enabled:
         try:
-            await assert_schema_current("0016_research_teams")
+            await assert_schema_current("0017_agent_teams")
         except StartupError as exc:
             if not str(exc).startswith("schema_revision_mismatch:"):
                 raise
@@ -258,11 +258,11 @@ async def _lifespan(_app: FastAPI):
             document_schema_error = await initialize_document_schema()
     else:
         try:
-            await assert_schema_current("0016_research_teams")
+            await assert_schema_current("0017_agent_teams")
         except StartupError as exc:
             expected_old_revision = (
                 "schema_revision_mismatch:got=0012_facts:"
-                "expected=0016_research_teams"
+                "expected=0017_agent_teams"
             )
             if str(exc) != expected_old_revision:
                 raise

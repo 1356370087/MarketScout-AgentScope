@@ -74,6 +74,8 @@ export function ResearchComposer() {
   const [domains, setDomains] = useState("");
   const [dragging, setDragging] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [researchMode, setResearchMode] = useState<string>();
+  const [teamMode, setTeamMode] = useState<string>();
   const [createError, setCreateError] = useState("");
   const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: researchApi.capabilities, retry: false });
   const documentCapability = (capabilities.data?.features as { document_research?: { enabled?: boolean; database?: string } } | undefined)?.document_research;
@@ -96,6 +98,8 @@ export function ResearchComposer() {
   const validSources = sourceSelectionIsValid(mode, refs);
   const selection = useMemo<SourceSelection>(() => ({ mode, sources: refs }), [mode, refs]);
   const activeSettings = loadSettings(capabilities.data?.defaults);
+  const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
+  const selectedTeamMode = teamMode ?? String(activeSettings.team_execution_mode ?? "direct");
   const sourceLabel = modes.find((item) => item.value === mode)?.label ?? mode;
 
   const chooseMode = (value: SourceMode) => {
@@ -114,7 +118,8 @@ export function ResearchComposer() {
     try {
       const created = await researchApi.createRun(
         researchQuery,
-        loadSettings(capabilities.data?.defaults),
+        { ...loadSettings(capabilities.data?.defaults), enable_async_research: selectedResearchMode !== "sync",
+          async_research_mode: selectedResearchMode === "teams" ? "teams" : "collaborator", team_execution_mode: selectedTeamMode },
         researchQuery.slice(0, 80),
         selection,
         loadPublicationTheme(),
@@ -128,6 +133,14 @@ export function ResearchComposer() {
   }
 
   return <form className="research-composer research-composer-expanded" onSubmit={submit}>
+    <div className="composer-mode-options" style={{ display: "flex", gap: 16, padding: 16, flexWrap: "wrap" }}>
+      <label>研究执行模式 <select aria-label="研究执行模式" value={selectedResearchMode} onChange={(event) => setResearchMode(event.target.value)}>
+        <option value="sync">同步研究</option><option value="collaborator">异步 · Collaborator（Lead 委派）</option><option value="teams">异步 · Agent Teams（团队协作）</option>
+      </select></label>
+      {selectedResearchMode === "teams" && <label>团队默认执行方式 <select aria-label="团队默认执行方式" value={selectedTeamMode} onChange={(event) => setTeamMode(event.target.value)}>
+        <option value="direct">直接执行</option><option value="plan_approval">先规划，由 Lead 审批</option>
+      </select><small> Lead 创建团队，启动成员时可单独调整。</small></label>}
+    </div>
     {!query && <div className="composer-template-row" aria-label="竞品分析模板">
       {promptTemplates.map(({ label, icon: Icon, prompt }) => <button key={label} type="button" onClick={() => setQuery(prompt)}><Icon size={14} /><span>{label}</span></button>)}
     </div>}

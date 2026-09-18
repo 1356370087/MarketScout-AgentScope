@@ -97,6 +97,51 @@ async def test_sandbox_wire_v2_auth_and_result(mode):
         assert not client.is_closed
 
 
+@pytest.mark.parametrize("failure", ["timeout", "http500"])
+async def test_lost_model_reply_reads_receipt_without_redispatch(failure):
+    seen = []
+    async def serve(request):
+        body = json.loads(request.content)
+        seen.append((request.url.path, body, request.headers["x-sandbox-nonce"]))
+        if request.url.path.endswith("complete"):
+            if failure == "timeout":
+                raise httpx.ReadTimeout("reply lost", request=request)
+            return httpx.Response(500)
+        if len(seen) == 2:
+            return httpx.Response(200, content=b"null")
+        return httpx.Response(200, json={
+            "protocol_version": 2, "logical_operation_id": body["logical_operation_id"],
+            "requested_model": "openai:test", "status": "completed",
+            "message": {"role": "assistant", "content": "recovered"},
+        })
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="https://gateway.invalid") as client:
+        model = SandboxChatModel(binding=SandboxBinding("https://gateway.invalid", "r", "t", "researcher", "researching", SecretStr("cap")),
+                                 model="openai:test", stream=False, client=client)
+        result = await model([UserMsg("user", "q")])
+    assert result.content[0].text == "recovered"
+    assert [path for path, _, _ in seen] == ["/v2/models/complete", "/v2/models/lookup", "/v2/models/lookup"]
+    assert all(body == seen[0][1] for _, body, _ in seen)
+    assert len({nonce for _, _, nonce in seen}) == 3
+
+
+async def test_missing_model_receipt_stays_unknown_and_lookup_is_bounded(monkeypatch):
+    import open_deep_research.agentscope_runtime.gateway as gateway_module
+    monkeypatch.setattr(gateway_module, "RECEIPT_LOOKUP_SECONDS", 0.02)
+    paths = []
+    async def serve(request):
+        paths.append(request.url.path)
+        if request.url.path.endswith("complete"):
+            raise httpx.ReadTimeout("reply lost", request=request)
+        return httpx.Response(200, content=b"null")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="https://gateway.invalid") as client:
+        model = SandboxChatModel(binding=SandboxBinding("https://gateway.invalid", "r", "t", "researcher", "researching", SecretStr("cap")),
+                                 model="openai:test", stream=False, client=client)
+        with pytest.raises(GatewayCallError, match="outcome_unknown"):
+            await asyncio.wait_for(model([UserMsg("user", "q")]), 1)
+    assert paths.count("/v2/models/complete") == 1
+    assert "/v2/models/lookup" in paths
+
+
 @pytest.mark.parametrize("invalid", [None, {}])
 @pytest.mark.parametrize("repair_succeeds", [True, False])
 async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(invalid, repair_succeeds):
@@ -136,6 +181,9 @@ async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(in
         assert len(seen) == 2
         assert len({row["logical_operation_id"] for row in seen}) == 2
         assert "every required property" in str(seen[1]["messages"])
+        assert "Validation error:" in str(seen[1]["messages"])
+        if invalid == {}:
+            assert "'value' is a required property" in seen[1]["messages"][-1]["content"][0]["text"]
 
 
 async def test_sandbox_uncertain_is_not_retried():

@@ -39,10 +39,16 @@ class TeamEvent(BaseModel):
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     fence_token: int = 0
+    task_id: str | None = None
+    request_id: str | None = None
+    entity_version: int | None = None
+    execution_epoch: int | None = None
+    trace_context: dict[str, str] = Field(default_factory=dict)
 
     @property
     def is_control(self) -> bool:
         """Keep cancellation traffic independent from research chatter."""
-        return self.type in {
+        return (self.type == "send_message" and isinstance(self.payload.get("message"), dict)
+                and self.payload["message"].get("type") in {"plan_approval_response", "shutdown_request", "shutdown_response"}) or self.type in {
             "cancel_request", "task_stop", "shutdown_request", "shutdown_response", "shutdown_ack",
         }

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import jsonschema
 from contextlib import aclosing, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, fields, is_dataclass
@@ -12,7 +14,7 @@ from agentscope.message import Msg, UserMsg
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatResponse, ChatUsage, FinishedReason, StructuredResponse
 from agentscope.state import AgentState
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from open_deep_research.agentscope_runtime.recovery_store import (
     digest,
@@ -32,6 +34,10 @@ class ApprovalPending(RuntimeError):
     def __init__(self, action_id, kind, payload):
         super().__init__("approval required")
         self.action_id, self.kind, self.payload = action_id, kind, payload
+
+
+class ModelOutputProtocolError(ValueError):
+    """A completed Judge response was invalid; its receipt is safe to replay."""
 
 
 def stable_input(value):
@@ -355,6 +361,7 @@ class RecoverySession:
 
         async def invoke():
             from open_deep_research.agentscope_runtime.gateway import (
+                GatewayCallError,
                 gateway_operation_scope,
             )
             from open_deep_research.agentscope_runtime.model_accounting import (
@@ -369,7 +376,16 @@ class RecoverySession:
             token = current_accounting.set(accounting)
             try:
                 with gateway_operation_scope(key):
-                    result = await invoke_response()
+                    try:
+                        result = await invoke_response()
+                    except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, GatewayCallError) as exc:
+                        known_output_failure = not isinstance(exc, GatewayCallError) or (
+                            not exc.uncertain and str(exc) in {"structured_output_missing", "structured_output_truncated"}
+                        )
+                        if role != "quality_evaluation" or not known_output_failure:
+                            raise
+                        result = {"codec": "agentscope-invalid-judge-v1", "framework": "2.0.8",
+                                  "error": str(exc)[:2000]}
                 if accounting is not None and not accounting.ordinal:
                     raise RuntimeError("native model bypassed physical accounting policy")
                 return result
@@ -379,7 +395,7 @@ class RecoverySession:
         def settle(result):
             if self.model_accounting == "gateway" or account_attempts:
                 return {}
-            usage = result["response"].get("usage")
+            usage = (result.get("response") or {}).get("usage")
             details = result.get("usage_details") or {}
             failures = [
                 item.get("billed_usage")
@@ -417,6 +433,8 @@ class RecoverySession:
             reserve=reserve if self.model_accounting == "local" and not account_attempts else {},
             actual=settle,
         )
+        if result.get("codec") == "agentscope-invalid-judge-v1":
+            raise ModelOutputProtocolError(result["error"])
         if (
             result.get("codec") != "agentscope-response-v1"
             or result.get("framework") != "2.0.8"

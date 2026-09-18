@@ -427,18 +427,8 @@ _PY_TYPE_CHECKS: dict[str, Callable[[Any], bool]] = {
     "boolean": lambda v: isinstance(v, bool),
     "array": lambda v: isinstance(v, list),
     "object": lambda v: isinstance(v, dict),
+    "null": lambda v: v is None,
 }
-
-
-def _resolve_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Resolve a property spec, unwrapping ``anyOf`` (first branch) for type checks."""
-    if "anyOf" in spec and isinstance(spec["anyOf"], list) and spec["anyOf"]:
-        first = spec["anyOf"][0]
-        if isinstance(first, dict):
-            merged = dict(first)
-            merged.update({k: v for k, v in spec.items() if k != "anyOf"})
-            return merged
-    return spec
 
 
 def _check_value(name: str, value: Any, spec: dict[str, Any]) -> Optional[ToolError]:
@@ -450,8 +440,17 @@ def _check_value(name: str, value: Any, spec: dict[str, Any]) -> Optional[ToolEr
     ``maxItems``). Lenient on anything unrecognized -- returns ``None`` rather
     than raising.
     """
-    spec = _resolve_spec(spec)
+    # Union inputs (e.g. text | structured team message) must retain every branch.
+    # Nested model refs are validated by the tool's Pydantic boundary afterwards.
+    if isinstance(spec.get("anyOf"), list) and spec["anyOf"]:
+        constraints = {key: value for key, value in spec.items() if key != "anyOf"}
+        errors = [_check_value(name, value, {**branch, **constraints})
+                  for branch in spec["anyOf"] if isinstance(branch, dict)]
+        return None if not errors or any(error is None for error in errors) else errors[0]
     type_name = spec.get("type")
+    if isinstance(type_name, list):
+        errors = [_check_value(name, value, {**spec, "type": branch}) for branch in type_name]
+        return None if any(error is None for error in errors) else errors[0]
 
     # Enum constraint (checked before/after type -- order tolerant).
     if "enum" in spec and value not in spec["enum"]:

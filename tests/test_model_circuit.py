@@ -314,12 +314,12 @@ def test_registry_reset_removes_breakers() -> None:
 
 def test_circuit_configuration_defaults_remain_frozen_in_v7() -> None:
     configuration = Configuration()
-    assert RUN_CONFIG_SCHEMA_VERSION == 13
+    assert RUN_CONFIG_SCHEMA_VERSION == 14
     assert configuration.model_circuit_breaker_enabled is True
     assert configuration.model_first_packet_probe == "shadow"
 
     frozen = freeze_run_config({"configurable": {}, "metadata": {}})
-    assert frozen["metadata"]["run_config_schema_version"] == 13
+    assert frozen["metadata"]["run_config_schema_version"] == 14
     for field_name in (
         "model_circuit_breaker_enabled",
         "model_circuit_failure_threshold",

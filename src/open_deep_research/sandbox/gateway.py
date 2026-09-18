@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, Field
 from open_deep_research.configuration import Configuration
@@ -2369,6 +2369,20 @@ class GatewayRuntime:
         async with lock:
             return await self._invoke_model_operation_v2_locked(request, context)
 
+    async def lookup_model_operation_v2(self, request, context):
+        """Read the matching V2 receipt without reserving or dispatching again."""
+        lookup = self.internal.signed(
+            OperationGetRequest,
+            run_id=request.run_id,
+            fence_token=context.fence_token,
+            logical_operation_id=request.logical_operation_id,
+            request_digest=hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
+        )
+        existing = await self.internal.post("/internal/sandbox/operations/get", lookup)
+        operation = existing.get("operation") or {}
+        outcome = operation.get("outcome")
+        return GatewayModelOutcomeV2.model_validate(outcome) if outcome else None
+
     async def _invoke_model_operation_v2_locked(
         self,
         request: GatewayModelRequestV2,
@@ -2636,9 +2650,11 @@ def create_gateway_app(
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return await runtime.invoke_model_operation(request, context)
 
+    @app.post("/v2/models/lookup", response_model=GatewayModelOutcomeV2 | None)
     @app.post("/v2/models/complete", response_model=GatewayModelOutcomeV2)
     async def complete_model_v2(
         request: GatewayModelRequestV2,
+        http_request: Request,
         authorization: str = Header(default="", alias="Authorization"),
         timestamp: float = Header(alias="X-Sandbox-Timestamp"),
         nonce: str = Header(alias="X-Sandbox-Nonce"),
@@ -2672,6 +2688,8 @@ def create_gateway_app(
                 )
         except ValueError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if http_request.url.path == "/v2/models/lookup":
+            return await runtime.lookup_model_operation_v2(request, context)
         return await runtime.invoke_model_operation_v2(request, context)
 
     @app.post("/v1/models/stream")

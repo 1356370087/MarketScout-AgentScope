@@ -67,22 +67,24 @@ class FencedTeamTransport:
     """
 
     def __init__(
-        self, pool, lease, *, recovery_schema="agentscope_runtime", message_bus=None
+        self, pool, lease, *, recovery_schema="agentscope_runtime", message_bus=None, reliable=False
     ):
         self.store = TeamStore(pool)
         self.lease = lease
         self.message_bus = message_bus
+        self.reliable = reliable
+        self.publisher = None
         schema = '"' + recovery_schema.replace('"', '""') + '"'
         self.run_table = schema + '."as_recovery_runs"'
 
     async def guard(self, db):
         lease = self.lease
         current = await db.fetchval(
-            f"""UPDATE {self.run_table} SET revision=revision+1
+            f"""SELECT fence FROM {self.run_table}
                 WHERE run_id=$1 AND user_id=$2 AND owner=$3 AND fence=$4
                   AND engine='agentscope' AND version=1
                   AND expires>extract(epoch from clock_timestamp())
-                RETURNING fence""",
+                FOR SHARE""",
             lease.run_id,
             lease.user_id,
             lease.owner,
@@ -92,7 +94,7 @@ class FencedTeamTransport:
             raise FenceLost("expired or superseded team executor")
         # The existing team fence follows the run epoch; no new lease is added.
         await db.execute(
-            "UPDATE research_teams SET fence_token=$2 WHERE run_id=$1",
+            "UPDATE research_teams SET fence_token=$2 WHERE run_id=$1 AND fence_token<>$2",
             lease.run_id,
             lease.fence,
         )
@@ -111,7 +113,7 @@ class FencedTeamTransport:
                 await self.guard(db)
                 return await mutate(db)
 
-            result = await self.store.commit(event, guarded, durable_recipients=True)
+            result = await self.store.commit(event, guarded, durable_recipients=not self.reliable, outbox=self.reliable)
         if self.message_bus is not None:
             try:
                 await self.message_bus.publish(
@@ -119,6 +121,14 @@ class FencedTeamTransport:
                 )
             except Exception:  # noqa: BLE001 - SQL receipts remain recoverable
                 logger.warning("Team event committed; wakeup delivery failed")
+        if self.publisher is not None:
+            if event.type == "task_claim" and result.get("claimed"):
+                await self.publisher.publish("research.task.started", stage="researching",
+                    payload={"task_id": event.payload["task_id"], "status": "running", "mode": "async"},
+                    dedupe_key="team-task-started:" + event.payload["task_id"])
+            await self.publisher.publish("research.team.updated", stage="researching",
+                payload={"event_id": event.event_id, "event_type": event.type},
+                dedupe_key="coordination:" + event.event_id)
         return result
 
 
@@ -186,9 +196,9 @@ class NativeResearchTeam:
             raise ValueError("leader session belongs to another run team")
         return session
 
-    async def create(self, name, description=""):
+    async def create(self, name, description="", *, mode="collaborator", execution_mode="direct"):
         await self._leader_session()
-        await self.command("native-team:create", "team_create", {"name": name})
+        await self.command("native-team:create", "team_create", {"name": name, "mode": mode, "execution_mode": execution_mode})
         # Bind leader/template intent in the existing member record before native I/O.
         binding = {
             "team_id": self.team_id,
@@ -217,11 +227,11 @@ class NativeResearchTeam:
         await self.reconcile()
         return self.team_id
 
-    async def add_member(self, operation_id, name, purpose, *, max_members=5):
+    async def add_member(self, operation_id, name, purpose, *, max_members=5, execution_mode=None):
         result = await self.command(
             operation_id,
             "member_spawn",
-            {"name": name, "purpose": purpose, "max_members": max_members},
+            {"name": name, "purpose": purpose, "max_members": max_members, "execution_mode": execution_mode},
         )
         await self.reconcile()
         return result["member_id"]
@@ -382,6 +392,8 @@ class NativeResearchTeam:
                 member_id,
             )
             if not member:
+                if member_id == "lead":
+                    return []
                 raise PermissionError("unknown team member")
         return await self.transport.store.pending(self.lease.run_id, member_id)
 
@@ -411,6 +423,22 @@ class NativeResearchTeam:
         return await self.command(
             command_id, "message", {"to": to, "content": content}, member=member
         )
+
+    async def send_message(self, member, command_id, to, message, summary=""):
+        from open_deep_research.tasks.team_messages import SendMessageInput
+        value = SendMessageInput(to=to, message=message, summary=summary)
+        payload = value.model_dump(mode="json")
+        if len(json.dumps(payload, ensure_ascii=False).encode()) > 60000:
+            raise ValueError("message_too_large_use_artifact_reference")
+        return await self.command(command_id, "send_message", payload, member=member)
+
+    async def members(self):
+        async with self.transport.store.pool.acquire() as db:
+            rows = await db.fetch(
+                """SELECT member_id,name,purpose,status,current_task_id,execution_mode,mode_override
+                   FROM research_team_members WHERE run_id=$1 ORDER BY name""", self.lease.run_id,
+            )
+        return [dict(row) for row in rows]
 
     async def admit_handoff(self, command_id, member_id, outcome, contract, quality):
         """Commit only assignment-matching, quality-assessed research results."""
@@ -473,12 +501,12 @@ class NativeResearchTeam:
             domain.pop("_team_feedback", None)
             domain.update(
                 status="completed",
-                admission_status="accepted" if admitted else "rejected",
+                admission_status=receipt["assessment"].get("admission_status", "accepted") if admitted else "rejected",
                 result=result,
                 handoff_assessment=receipt["assessment"],
             )
             updated = await db.fetchval(
-                """UPDATE research_team_tasks SET status='completed',admission_status=$4,
+                """UPDATE research_team_tasks SET status='completed',phase=NULL,admission_status=$4,
                    snapshot=snapshot || $5::jsonb,version=version+1,fence_token=$6
                    WHERE run_id=$1 AND task_id=$2 AND owner=$3
                      AND status IN ('pending','running') AND version=$7 RETURNING task_id""",

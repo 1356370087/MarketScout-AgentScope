@@ -29,6 +29,48 @@ def assignment():
     ), contract.model_dump(mode="json")
 
 
+async def test_member_retry_reopens_only_its_safe_started_receipts(env, tmp_path):
+    import copy
+    from open_deep_research.agentscope_runtime.team_worker import _Worker
+    from open_deep_research.agentscope_runtime.recovery_store import FenceLost, RecoveryConflict, UnknownOperation
+
+    build, store, _, pool = env
+    team = await build()
+    host, _, _ = await workers(team, store, tmp_path)
+    item, contract = assignment()
+    await host.prepare(item, contract)
+    old = _Worker(host, item.task_id)
+    await old.claim()
+    old_store = copy.copy(store)
+    old_store.commit_guard = old.journal_guard
+    prefix = f"team-worker:0:{item.task_id}:"
+    safe = prefix + "model:researcher:0"
+    unsafe = prefix + "tool:write"
+    foreign = "team-worker:0:another-task:model:researcher:0"
+    await old_store.begin_operation(team.lease, safe, "model", {}, replay_safe=True)
+    await old_store.begin_operation(team.lease, unsafe, "tool", {}, replay_safe=False)
+    await store.begin_operation(team.lease, foreign, "model", {}, replay_safe=True)
+    with pytest.raises(WorkerBusy):
+        await _Worker(host, item.task_id).claim()
+    with pytest.raises(RecoveryConflict, match="already executing"):
+        await old_store.begin_operation(team.lease, safe, "model", {}, replay_safe=True)
+    async with pool.acquire() as db:
+        await db.execute("UPDATE research_team_tasks SET snapshot=jsonb_set(snapshot,'{_native_worker,expires}','0') WHERE run_id=$1 AND task_id=$2", team.lease.run_id, item.task_id)
+    new = _Worker(host, item.task_id)
+    await new.claim()
+    restored = copy.copy(store)
+    restored.commit_guard = new.journal_guard
+    assert not (await restored.begin_operation(team.lease, safe, "model", {}, replay_safe=True))["replayed"]
+    with pytest.raises(FenceLost):
+        await old_store.commit_operation(team.lease, safe, {})
+    await restored.commit_operation(team.lease, safe, {"done": True})
+    with pytest.raises(UnknownOperation):
+        await restored.begin_operation(team.lease, unsafe, "tool", {}, replay_safe=True)
+    with pytest.raises(RecoveryConflict, match="already executing"):
+        await store.begin_operation(team.lease, foreign, "model", {}, replay_safe=True)
+    await host.aclose()
+
+
 async def test_native_worker_teamsay_handoff_artifact_and_replay(env, tmp_path):
     build, store, storage, _ = env
     team = await build()
@@ -55,7 +97,7 @@ async def test_native_worker_teamsay_handoff_artifact_and_replay(env, tmp_path):
     messages = await team.pending("lead")
     assert (
         sum(
-            event.type == "message" and event.payload["content"] == "Evidence ready"
+            event.type == "send_message" and event.payload["message"] == "Evidence ready"
             for event in messages
         )
         == 1
@@ -99,6 +141,7 @@ async def test_active_worker_single_claim_control_cancel_and_cleanup(env, tmp_pa
 @pytest.mark.parametrize(
     "window",
     [
+        "tool_planned",
         "tool_committed",
         "completion_committed",
         "handoff_prepared",

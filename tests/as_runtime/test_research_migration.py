@@ -375,6 +375,60 @@ async def test_researcher_iteration_limit_and_unregistered_citation():
         await researcher.run(ResearchAssignment(research_topic="市场"), contract())
 
 
+async def test_compression_input_omits_failed_urls_but_keeps_diagnostics():
+    from open_deep_research.agentscope_runtime.research_agents import _compression_context
+
+    context = _compression_context({
+        "evidence": [{"source_url": "https://official.test/accepted/"}],
+        "tool_results": ["https://official.test/retry/ 返回 HTTP 404 — 请勿使用"],
+        "final": "已接纳 https://official.test/accepted/\n（官方）；未采信 https://official.test/retry/",
+    }, {"https://official.test/accepted"})
+    restored = json.loads(context)
+    assert restored["evidence"][0]["source_url"] == "https://official.test/accepted/"
+    assert "https://official.test/accepted/\n" in restored["final"]
+    assert "HTTP 404" in context and "official.test/retry" not in context
+    assert "未接纳来源，不能引用" in context
+
+
+@pytest.mark.parametrize("notes", [
+    "已验证（https://example.test/source）",
+    "来源：https://example.test/source（官方文档）",
+    "来源：`https://example.test/source`，已验证",
+])
+async def test_compression_chinese_citation_boundary_and_bounded_retry(notes):
+    scripts = {"researcher": [[tool_call("web_research")], [tool_call("ResearchComplete", "done")]]}
+    models = Models(scripts)
+    models.output_text = notes
+    researcher = Researcher(models, lambda: cfg(), research_tools, run_id="run")
+    result = await researcher.run(ResearchAssignment(research_topic="市场"), contract())
+    assert result.compressed_research == models.output_text
+
+    prompts = []
+    async def repair(role, prompt, state):
+        prompts.append(prompt)
+        return "未验证 https://unknown.test/path" if len(prompts) == 1 else "已验证 https://example.test/source"
+    models.text = repair
+    result = await researcher.run(ResearchAssignment(research_topic="市场"), contract())
+    assert len(prompts) == 2 and "unknown.test/path" in prompts[1]
+    assert "unknown.test" not in result.compressed_research
+
+
+@pytest.mark.parametrize("name,status,admission,expected", [
+    ("TaskGet", "completed", "accepted", 1),
+    ("TaskGet", "completed", "rejected", 0),
+    ("TaskGet", "pending", "accepted", 0),
+    ("SendMessage", "completed", "accepted", 0),
+])
+async def test_only_accepted_task_artifacts_share_registered_evidence(name, status, admission, expected):
+    from open_deep_research.agentscope_runtime.research_agents import _Observations
+    observations = _Observations(contract=contract())
+    outcome = SimpleNamespace(error=None, message=SimpleNamespace(content="artifact"),
+        result=ToolResult(output={"status": status, "admission_status": admission,
+            "result": {"evidence_registry": [evidence()]}}))
+    await observations.capture(name, "read", outcome)
+    assert len(observations.evidence) == expected
+
+
 @pytest.mark.parametrize("async_mode", [False, True])
 async def test_supervisor_parallel_bound_and_join(async_mode):
     active = peak = 0

@@ -92,6 +92,17 @@ class SQLGatewayLedger:
         重试会进入未知隔离，不自动重放外部副作用。
         """
         session = self.recovery
+        team = getattr(self, "team", None)
+        if team is not None:
+            async with team.transport.store.pool.acquire() as db:
+                task = await db.fetchrow(
+                    """SELECT phase,status,execution_mode FROM research_team_tasks WHERE run_id=$1 AND task_id=$2
+                       AND execution_mode IS NOT NULL""", session.lease.run_id, request.task_id,
+                )
+            if task and task["execution_mode"] == "plan_approval" and task["phase"] in {"planning", "awaiting_plan_review", "awaiting_human"}:
+                raise PermissionError("team_plan_approval_required")
+            if task and (task["status"] != "running" or task["phase"] != "executing"):
+                raise PermissionError("team_task_not_executing")
         if not request.logical_operation_id:
             raise ValueError("gateway tool operation requires a logical id")
         reserve = {"tool_calls": 1}
@@ -240,6 +251,8 @@ def build_gateway_ledger_router(resolve, root_key):
     async def tool_reserve(request: ToolBudgetReserveRequest):
         try:
             return await (await authorize(request)).reserve_tool(request)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from None
         except BudgetExhausted as exc:
             raise HTTPException(
                 429, "budget_exhausted:" + exc.dimension.value

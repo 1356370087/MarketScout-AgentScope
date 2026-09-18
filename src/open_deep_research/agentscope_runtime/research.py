@@ -111,7 +111,13 @@ def build_research_pipeline(
             raise ValueError(
                 "team and research must share the same authorized run lease"
             )
-        workers = TeamWorkers(
+        cfg = Configuration.from_runnable_config(config_provider())
+        if cfg.async_research_mode == "teams":
+            from open_deep_research.agentscope_runtime.teams_worker import TeamsWorkers
+            worker_class = TeamsWorkers
+        else:
+            worker_class = TeamWorkers
+        workers = worker_class(
             team,
             recovery,
             researcher,

@@ -31,6 +31,31 @@ from open_deep_research.quality.policy import QualityEvaluationRigor
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("instruction", [
+    "团队执行要求：Lead 显式 TeamCreate", "创建 db（direct）", "mq（plan_approval）两个成员",
+    "分别派发上述两个任务", "blockedBy 前两项", "不设置 owner", "让成员自主认领",
+    "使用 TaskGet 读取上游已接纳的证据工件", "mq 首版计划须由 Lead 明确驳回",
+    "修订后再通过结构化 plan_response 批准", "成员相互发送研究发现消息",
+    "质量拒绝不能解锁依赖", "补证时 Lead 创建补证任务", "最后完成质量检查",
+])
+async def test_team_instructions_are_process_requirements(instruction):
+    from open_deep_research.quality.contract import classify_requirement_kind, is_delegable_requirement
+
+    assert classify_requirement_kind(instruction) == "process"
+    # Frozen historical contracts also receive the existing classification fallback.
+    assert not is_delegable_requirement({"kind": "factual", "text": instruction})
+
+
+@pytest.mark.parametrize("question", [
+    "研究 Agent Teams 的 TeamCreate 与 TaskGet 实现", "解释 PostgreSQL CAS 原子领取任务的原理",
+    "RocketMQ 消费者如何处理重复消息", "比较 direct 和 plan_approval 的功能差异",
+])
+async def test_team_research_questions_remain_factual(question):
+    from open_deep_research.quality.contract import classify_requirement_kind
+
+    assert classify_requirement_kind(question) == "factual"
+
+
 class Judge:
     def __init__(self, score=5):
         self.score = score

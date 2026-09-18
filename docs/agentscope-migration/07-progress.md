@@ -1,12 +1,16 @@
 # 07 工作进度台账
 
-[目录](README.md) · 最后更新：2026-09-18。**本页是状态和实际工时的唯一维护入口。**
+[目录](README.md) · 最后更新：2026-09-19。**本页是状态和实际工时的唯一维护入口。**
 
-## 当前收口状态（2026-09-18）
+## 当前收口状态（2026-09-19）
+
+2026-09-19 质量门禁专项排查：已确认接入 AgentScope 原生调用链，但发现 Judge 协议异常污染恢复会话、候选证据与准入混用、质量反馈未返回研究员等闭环缺口。排查时 teams 运行 `809657a6…` 已失败；后续修复及新运行结果见下一段。评分、状态与策略归因见 [质量门禁排查](implementation/agent-teams-quality-audit-20260918.md)，当前不登记完整 teams E2E 通过。
+
+2026-09-19 后续修复：上述 P0/P1 已编码，153 passed/1 skipped 联合回归、4 项真实历史错误回放通过；公开 PostgreSQL 历史三来源经新批次聚合和真实 Judge 重评一次通过（45 条候选全部保留）。前端类型检查通过。已按顺序完成新 E2E `fd178735…`：三项任务 accepted_with_caveats，原 mq 缺证据断言被拒后完成补证；无 evaluator_error，两名成员优雅退出、消息无积压。最终在报告大纲阶段因 139716 输入 token 超过 131072 上限而 failed；另记录 Lead 分两次替换依赖导致汇总提前领取的问题。完整 E2E 未通过，本次容器与浏览器已清理。见 [质量修复与回放记录](implementation/quality-closeout-20260919.md)。
 
 原生可观测性迁移：已补 AgentScope 生命周期内容最小化 OTel/Langfuse 导出、SQL 权威统计到 Prometheus 及专用 Grafana 看板；修复预算 undefined 标签、工具成功率、角色/任务分组、时间桶和任务级调用计数。当前本地 `.env` 的 `LANGFUSE_ENABLED / OTEL_ENABLED / PROMETHEUS_ENABLED` 均为 false，未擅自开启或声称生产平台验收通过。实施与验证边界见 [原生观测迁移记录](implementation/native-observability-20260918.md)。
 
-异步团队架构已完成代码核查及 Agent Teams 对照：当前为主管集中调度 + 成员点对点通信能力。拟迁移到成员自主认领的协作模式，AT-1～AT-4 均处于**待用户审批，未编码**；详见 [拓扑调整方案](implementation/agent-teams-topology-proposal.md)。
+Agent Teams 修订方案已获用户授权并实施 AT-1～AT-6：保留 collaborator，新增 Lead 显式创建、混合执行模式、SQL CAS 与双向依赖、RocketMQ 完整信封和事务发件、持久成员 Docker、版本化计划审核及前端投影。**编码和组件测试已推进，真实 E2E 未全量通过**。回查原文与原始回执后，已修复活动成员安全操作恢复、无变化等待消耗 Lead 轮次、V2 响应丢失的回执查询，以及 TaskList 携带完整工件导致后续任务被截断。最新批次分别为恢复与研究回归 70 passed、V2 回执 62 passed、任务列表与研究回归 57 passed、创建前反馈 1 passed（批次重叠，不累加）。活动任务强杀恢复在 `07c1a419…` 已真实通过；`b7df31ba…` 两项上游 accepted，但汇总因列表截断失败。`809657a6…` 已失败；最新 `fd178735…` 完成质量闭环与成员优雅退出，但报告超限失败，完整验收仍未通过。实施、运行证据和剩余限制见 [Agent Teams 实施记录](implementation/agent-teams-implementation-20260918.md) 与 [原文及根因核对](implementation/agent-teams-root-cause-20260918.md)。
 
 后续 Docker 真实复验已通过 Playwright 弹出浏览器执行公开网络异步研究，知识库关闭。发现并修复镜像依赖、迁移 schema、Worker 装配、工具路由、冻结配置、Web 准入、审批租约、Controller 并发连接及任务事件等实际联调问题；原生统一专项 **210 passed**，其后上下文归档与生产装配专项分别 **47 / 4 passed**（存在重叠）。实际搜索、抓取、证据抽取与质量拒绝已取得真实回执，完整报告交付以 [Docker 真实复验记录](implementation/docker-web-live-20260918.md) 为准。以下表格保留上一轮编码提交时的验收快照，不代表这些 live 实验尚未尝试。
 

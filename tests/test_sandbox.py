@@ -107,7 +107,7 @@ def _tar(entries):
 
 
 def test_v7_defaults_disabled_and_legacy_fields_are_rejected():
-    assert RUN_CONFIG_SCHEMA_VERSION == 13
+    assert RUN_CONFIG_SCHEMA_VERSION == 14
     assert Configuration().sandbox_enabled is False
     with pytest.raises(ValidationError, match="legacy_sandbox_config_removed"):
         Configuration(enable_docker_sandbox=True)
@@ -139,7 +139,7 @@ def test_freeze_pins_v7_policy_and_runtime_digest():
         "metadata": {"run_id": "run-v7"},
     }
     frozen = freeze_run_config(config, prefer_configurable=True)
-    assert frozen["metadata"]["run_config_schema_version"] == 13
+    assert frozen["metadata"]["run_config_schema_version"] == 14
     assert frozen["configurable"]["sandbox_profile_id"] == "research-gateway-only"
     assert len(frozen["configurable"]["sandbox_policy_digest"]) == 64
     assert len(frozen["configurable"]["sandbox_runtime_digest"]) == 64

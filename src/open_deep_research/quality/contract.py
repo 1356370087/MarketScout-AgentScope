@@ -61,6 +61,23 @@ _PROCESS_REQUIREMENT_RE = re.compile(
     flags=re.IGNORECASE | re.DOTALL,
 )
 
+# Imperative team instructions are verified by the coordinator, not web evidence.
+# Anchor these forms so questions *about* TeamCreate/CAS remain researchable.
+_TEAM_PROCESS_REQUIREMENT_RE = re.compile(
+    r"^(?:请\s*)?(?:团队执行要求[：:]\s*)?(?:"
+    r"Lead\s*(?:显式\s*)?(?:调用\s*)?TeamCreate\b|"
+    r"(?:调用|使用|通过)\s*(?:TeamCreate|SpawnTeammate|TaskGet|TaskUpdate|SendMessage)\b|"
+    r"(?:创建|启动)?\s*[\w-]+\s*[（(](?:direct|plan_approval)[）)]|"
+    r"(?:分别)?派发.{0,32}任务|blockedBy\b|不设置\s*owner\b|"
+    r"让成员.{0,16}认领|成员(?:相互|之间)?.{0,16}发送.{0,16}消息|"
+    r"\S+\s*(?:首版|第一版)计划.{0,24}Lead.{0,24}(?:驳回|审核)|"
+    r"修订后.{0,24}(?:plan_response|批准)|"
+    r"质量拒绝.{0,16}(?:不能|不得).{0,16}解锁|"
+    r"(?:需要)?补证时\s*Lead\s*创建|(?:最后)?完成质量检查|"
+    r"不(?:使用知识库|扩展架构推断)|每项充分取证|优先官方资料)",
+    flags=re.IGNORECASE,
+)
+
 # Output-format obligations owned by the final report stage ("风险矩阵",
 # "检查清单", "用中文输出"); evidence cannot prove a deliverable's existence.
 _DELIVERABLE_REQUIREMENT_RE = re.compile(
@@ -130,7 +147,9 @@ def classify_requirement_kind(text: str) -> RequirementKind:
     value = str(text or "")
     if is_scope_exclusion(value):
         return "process"
-    if _PROCESS_REQUIREMENT_RE.search(value) or _SINGLE_RESEARCH_TASK_RE.search(value.strip()):
+    if (_PROCESS_REQUIREMENT_RE.search(value)
+            or _SINGLE_RESEARCH_TASK_RE.search(value.strip())
+            or _TEAM_PROCESS_REQUIREMENT_RE.search(value.strip())):
         return "process"
     if _GLOBAL_CONSTRAINT_LABEL_RE.match(value.strip()):
         return "process"

@@ -102,7 +102,8 @@ async def test_tool_http_routes_authenticate_before_runtime_scope(route, method)
     "case",
     ["service", "task", "stale-fence", "bad-signature", "expired-task", "wrong-task"],
 )
-async def test_v2_real_route_authorization(case, monkeypatch):
+@pytest.mark.parametrize("endpoint", ["complete", "lookup"])
+async def test_v2_real_route_authorization(case, monkeypatch, endpoint):
     # SDK 客户端仅用于路由构造，本测试不连接真实内部 API。
     for key in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
         monkeypatch.delenv(key, raising=False)
@@ -127,6 +128,7 @@ async def test_v2_real_route_authorization(case, monkeypatch):
         )
 
     runtime.invoke_model_operation_v2 = invoke
+    runtime.lookup_model_operation_v2 = invoke
     binding = SandboxServiceBinding(
         "https://fixture.invalid",
         "run",
@@ -167,6 +169,14 @@ async def test_v2_real_route_authorization(case, monkeypatch):
             model = SandboxChatModel(
                 binding=binding, model="test", stream=False, client=client
             )
+            if endpoint == "lookup":
+                from open_deep_research.sandbox.wire import GatewayModelRequestV2
+                wire = GatewayModelRequestV2(run_id="run", task_id="task", role="researcher", stage="researching",
+                    logical_operation_id="op", model="test", messages=[{"role": "user", "content": "q"}])
+                response = await client.post("/v2/models/lookup", json=wire.model_dump(mode="json"), headers=model._headers(wire))
+                assert response.status_code == (200 if case in {"service", "task"} else 401)
+                assert dispatched == (["op"] if case in {"service", "task"} else [])
+                return
             if case in {"service", "task"}:
                 result = await model([UserMsg("u", "q")])
                 assert result.content[0].text == "ok" and len(dispatched) == 1
