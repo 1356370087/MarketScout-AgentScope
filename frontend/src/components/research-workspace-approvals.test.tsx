@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/hooks/use-run-stream", () => ({ useRunStream: vi.fn() }));
+vi.mock("@/hooks/use-run-usage", () => ({ useRunUsage: () => ({ data: { task_operations: { "task-1": { model_call_count: 7, tool_call_count: 3 } } } }) }));
 vi.mock("./app-shell", () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -37,6 +38,12 @@ const approval: SecurityApproval = {
 };
 
 describe("ResearchWorkspace security approval reconciliation", () => {
+  it("renders durable native task counts", () => {
+    useResearchRunStore.setState({ tasksById: { "task-1": { task_id: "task-1", title: "Test", status: "running" } } });
+    render(<ResearchWorkspace runId="run-hydrated" />);
+    expect(screen.getByText("MODEL 7")).toBeInTheDocument();
+    expect(screen.getByText("TOOL 3")).toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.restoreAllMocks();
@@ -81,6 +88,16 @@ describe("ResearchWorkspace security approval reconciliation", () => {
     expect(screen.queryByText(/报告已生成/)).not.toBeInTheDocument();
     expect(screen.queryByText(/本次运行以部分结果结束/)).not.toBeInTheDocument();
     expect(screen.getByText(/未生成报告/)).toBeInTheDocument();
+  });
+
+  it("shows execution failure even before a quality result exists", () => {
+    useResearchRunStore.getState().hydrate({
+      run_id: "run-hydrated", status: "failed", last_event_id: 20,
+      output: { markdown: "" },
+    });
+    render(<ResearchWorkspace runId="run-hydrated" />);
+    expect(screen.getByText("研究失败")).toBeInTheDocument();
+    expect(screen.getByText(/研究执行失败，未生成报告/)).toBeInTheDocument();
   });
 
   it("recovers a pending approval after the first hydrate poll fails", async () => {

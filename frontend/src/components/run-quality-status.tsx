@@ -5,8 +5,8 @@ export function RunQualityStatus({ state }: { state: ResearchRunState }) {
   if (!state.terminal) return null;
   const partial = state.resultStatus === "partial";
   const degraded = state.qualityGate?.status === "degraded";
-  if (!partial && !degraded) return null;
   const failed = state.status === "failed" || state.resultStatus === "failed";
+  if (!partial && !degraded && !failed) return null;
   const hasReport = Boolean(state.report.trim());
   const reasons = state.qualityGate?.reason_codes;
   const handoffRejected = Array.isArray(reasons) && reasons.includes("handoff_rejected");
@@ -20,7 +20,9 @@ export function RunQualityStatus({ state }: { state: ResearchRunState }) {
     <div className="panel-body">
       <p>{hasReport
         ? (failed ? "本次运行失败，已有报告内容仅供排查参考。" : "报告已生成，仍有证据或覆盖缺口，请结合报告中的限制说明使用。")
-        : "本次运行未生成报告，研究结果仍有证据或覆盖缺口。"}</p>
+        : failed && !degraded
+          ? "研究执行失败，未生成报告。请检查服务运行记录后重试。"
+          : "本次运行未生成报告，研究结果仍有证据或覆盖缺口。"}</p>
       {handoffRejected && <p>部分研究结果未通过交接门禁，相关需求尚未得到充分证据支持。</p>}
       {budgetExhausted && <p>{failed || !hasReport ? "研究轮次已用尽。" : "研究轮次已用尽，本次运行以部分结果结束。"}</p>}
     </div>

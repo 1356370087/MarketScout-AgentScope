@@ -11,6 +11,7 @@ import { ResearchTeamPanel } from "@/features/research/research-team-panel";
 import { TaskActivityDrawer } from "@/features/research/task-activity-drawer";
 import { TokenUsageDashboard, UsageCompactSummary } from "@/components/token-usage-dashboard";
 import { useRunStream } from "@/hooks/use-run-stream";
+import { useRunUsage } from "@/hooks/use-run-usage";
 import { researchApi } from "@/lib/api";
 import { isSecurityApprovalResolved, shouldRequestSecurityApprovals } from "@/lib/security-approvals";
 import { deriveWaveStatus, STAGES } from "@/lib/run-reducer";
@@ -36,6 +37,7 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const router = useRouter(); const searchParams = useSearchParams(); const selectedTaskId = searchParams.get("task");
   const state = useResearchRunStore(); const [feedback, setFeedback] = useState("");
+  const usage = useRunUsage(runId, true, state.terminal);
   const { connectionState, isHydrated, runId: hydratedRunId, terminal, setSecurityApprovals } = state;
   useEffect(() => {
     let active = true;
@@ -58,7 +60,7 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
     return () => { active = false; window.clearInterval(timer); controllers.forEach((controller) => controller.abort()); };
   }, [connectionState, hydratedRunId, isHydrated, runId, setSecurityApprovals, terminal]);
   const requestedView = searchParams.get("view"); const view = requestedView === "usage" || requestedView === "report" ? requestedView : "process";
-  const tasks = Object.values(state.tasksById); const selectedTask = selectedTaskId ? state.tasksById[selectedTaskId] : undefined; const waveIds = Array.from(new Set(tasks.map((task) => task.wave_id || "wave-0")));
+  const tasks = Object.values(state.tasksById).map((task) => ({ ...task, ...usage.data?.task_operations?.[task.task_id] })); const selectedTask = tasks.find((task) => task.task_id === selectedTaskId); const waveIds = Array.from(new Set(tasks.map((task) => task.wave_id || "wave-0")));
   const showReport = Boolean(state.report) && view === "report"; const showUsage = view === "usage";
   function downloadMarkdown() { const blob = new Blob([state.report], { type: "text/markdown;charset=utf-8" }); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `${state.title || runId}.md`; anchor.click(); URL.revokeObjectURL(href); }
   async function submitFeedback() { if (!feedback.trim()) return; await researchApi.feedback(runId, { type: "direction", message: feedback }); setFeedback(""); }
