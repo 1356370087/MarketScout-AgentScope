@@ -5,7 +5,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+# 共用 HTTP/工具入口尚有兼容模块，迁移期间显式安装桥接依赖。
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra legacy-bridge
 # 与 publisher-worker 使用同一 uid，保证共享卷上 0600 的 Job/工件双向可读写。
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \

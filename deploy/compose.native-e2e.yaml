@@ -1,6 +1,11 @@
 # 原生 E2E 覆盖配置。与根目录 docker-compose.yaml 合并使用。
 # 必须先填写专用 Worker 环境文件并构建 API 镜像；仅启动本次需要的服务。
 services:
+  app-db:
+    # 正式团队 Worker 位于 default 网络，需要访问同一恢复库；不发布数据库宿主端口。
+    networks:
+      - default
+      - document-internal
   api:
     image: insightforge-api:local
     environment:
@@ -31,6 +36,8 @@ services:
       document-migrate:
         condition: service_completed_successfully
     restart: "no"
+    networks:
+      - document-internal
   sandbox-controller:
     environment:
       SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}-sandbox-gateway

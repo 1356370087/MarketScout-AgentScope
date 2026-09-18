@@ -89,12 +89,39 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
     engine = create_async_engine(settings.database_url, **build_engine_kwargs(settings))
     try:
         await ensure_runtime_schema(engine, settings.database_schema)
+        # SDK 的 auto_migrate 会另建连接且丢弃 engine_kwargs，误读 public
+        # 中 IAM 的 alembic_version。复用隔离连接执行同一套框架迁移。
+        import inspect
+
+        from alembic.config import Config
+        from alembic.runtime.environment import EnvironmentContext
+        from alembic.script import ScriptDirectory
+
+        migration_dir = Path(inspect.getfile(AsyncSQLAlchemyStorage)).parent / "_alembic"
+        migration_config = Config()
+        migration_config.set_main_option("script_location", str(migration_dir))
+        scripts = ScriptDirectory.from_config(migration_config)
+
+        def migrate(connection):
+            with EnvironmentContext(
+                migration_config, scripts,
+                fn=lambda revision, context: scripts._upgrade_revs("head", revision),
+            ) as context:
+                context.configure(
+                    connection=connection,
+                    version_table_schema=settings.database_schema,
+                )
+                with context.begin_transaction():
+                    context.run_migrations()
+
+        async with engine.begin() as connection:
+            await connection.run_sync(migrate)
     finally:
         await engine.dispose()
     storage = AsyncSQLAlchemyStorage(
         settings.database_url,
         create_tables=False,
-        auto_migrate=True,
+        auto_migrate=False,
         engine_kwargs=build_engine_kwargs(settings),
     )
     async with storage:
