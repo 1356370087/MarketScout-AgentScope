@@ -28,7 +28,7 @@ function tokens(value: number) {
   return new Intl.NumberFormat("zh-CN", { notation: value >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
 }
 
-function percent(value: number) { return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`; }
+function percent(value: number | null) { return value === null ? "暂无已结算数据" : `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`; }
 function cost(value: number | null) { return value === null ? "未配置" : `$${(value / 1_000_000).toFixed(value < 10_000 ? 4 : 2)}`; }
 function elapsed(value: number | null) {
   if (value === null) return "运行中";
@@ -78,9 +78,9 @@ function BudgetTracks({ data }: { data: RunUsageResponse }) {
     const settled = item.settled ?? 0;
     const total = settled + item.estimated + item.reserved;
     const denominator = item.limit || Math.max(1, total);
-    const labels: Record<string, string> = { input_tokens: "输入 Token", output_tokens: "输出 Token", model_calls: "模型调用", cost_micro_usd: "费用" };
+    const labels: Record<string, string> = { input_tokens: "输入 Token", output_tokens: "输出 Token", model_calls: "模型调用", cost_micro_usd: "费用", tool_calls: "工具调用", fetch_calls: "网页抓取" };
     const formatValue = (value: number | null) => key === "cost_micro_usd" ? cost(value) : tokens(value ?? 0);
-    return <div className="budget-row" key={key}><div><b>{labels[key] ?? key}</b><span>{formatValue(item.settled)}{item.limit ? ` / ${formatValue(item.limit)}` : " / 未设上限"}</span></div><div className="budget-bar" aria-label={`${labels[key]}已使用 ${formatValue(total)}`}><i className="budget-settled" style={{ width: `${Math.min(100, settled / denominator * 100)}%` }} /><i className="budget-estimated" style={{ width: `${Math.min(100, item.estimated / denominator * 100)}%` }} /><i className="budget-reserved" style={{ width: `${Math.min(100, item.reserved / denominator * 100)}%` }} /></div></div>;
+    return <div className="budget-row" key={key}><div><b>{labels[key] ?? key}</b><span>{formatValue(item.settled)}{item.limit ? ` / ${formatValue(item.limit)}` : " / 未设上限"}</span></div><div className="budget-bar" aria-label={`${labels[key] ?? key}已使用 ${formatValue(total)}`}><i className="budget-settled" style={{ width: `${Math.min(100, settled / denominator * 100)}%` }} /><i className="budget-estimated" style={{ width: `${Math.min(100, item.estimated / denominator * 100)}%` }} /><i className="budget-reserved" style={{ width: `${Math.min(100, item.reserved / denominator * 100)}%` }} /></div></div>;
   })}</div></section>;
 }
 

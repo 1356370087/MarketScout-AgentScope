@@ -427,7 +427,7 @@ class RecoveryStore:
         return row["revision"]
 
     async def begin_operation(
-        self, lease, key, kind, payload, *, replay_safe=False, reserve=None
+        self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None
     ):
         fingerprint = digest(payload)
         unknown = False
@@ -511,6 +511,13 @@ class RecoveryStore:
                         actual=None,
                     )
                 )
+                if observation is not None:
+                    # Only content-free dimensions are accepted, never request bodies.
+                    dimensions = {k: observation[k] for k in
+                                  ("task_id", "agent_role", "stage", "model", "tool_name")
+                                  if observation.get(k) is not None}
+                    await self._event(conn, row, "research.operation_started",
+                                      {"operation_key": key, "kind": kind, **dimensions})
         if unknown:
             raise UnknownOperation(key)
         return {"replayed": False}

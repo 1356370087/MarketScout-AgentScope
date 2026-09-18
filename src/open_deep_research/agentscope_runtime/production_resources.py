@@ -293,6 +293,7 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
 
             def model_for(role, task_id):
                 task_id = task_identity(task_id)
+                from open_deep_research.agentscope_runtime.recovery_events import _STAGES
                 return models.build_sandbox(
                     role,
                     SandboxBinding(
@@ -300,7 +301,7 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
                         run_id,
                         task_id,
                         role,
-                        "researching",
+                        lambda: _STAGES.get(recovery.stage.get().rsplit(":", 1)[0], "researching"),
                         lambda: token_for(task_id),
                     ),
                 )

@@ -71,6 +71,10 @@ class AttemptAccounting:
             {"model": getattr(model, "model", None),
              "request": request},
             reserve=reserve,
+            observation={"task_id": self.session.task_id.get(),
+                         "stage": self.session.stage.get().rsplit(":", 1)[0],
+                         "agent_role": self.key.split(":model:")[-1].split(":")[0],
+                         "model": getattr(model, "model", None)},
         )
         if record["replayed"]:
             receipt = record["result"]

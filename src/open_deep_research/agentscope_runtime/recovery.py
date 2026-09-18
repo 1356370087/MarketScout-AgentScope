@@ -228,11 +228,22 @@ class RecoverySession:
                 stable_input(payload),
                 replay_safe=replay_safe,
                 reserve=reserve,
+                observation={"task_id": self.task_id.get(),
+                             "stage": self.stage.get().rsplit(":", 1)[0],
+                             "agent_role": payload.get("role") if isinstance(payload, dict) else None,
+                             "tool_name": payload.get("name") if kind == "tool" else None},
             )
             if record["replayed"]:
                 return record["result"]
             await self.hit("operation_planned")
-            result = await call()
+            from open_deep_research.agentscope_runtime.telemetry import operation_span
+            with operation_span(kind, self, payload.get("role") if isinstance(payload, dict) else None) as span:
+                result = await call()
+                if isinstance(result, dict):
+                    usage = (result.get("response") or {}).get("usage") or {}
+                    for dimension in ("input_tokens", "output_tokens"):
+                        if usage.get(dimension) is not None:
+                            span.set_attribute("gen_ai.usage." + dimension, usage[dimension])
             await self.hit("effect_returned")
             await self.store.commit_operation(
                 self.lease, key, result, actual=actual(result) if actual else None

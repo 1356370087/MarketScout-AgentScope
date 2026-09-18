@@ -81,6 +81,8 @@ class SQLGatewayLedger:
             "gateway:model",
             request.request_digest,
             reserve=usage,
+            observation={"task_id": request.task_id, "stage": request.stage,
+                         "agent_role": request.agent_role, "model": request.model_name},
         )
 
     async def reserve_tool(self, request):
@@ -106,6 +108,8 @@ class SQLGatewayLedger:
             },
             replay_safe=request.idempotent is not False,
             reserve=reserve,
+            observation={"task_id": request.task_id, "stage": request.stage,
+                         "agent_role": "researcher", "tool_name": request.tool_name},
         )
 
     async def settle_tool(self, request):

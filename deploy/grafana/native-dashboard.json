@@ -1,0 +1,10 @@
+{
+  "uid": "insightforge-native", "title": "InsightForge · AgentScope 原生运行", "schemaVersion": 39, "version": 1,
+  "refresh": "15s", "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {"id": 1, "title": "运行状态（持久化）", "type": "timeseries", "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_runs", "legendFormat": "{{status}}"}]},
+    {"id": 2, "title": "物理工具结果（持久化）", "type": "timeseries", "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_tools", "legendFormat": "{{status}}"}]},
+    {"id": 3, "title": "已结算 Token（含保守估算）", "type": "timeseries", "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_tokens", "legendFormat": "{{direction}}"}]},
+    {"id": 4, "title": "操作状态与未知隔离", "type": "timeseries", "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "insightforge_native_operations", "legendFormat": "{{kind}} / {{state}}"}]}
+  ]
+}

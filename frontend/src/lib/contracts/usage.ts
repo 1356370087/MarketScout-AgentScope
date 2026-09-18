@@ -19,7 +19,7 @@ export interface UsageBucket {
   call_count: number;
   estimated_cost_micro_usd: number | null;
   cost_source: UsageCostSource;
-  average_latency_ms?: number;
+  average_latency_ms?: number | null;
   completeness?: UsageAccountingStatus;
 }
 
@@ -74,6 +74,7 @@ export interface RunUsageResponse {
     call_count: number;
     retry_count: number;
   }>;
+  task_operations?: Record<string, { model_call_count: number; tool_call_count: number; tool_success_count: number; tool_failed_count: number }>;
   operations: {
     llm_call_count: number;
     retry_count: number;
@@ -84,7 +85,7 @@ export interface RunUsageResponse {
     reasoning_output_ratio: number;
     output_tokens_per_second: number;
     tool_call_count: number;
-    tool_success_rate: number;
+    tool_success_rate: number | null;
     empty_tool_result_count: number;
     zero_source_search_count: number;
   };

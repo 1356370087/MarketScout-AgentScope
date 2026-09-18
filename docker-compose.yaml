@@ -430,6 +430,7 @@ services:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./deploy/grafana/dashboard.json:/var/lib/grafana/dashboards/insightforge.json:ro
       - ./deploy/grafana/litellm-dashboard.json:/var/lib/grafana/dashboards/litellm.json:ro
+      - ./deploy/grafana/native-dashboard.json:/var/lib/grafana/dashboards/native.json:ro
       - grafana-data:/var/lib/grafana
     ports:
       - "${GRAFANA_HOST_PORT:-3001}:3000"

@@ -31,6 +31,14 @@ const response: RunUsageResponse = {
 };
 
 describe("TokenUsageDashboard", () => {
+  it("labels native tool and fetch budgets with accessible fallback for future dimensions", () => {
+    useRunUsage.mockReturnValue({ data: { ...response, totals: { ...response.totals, budgets: Object.fromEntries(["tool_calls", "fetch_calls", "future"].map((name) => [name, { settled: 2, estimated: 0, reserved: 0, limit: null }])) }, operations: { ...response.operations, tool_success_rate: null } } });
+    render(<TokenUsageDashboard runId="run-1" visible terminal />);
+    expect(screen.getByLabelText("工具调用已使用 2")).toBeInTheDocument();
+    expect(screen.getByLabelText("网页抓取已使用 2")).toBeInTheDocument();
+    expect(screen.getByLabelText("future已使用 2")).toBeInTheDocument();
+    expect(screen.getByText("暂无已结算数据")).toBeInTheDocument();
+  });
   beforeEach(() => useRunUsage.mockReturnValue({ isLoading: false, isError: false, data: response }));
 
   it("renders reported and estimated tracks without calling estimates real", () => {

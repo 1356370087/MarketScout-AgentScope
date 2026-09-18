@@ -758,7 +758,13 @@ async def _refresh_operational_metrics() -> None:
 async def prometheus_metrics() -> Response:
     """Expose process-wide aggregate metrics for Prometheus scraping."""
     await _refresh_operational_metrics()
-    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+    body = generate_latest()
+    configurable = Configuration.from_runnable_config(None)
+    if (_native_research_service is not None
+            and configurable.observability_enabled and configurable.prometheus_enabled):
+        from open_deep_research.agentscope_runtime.telemetry import prometheus_snapshot
+        body += await prometheus_snapshot(_native_research_service.store)
+    return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/healthz", include_in_schema=False)

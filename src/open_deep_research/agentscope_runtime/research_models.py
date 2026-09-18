@@ -39,9 +39,11 @@ class ResearchModels:
         if not self.recovery:
             return [policy]
         from open_deep_research.agentscope_runtime.recovery import JournalMiddleware
+        from open_deep_research.agentscope_runtime.telemetry import NativeTelemetryMiddleware
 
         maximum = self.factory.descriptor(role)["max_output_tokens"]
         return [
+            NativeTelemetryMiddleware(self.recovery, role),
             JournalMiddleware(
                 self.recovery, role, maximum, self.pricing(role),
                 account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
