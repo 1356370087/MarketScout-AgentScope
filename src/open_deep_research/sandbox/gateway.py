@@ -122,6 +122,7 @@ class GatewayRunContext:
     expires_at: float
     api_keys: dict[str, str] = field(default_factory=dict)
     registered_at: float = field(default_factory=time.time)
+    frozen_config: dict[str, Any] | None = None
 
 
 def approval_deadline(
@@ -269,6 +270,7 @@ class RemoteBudgetGate:
         stage: str,
         logical_operation_id: str,
         initial_attempt_count: int = 0,
+        agent_role: str | None = None,
     ) -> None:
         """Bind one logical operation to the API budget authority."""
         self.internal = internal
@@ -276,6 +278,7 @@ class RemoteBudgetGate:
         self.task_id = task_id
         self.fence_token = fence_token
         self.stage = stage
+        self.agent_role = agent_role
         self.logical_operation_id = logical_operation_id
         self._counter = max(0, initial_attempt_count)
         self._keys: dict[str, str] = {}
@@ -324,6 +327,7 @@ class RemoteBudgetGate:
             estimated_input_tokens=max(1, estimated_input_tokens),
             estimated_output_tokens=max(1, estimated_output_tokens),
             request_digest=request_digest,
+            agent_role=self.agent_role,
         )
         self._enqueue("/internal/sandbox/budgets/reserve", request)
         transition = self.internal.signed(
@@ -484,6 +488,7 @@ class GatewayRuntime:
                 config["configurable"]["_sandbox_credential_vault"] = prior_vault
         self.runs[request.run_id] = GatewayRunContext(
             config=config,
+            frozen_config=request.frozen_config,
             fence_token=request.fence_token,
             api_keys=merged_api_keys,
             registered_at=(
@@ -2202,6 +2207,7 @@ class GatewayRuntime:
             stage=request.stage,
             logical_operation_id=request.logical_operation_id,
             initial_attempt_count=prior_attempt_count,
+            agent_role=request.role,
         )
 
         async def call(model_id: str, call_messages: list[Any]) -> AIMessage:
@@ -2411,6 +2417,7 @@ class GatewayRuntime:
             initial_attempt_count=prior_attempt_count,
         )
         operation_key = f"gateway-v2:{request.logical_operation_id}"
+        budget.agent_role = request.role
         gateway = self.model_gateways.get(request.run_id)
         if gateway is None:
             gateway = NativeGatewayProvider(api_key=litellm_key)
@@ -2760,7 +2767,6 @@ def create_gateway_app(
         "/v1/tools/catalog",
         response_model=GatewayToolCatalogOutcomeV1,
     )
-    @native_tools_scope
     async def tool_catalog(
         request: GatewayToolCatalogRequestV1,
         authorization: str = Header(default="", alias="Authorization"),
@@ -2800,7 +2806,6 @@ def create_gateway_app(
         ))
 
     @app.post("/v1/tools/call", response_model=GatewayToolOutcomeV1)
-    @native_tools_scope
     async def invoke_tool(
         request: GatewayToolRequestV1,
         authorization: str = Header(default="", alias="Authorization"),
@@ -2819,7 +2824,6 @@ def create_gateway_app(
         return await runtime.invoke_tool(request, context)
 
     @app.post("/v1/tools/authorize-local", response_model=GatewayToolOutcomeV1)
-    @native_tools_scope
     async def authorize_local_tool(
         request: GatewayToolRequestV1,
         authorization: str = Header(default="", alias="Authorization"),

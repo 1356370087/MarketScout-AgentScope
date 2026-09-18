@@ -91,7 +91,10 @@ def install_team_routes(app, runtime):
             ["python", "-m", "open_deep_research.agentscope_runtime.team_executor"],
             name=name,
             detach=True,
-            auto_remove=True,
+            # 由本控制器在重启/关闭时删除，避免与 Docker 自动删除竞态；
+            # 退出后的日志也得以保留到下一次健康检查。
+            auto_remove=False,
+            healthcheck={"test": ["NONE"]},
             labels=labels,
             environment=environment,
             network=os.environ.get("AS_TEAM_WORKER_NETWORK"),
@@ -146,16 +149,13 @@ class ControllerTeamLauncher:
             self.tasks[key] += 1
 
     async def aclose(self):
-        try:
-            results = await asyncio.gather(
-                *(
-                    self._request(lease, task_id, stop=True)
-                    for lease, task_id in self.tasks
-                ),
-                return_exceptions=True,
-            )
-            for result in results:
-                if isinstance(result, BaseException):
-                    raise result
-        finally:
-            await self.client.transport.aclose()
+        results = await asyncio.gather(
+            *(
+                self._request(lease, task_id, stop=True)
+                for lease, task_id in self.tasks
+            ),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

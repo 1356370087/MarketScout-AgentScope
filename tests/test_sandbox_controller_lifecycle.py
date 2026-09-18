@@ -122,13 +122,54 @@ async def test_collect_archive_client_has_a_finite_timeout(monkeypatch) -> None:
 
     monkeypatch.setattr(controller_client.httpx, "AsyncClient", AsyncClient)
     client = object.__new__(SandboxControllerClient)
-    client.transport = object()
+    client.configurable = SimpleNamespace(sandbox_controller_socket="/tmp/controller.sock")
     client._task_request = lambda _container_id: SimpleNamespace(
         model_dump_json=lambda: "{}"
     )
 
     assert await client.collect_archive("container") == b"archive"
     assert captured["timeout"] is not None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_controller_calls_do_not_close_each_others_transport(monkeypatch):
+    import asyncio
+    import httpx
+
+    from open_deep_research.sandbox import controller_client
+
+    transports = []
+    slow_started, fast_closed = asyncio.Event(), asyncio.Event()
+
+    class Transport(httpx.AsyncBaseTransport):
+        def __init__(self, **kwargs):
+            self.closed = False
+            self.slow = False
+            transports.append(self)
+
+        async def handle_async_request(self, request):
+            self.slow = request.url.path == "/slow"
+            if self.slow:
+                slow_started.set()
+                await fast_closed.wait()
+                assert not self.closed
+            else:
+                await slow_started.wait()
+            return httpx.Response(200, json={"status": "ok"})
+
+        async def aclose(self):
+            self.closed = True
+            if not self.slow:
+                fast_closed.set()
+
+    monkeypatch.setattr(controller_client.httpx, "AsyncHTTPTransport", Transport)
+    client = object.__new__(SandboxControllerClient)
+    client.configurable = SimpleNamespace(sandbox_controller_socket="/tmp/controller.sock")
+    request = SimpleNamespace(model_dump_json=lambda: "{}")
+    assert await asyncio.gather(client._post("/slow", request), client._post("/fast", request)) == [
+        {"status": "ok"}, {"status": "ok"},
+    ]
+    assert len(transports) == 2 and all(item.closed for item in transports)
 
 
 def test_collect_archive_works_after_worker_stops() -> None:

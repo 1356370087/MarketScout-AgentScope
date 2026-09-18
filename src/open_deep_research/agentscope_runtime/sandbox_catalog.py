@@ -45,7 +45,9 @@ def native_tools_scope(method):
                 "task_id": request.task_id,
             },
         }
-        run = RunConfig.compile(config)
+        # 物理网关关闭本地用量写入，覆盖的开关不属于原始冻结契约。
+        # 模型工厂必须验证控制面签名的契约，而非这些进程内覆盖值。
+        run = RunConfig.compile(context.frozen_config or config)
         factory = ModelFactory(run, scope="run", owner=request.run_id, bindings={})
         tools = []
         if runtime._native_model_app is None:

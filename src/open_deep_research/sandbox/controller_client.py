@@ -36,7 +36,6 @@ class SandboxControllerClient:
         self.configurable = configurable
         self.bundle = bundle
         self.keys = SandboxDerivedKeys.from_root(configurable.sandbox_root_signing_key or "")
-        self.transport = httpx.AsyncHTTPTransport(uds=configurable.sandbox_controller_socket)
 
     async def _post(
         self,
@@ -46,7 +45,8 @@ class SandboxControllerClient:
         timeout: float | None = 30,
     ) -> dict:
         async with httpx.AsyncClient(
-            transport=self.transport,
+            # AsyncClient 退出时会关闭 transport；并发请求必须各自持有。
+            transport=httpx.AsyncHTTPTransport(uds=self.configurable.sandbox_controller_socket),
             base_url="http://sandbox-controller",
             timeout=timeout,
         ) as client:
@@ -126,7 +126,7 @@ class SandboxControllerClient:
         """Download the Controller-validated canonical task archive."""
         request = self._task_request(container_id)
         async with httpx.AsyncClient(
-            transport=self.transport,
+            transport=httpx.AsyncHTTPTransport(uds=self.configurable.sandbox_controller_socket),
             base_url="http://sandbox-controller",
             timeout=httpx.Timeout(120.0, connect=5.0),
         ) as client:

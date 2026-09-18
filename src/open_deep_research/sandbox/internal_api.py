@@ -70,6 +70,7 @@ class BudgetReserveRequest(ServiceRequest):
     estimated_input_tokens: int = Field(ge=1)
     estimated_output_tokens: int = Field(ge=1)
     request_digest: str | None = None
+    agent_role: str | None = None
 
 
 class TeamBridgeRequest(ServiceRequest):
