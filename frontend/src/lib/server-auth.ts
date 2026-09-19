@@ -41,7 +41,10 @@ export function sameOriginValid(request: NextRequest): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
   try {
-    return new URL(origin).host === request.nextUrl.host;
+    // Standalone Next.js can reconstruct nextUrl with its internal bind address.
+    // Host retains the browser-facing authority (including the published port).
+    const host = request.headers.get("host") ?? request.nextUrl.host;
+    return new URL(origin).host === host;
   } catch {
     return false;
   }

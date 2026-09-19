@@ -8,6 +8,7 @@ import type { TaskActivityTimelineState } from "@/lib/task-activity-reducer";
 import type { TaskActivityEvent, TaskActivityKind, TaskActivityPage } from "@/lib/types";
 
 type Connection = "connecting" | "connected" | "reconnecting" | "closed" | "error";
+const terminalTypes = ["task.completed", "task.failed", "task.cancelled", "task.timed_out"];
 
 export function useTaskActivity(runId: string, taskId: string, kind?: TaskActivityKind) {
   const activityKey = `${runId}:${taskId}:${kind ?? "all"}`;
@@ -17,6 +18,7 @@ export function useTaskActivity(runId: string, taskId: string, kind?: TaskActivi
     enabled: Boolean(runId && taskId),
     staleTime: 3_000,
   });
+  const terminal = history.data?.items.some((event) => terminalTypes.includes(event.type)) ?? false;
   const [timelineEntry, setTimelineEntry] = useState<{ key: string; state: TaskActivityTimelineState }>(() => ({ key: activityKey, state: emptyTaskActivityState() }));
   const [connectionEntry, setConnectionEntry] = useState<{ key: string; value: Connection }>(() => ({ key: activityKey, value: "connecting" }));
   const [olderEntry, setOlderEntry] = useState<{ key: string; pages: TaskActivityPage[] }>(() => ({ key: activityKey, pages: [] }));
@@ -34,9 +36,10 @@ export function useTaskActivity(runId: string, taskId: string, kind?: TaskActivi
   })), [activityKey]);
 
   useEffect(() => {
-    if (!history.data || history.data.source !== "native") return;
+    if (!history.data || history.data.source !== "native" || terminal) return;
     const controller = new AbortController();
     let stopped = false;
+    let authRestarts = 0;
     let cursor = history.data.last_event_id;
     async function connect() {
       try {
@@ -55,17 +58,27 @@ export function useTaskActivity(runId: string, taskId: string, kind?: TaskActivi
           onEvent: (event) => {
             cursor = Math.max(cursor, event.sequence);
             updateTimeline(event);
-            if (["task.completed", "task.failed", "task.cancelled", "task.timed_out"].includes(event.type)) setConnection("closed");
+            if (terminalTypes.includes(event.type)) {
+              setConnection("closed");
+              controller.abort();
+            }
           },
         });
         if (!stopped) setConnection("closed");
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!stopped && message.includes("cursor-ahead")) { await connect(); return; }
+        if (!stopped && message.includes("sse-auth-refreshed") && authRestarts < 1) {
+          authRestarts += 1;
+          await connect();
+          return;
+        }
         if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) setConnection("error");
       }
     }
     void connect();
     return () => { stopped = true; controller.abort(); };
-  }, [history.data, kind, mergeTimeline, runId, setConnection, taskId, updateTimeline]);
+  }, [history.data, kind, mergeTimeline, runId, setConnection, taskId, terminal, updateTimeline]);
 
   const mergedTimeline = useMemo(() => {
     let state = mergeTaskActivityHistory(emptyTaskActivityState(), history.data?.items ?? []);
@@ -83,12 +96,12 @@ export function useTaskActivity(runId: string, taskId: string, kind?: TaskActivi
 
   return useMemo(() => ({
     events: mergedTimeline.events,
-    connection: history.data?.source === "native" ? connection : "closed",
+    connection: history.data?.source === "native" && !terminal ? connection : "closed",
     loading: history.isLoading,
     error: history.error,
     source: history.data?.source ?? "summary_only",
     detailLevel: history.data?.detail_level ?? "summary",
     hasMore,
     loadOlder,
-  }), [connection, hasMore, history.data, history.error, history.isLoading, loadOlder, mergedTimeline.events]);
+  }), [connection, hasMore, history.data, history.error, history.isLoading, loadOlder, mergedTimeline.events, terminal]);
 }

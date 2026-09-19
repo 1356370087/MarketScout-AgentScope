@@ -19,6 +19,8 @@ export interface ResearchDocument {
   ocr_pages: number;
   created_at: string;
   updated_at: string;
+  deleted_at?: string | null;
+  current_generation_id?: string | null;
 }
 export interface DocumentChunk {
   id: string;
@@ -29,3 +31,21 @@ export interface DocumentChunk {
   text: string;
 }
 
+export type GenerationReview = {
+  id: string;
+  status: string;
+  revision: number;
+  unit_total: number;
+  units: {
+    id: string;
+    ordinal: number;
+    unit_type: string;
+    raw_text: string;
+    revised_text: string | null;
+    excluded: boolean;
+    exclusion_reason: string | null;
+    attributes: Record<string, unknown>;
+  }[];
+  metadata: { suggested?: Record<string, unknown>; confirmed?: Record<string, unknown> };
+  quality_report: { flags?: string[]; revision_conflicts?: unknown[] };
+};

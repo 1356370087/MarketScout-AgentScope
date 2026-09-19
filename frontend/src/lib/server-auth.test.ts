@@ -35,6 +35,27 @@ describe("sameOriginValid", () => {
     expect(sameOriginValid(request)).toBe(false);
   });
 
+  it("uses the browser-facing Host behind a standalone container", async () => {
+    const { sameOriginValid } = await import("./server-auth");
+    const request = new NextRequest("http://0.0.0.0:3000/api/auth/login", {
+      method: "POST",
+      headers: { Host: "localhost:3180", Origin: "http://localhost:3180" },
+    });
+    expect(sameOriginValid(request)).toBe(true);
+  });
+
+  it("does not trust a forged forwarded host to accept a foreign origin", async () => {
+    const { sameOriginValid } = await import("./server-auth");
+    const request = new NextRequest("http://0.0.0.0:3000/api/auth/login", {
+      method: "POST",
+      headers: {
+        Host: "localhost:3180", Origin: "https://evil.example",
+        "X-Forwarded-Host": "evil.example",
+      },
+    });
+    expect(sameOriginValid(request)).toBe(false);
+  });
+
   it("rejects a different port on the same host", async () => {
     const { sameOriginValid } = await import("./server-auth");
     const request = new NextRequest("http://localhost:3000/api/auth/login", {

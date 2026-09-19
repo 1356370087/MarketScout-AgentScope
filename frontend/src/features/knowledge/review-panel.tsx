@@ -9,6 +9,7 @@ export function ReviewPanel() {
   const [review, setReview] = useState<GenerationReview | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [publishing, setPublishing] = useState(false);
   const load = async () => {
     setError(""); setReview(null);
     try { setReview(await fetchGenerationReview(documentId, generationId)); }
@@ -19,6 +20,14 @@ export function ReviewPanel() {
     try { await action(review.revision); await load(); }
     catch (cause) { setError(String(cause)); }
   };
+  const publish = async () => {
+    setError(""); setPublishing(true);
+    try {
+      await publishGeneration(documentId, generationId);
+      await load();
+    } catch (cause) { setError(String(cause)); }
+    finally { setPublishing(false); }
+  };
   const docTypeConfirmed = (review?.metadata.confirmed?.doc_type as string | undefined) ?? "";
   return (
     <section>
@@ -27,7 +36,7 @@ export function ReviewPanel() {
         <label><input value={generationId} onChange={(event) => setGenerationId(event.target.value)} placeholder="解析代次 ID" /></label>
         <button className="primary" disabled={!documentId || !generationId} onClick={() => void load()}>载入待审代次</button>
       </div>
-      {error && <div className="document-operation error">{error}</div>}
+      {error && <div role="alert" className="document-operation error">{error}</div>}
       {review && (
         <>
           <div className="document-operation">
@@ -40,7 +49,7 @@ export function ReviewPanel() {
               {docTypes.map((type) => <option key={type} value={type}>{type}</option>)}
             </select>
             <button disabled={!note} onClick={() => void withRevision((revision) => confirmMetadata(documentId, generationId, revision, { doc_type: note }))}>确认元数据</button>
-            <button className="primary" onClick={() => void publishGeneration(documentId, generationId)}>发布</button>
+            <button className="primary" disabled={publishing || review.status === "published"} onClick={() => void publish()}>{publishing ? "发布中…" : review.status === "published" ? "已发布" : "发布"}</button>
           </div>
           <div className="knowledge-results">
             {review.units.map((unit) => (

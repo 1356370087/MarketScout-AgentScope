@@ -42,6 +42,7 @@ export function usePublications(runId: string, initial: PublicationJob[] = []) {
     if (!pending) return;
     const controller = new AbortController();
     let stopped = false;
+    let authRestarts = 0;
     const queryKey = ["publications", runId] as const;
     async function connect() {
       while (!stopped) {
@@ -73,7 +74,9 @@ export function usePublications(runId: string, initial: PublicationJob[] = []) {
           });
         } catch (error) {
           if (stopped || error instanceof DOMException && error.name === "AbortError") return;
-          if (error instanceof Error && error.message === "publication-sse-auth-failed") return;
+          const message = error instanceof Error ? error.message : String(error);
+          if (message === "publication-sse-auth-failed" || /sse-(401|403|404)$/.test(message)) return;
+          if (message === "publication-sse-auth-refreshed" && authRestarts++ >= 1) return;
         }
         if (!stopped) await new Promise((resolve) => window.setTimeout(resolve, 1_000));
       }

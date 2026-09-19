@@ -241,22 +241,22 @@ export function hydrateSnapshot(state: ResearchRunState, snapshot: RunSnapshot):
     title: snapshot.title ?? snapshot.run_id,
     status: snapshot.status,
     connectionState: terminal ? "closed" : state.connectionState,
-    currentStage: progress.current_stage,
+    currentStage: progress.current_stage ?? undefined,
     stageProgress,
     plan: progress.plan ?? {},
     tasksById: progress.task_items ?? {},
     sourcesById: sources,
     findingsByTaskId: findings,
-    pendingHumanAction: resolvedHumanActionIds.has(`${snapshot.run_id}:${(snapshot.pending_human_action ?? progress.pending_human_action)?.action_id}`) ? undefined : snapshot.pending_human_action ?? progress.pending_human_action,
+    pendingHumanAction: resolvedHumanActionIds.has(`${snapshot.run_id}:${(snapshot.pending_human_action ?? progress.pending_human_action)?.action_id}`) ? undefined : snapshot.pending_human_action ?? progress.pending_human_action ?? undefined,
     pendingSecurityApprovals: (snapshot.pending_security_approvals ?? progress.pending_security_approvals ?? []).filter((item) => !isSecurityApprovalResolved(item.approval_id)),
     report: snapshot.output?.markdown ?? "",
     artifacts: snapshot.output?.artifacts ?? [],
     publications: snapshot.output?.publications ?? [],
     preferredOutputFormat: snapshot.output?.preferred_output_format,
-    publicationTheme: snapshot.output?.publication_theme,
-    qualityGate: snapshot.output?.quality_gate,
-    resultStatus: snapshot.output?.status,
-    terminationReason: snapshot.output?.termination_reason,
+    publicationTheme: snapshot.output?.publication_theme ?? undefined,
+    qualityGate: snapshot.output?.quality_gate ?? undefined,
+    resultStatus: snapshot.output?.status ?? undefined,
+    terminationReason: snapshot.output?.termination_reason ?? undefined,
     reportReview,
     reportReviewHistory,
     reportRevisionCount,
@@ -275,7 +275,7 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
   if (event.type.startsWith("stage.") && payload.stage_id) {
     const stage = String(payload.stage_id) as StageId;
     next.currentStage = stage;
-    next.stageProgress = { ...state.stageProgress, [stage]: event.type.split(".")[1] as "running" | "completed" | "failed" };
+    next.stageProgress = { ...state.stageProgress, [stage]: event.type === "stage.started" ? "running" : event.type.split(".")[1] as "completed" | "failed" };
   } else if (event.type === "plan.created" || event.type === "plan.revised") {
     next.plan = { ...state.plan, ...payload };
   } else if (event.type === "plan.task.added" || event.type.startsWith("research.task.")) {

@@ -46,8 +46,8 @@ function TimelineEvent({ event }: { event: TaskActivityEvent }) {
       <header><div><span className="activity-kind">{event.kind}</span><h4>{event.title}</h4></div><time>{new Date(event.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time></header>
       <p>{event.summary}</p>
       <div className="activity-metrics">
-        {event.iteration !== undefined && <span>ITER {event.iteration}</span>}
-        {event.duration_ms !== undefined && <span>{(event.duration_ms / 1000).toFixed(2)}s</span>}
+        {event.iteration != null && <span>ITER {event.iteration}</span>}
+        {event.duration_ms != null && <span>{(event.duration_ms / 1000).toFixed(2)}s</span>}
         {typeof event.payload.model === "string" && <span>{event.payload.model}</span>}
         {typeof event.payload.tool_name === "string" && <span>{event.payload.tool_name}</span>}
         {typeof event.payload.source_count === "number" && <span>SRC {event.payload.source_count}</span>}
@@ -158,7 +158,7 @@ export function TaskActivityDrawer({ runId, task, onClose }: { runId: string; ta
             const event = item.events[0];
             const previous = timelineItems[index - 1]?.events.at(-1);
             return <div className="activity-iteration" key={event.event_id}>
-              {(index === 0 || previous?.iteration !== event.iteration) && event.iteration !== undefined && <div className="activity-iteration-label">ITERATION {event.iteration}</div>}
+              {(index === 0 || previous?.iteration !== event.iteration) && event.iteration != null && <div className="activity-iteration-label">ITERATION {event.iteration}</div>}
               {item.sourceGroup ? <SourceEventGroup events={item.events} /> : <TimelineEvent event={event} />}
             </div>;
           })}

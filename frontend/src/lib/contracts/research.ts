@@ -15,7 +15,7 @@ export interface PublicEvent {
   run_id: string;
   type: string;
   timestamp: string;
-  stage?: StageId;
+  stage?: StageId | null;
   payload: Record<string, unknown>;
 }
 
@@ -57,8 +57,8 @@ export interface TaskActivityEvent {
   status: TaskActivityStatus;
   title: string;
   summary: string;
-  iteration?: number;
-  duration_ms?: number;
+  iteration?: number | null;
+  duration_ms?: number | null;
   payload: Record<string, unknown>;
 }
 
@@ -154,17 +154,26 @@ export interface ResearchRunState {
 
 export interface RunSnapshot {
   run_id: string;
+  engine?: string;
+  created_at?: number | string | null;
+  revision?: number;
+  events_url?: string;
+  read_only?: boolean;
   title?: string;
   status: RunStatus;
-  pending_human_action?: PendingHumanAction;
+  pending_human_action?: PendingHumanAction | null;
   pending_security_approvals?: SecurityApproval[];
   progress?: {
     status?: RunStatus;
-    current_stage?: StageId;
+    stage_index?: number;
+    stage_count?: number;
+    tasks?: Record<string, number>;
+    waves?: Record<string, number>;
+    current_stage?: StageId | null;
     task_items?: Record<string, ResearchTask>;
     sources?: ResearchSource[];
     latest_findings?: Array<Record<string, unknown>>;
-    pending_human_action?: PendingHumanAction;
+    pending_human_action?: PendingHumanAction | null;
     pending_security_approvals?: SecurityApproval[];
     plan?: Record<string, unknown>;
     last_event_id?: number;
@@ -173,15 +182,18 @@ export interface RunSnapshot {
     report_revision_count?: number;
   };
   output?: {
+    usage?: Record<string, unknown>;
+    usage_accounting?: Record<string, unknown> | null;
+    metrics?: Record<string, unknown>;
     markdown?: string;
     artifacts?: Artifact[];
     publications?: PublicationJob[];
     preferred_output_format?: string | null;
-    publication_theme?: PublicationTheme;
-    quality_gate?: Record<string, unknown>;
-    status?: string;
-    termination_reason?: string;
-    report_review?: ReportReviewSummary | ReportReview;
+    publication_theme?: PublicationTheme | null;
+    quality_gate?: Record<string, unknown> | null;
+    status?: string | null;
+    termination_reason?: string | null;
+    report_review?: ReportReviewSummary | ReportReview | null;
     report_review_history?: Array<ReportReviewSummary | ReportReview>;
     report_revision_count?: number;
   };
