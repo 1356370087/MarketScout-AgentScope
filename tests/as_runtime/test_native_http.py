@@ -73,6 +73,70 @@ async def settle(service):
     await asyncio.sleep(0)
 
 
+async def test_native_task_activity_uses_sql_owner_and_replays(host, monkeypatch):
+    from open_deep_research.api.activity_routes import ActivityRoutes
+    from open_deep_research.api.streams import StreamOptions, _task_activity_iterator
+    from open_deep_research.configuration import Configuration
+    from fastapi import HTTPException
+    from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+    from open_deep_research.events.task_activity import TaskActivityStore
+
+    service, client, app, _ = host
+    monkeypatch.setenv("RUNS_DIR", str(service.runs_dir))
+    def legacy_miss(*args):
+        raise HTTPException(404, "Run not found")
+
+    async def reserve(*args):
+        return None
+
+    async def authorize(_):
+        return True
+
+    options = StreamOptions(configuration=Configuration(), shutdown=asyncio.Event(),
+                            authorize=authorize, reauth_interval=60)
+    routes = ActivityRoutes(
+        native_service=lambda: service, lookup_record=lambda _: None,
+        require_run_owner=legacy_miss, require_record_owner=legacy_miss,
+        reserve_sse_connection=reserve, limited_sse=lambda stream, _: stream,
+        task_activity_iterator=lambda store, **kw: _task_activity_iterator(store, options=options, **kw),
+        public_event_iterator=None,
+    )
+    app.include_router(routes.router)
+    response = await client.post("/runs", json={"messages": [{"role": "user", "content": "Question"}]})
+    run_id = response.json()["run_id"]
+    await settle(service)
+    recovery = await RecoverySession.open(service.store, run_id, "alice")
+    try:
+        await NativeEventPublisher(service.store, recovery.lease).publish(
+            "research.task.started", stage="researching",
+            payload={"task_id": "task-one", "title": "Evidence", "status": "running"},
+            dedupe_key="task-one-started",
+        )
+    finally:
+        await recovery.close()
+    activity = TaskActivityStore(run_id, "task-one", runs_dir=str(service.runs_dir))
+    await activity.append(
+        "task.completed", kind="lifecycle", phase="terminal", status="success",
+        title="Completed", summary="Safe evidence", iteration=1, duration_ms=12,
+        payload={}, dedupe_key="done",
+    )
+    assert not (service.runs_dir / run_id / "context" / "manifest.json").exists()
+    url = f"/runs/{run_id}/tasks/task-one/activity"
+    page = await client.get(url)
+    assert page.status_code == 200, page.text
+    assert page.json()["items"][0]["type"] == "task.completed"
+    stream = await client.get(url + "/stream")
+    assert stream.status_code == 200 and "event: task.completed" in stream.text
+    assert "dedupe_key" not in stream.text
+    assert (await client.get(url + "/stream?after=8")).status_code == 409
+    assert (await client.get(url + "/stream?after=1")).text == ""
+    assert (await client.get(url.replace("task-one", "unknown"))).status_code == 404
+    app.dependency_overrides[get_current_principal] = lambda: research_principal("foreign")
+    assert (await client.get(url)).status_code == 404
+    assert (await client.get(url + "/stream")).status_code == 404
+
+
 async def test_native_feedback_budget_and_team_ownership(host, monkeypatch):
     from open_deep_research.agentscope_runtime.recovery import RecoverySession
     from types import SimpleNamespace
@@ -141,9 +205,12 @@ async def test_http_create_approve_snapshot_sse_and_idempotency(host):
         )
     ).text == ""
     assert (await client.get(f"/runs/{run_id}/events?after=99999")).status_code == 409
+    for cursor in ["bad", "-1"]:
+        assert (await client.get(f"/runs/{run_id}/events", headers={"Last-Event-ID": cursor})).status_code == 400
     assert closed.count(run_id) == 2
     app.dependency_overrides[get_current_principal] = lambda: research_principal("bob")
     assert (await client.get("/runs/" + run_id)).status_code == 404
+    assert (await client.get(f"/runs/{run_id}/events")).status_code == 404
     assert (await client.get("/runs")).json()["items"] == []
     assert (await client.post("/runs/" + run_id + "/cancel")).status_code == 404
 
@@ -274,6 +341,105 @@ async def test_native_publication_routes_owner_and_reuse(host, monkeypatch):
     assert (
         await client.get(f"/runs/{run_id}/publications/events?after=999999")
     ).status_code == 409
+    for cursor in ["bad", "-1"]:
+        assert (await client.get(f"/runs/{run_id}/publications/events", headers={"Last-Event-ID": cursor})).status_code == 400
     app.dependency_overrides[get_current_principal] = lambda: research_principal("bob")
     assert (await client.get(publication["status_url"])).status_code == 404
+    assert (await client.get(f"/runs/{run_id}/publications/events")).status_code == 404
     assert (await client.post(publication["status_url"] + "/retry")).status_code == 404
+
+
+async def test_historical_publication_download_and_replay_are_read_only(host, monkeypatch):
+    import hashlib
+    from tests.as_runtime.test_http_boundary import archive, hashes
+    from open_deep_research.events.publications import PublicationEventStore
+    from open_deep_research.report.models import PublisherTheme, RenderedArtifact
+    from open_deep_research.report.publication_store import PublicationJobStore
+
+    service, client, app, _closed = host
+    archive(service.runs_dir)
+    store = PublicationJobStore("old", runs_dir=service.runs_dir)
+    content = "# 历史发布工件".encode()
+    job, _ = store.enqueue(
+        report_sha256=hashlib.sha256(content).hexdigest(),
+        publication_format="markdown", theme=PublisherTheme(), max_attempts=2,
+    )
+    claimed = store.claim(job.publication_id, worker_id="fixture", lease_seconds=30)
+    artifact = store.commit_file(
+        claimed, RenderedArtifact(content=content, media_type="text/markdown", extension="md"),
+        report_title="History", max_output_bytes=10000, worker_id="fixture",
+    )
+    store.complete(job.publication_id, worker_id="fixture", artifact=artifact)
+    events = PublicationEventStore("old", runs_dir=service.runs_dir)
+    # A historical stream can end before completion, without a final newline.
+    event = events.append("publication.started", publication_id=job.publication_id,
+                         payload={"format": "markdown", "status": "running", "attempt": 1},
+                         dedupe_key="historical-start")
+    events.path.write_bytes(events.path.read_bytes().rstrip(b"\n"))
+    events.lock_path.unlink()
+    before = hashes(service.runs_dir)
+    base = f"/runs/old/publications/{job.publication_id}"
+    listing = await client.get("/runs/old/publications")
+    assert listing.status_code == 200 and len(listing.json()["items"]) == 1
+    assert (await client.get(base)).json()["status"] == "completed"
+    response = await client.get(base + "/download")
+    assert response.status_code == 200 and response.content == content
+    assert response.headers["etag"] == f'"{hashlib.sha256(content).hexdigest()}"'
+    replay = await asyncio.wait_for(client.get("/runs/old/publications/events"), 5)
+    assert replay.status_code == 200 and "event: publication.started" in replay.text
+    assert (await client.get("/runs/old/publications/events",
+                             headers={"Last-Event-ID": str(event.sequence)})).text == ""
+    assert (await client.get("/runs/old/publications/events?after=99")).status_code == 409
+    assert (await client.get("/runs/old/publications/events?after=-1")).status_code == 400
+    monkeypatch.setenv("PUBLISHER_ENABLED", "true")
+    assert (await client.post(base + "/retry")).status_code == 404
+    assert (await client.post("/runs/old/publications", json={"format": "markdown"})).status_code == 404
+    assert hashes(service.runs_dir) == before
+    app.dependency_overrides[get_current_principal] = lambda: research_principal("bob")
+    for url in (base, base + "/download", "/runs/old/publications/events"):
+        assert (await client.get(url)).status_code == 404
+    app.dependency_overrides[get_current_principal] = lambda: research_principal("alice")
+    events.path.write_bytes(events.path.read_bytes() + b"\n{broken")
+    damaged = hashes(service.runs_dir)
+    response = await client.get("/runs/old/publications/events")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "historical_artifact_corrupted"
+    assert hashes(service.runs_dir) == damaged
+
+
+async def test_failed_run_hides_committed_report_and_rejects_publication(host, monkeypatch):
+    monkeypatch.setenv("PUBLISHER_ENABLED", "true")
+    service, client, _app, _closed = host
+
+    class FailingStages:
+        async def execute(self, stage, state):
+            if stage == "final_report_generation":
+                state.final_report = "Committed draft before terminal failure"
+                state.report_product = {"result": {"status": "success"}}
+            if stage == "memory_extract_and_write":
+                raise RuntimeError("fixture terminal failure")
+
+    @asynccontextmanager
+    async def factory(state, config, recovery):
+        yield ResearchPipeline(
+            state, FailingStages(), recovery.save,
+            config_fingerprint=state.config_fingerprint, recovery=recovery,
+        )
+
+    service.pipeline_factory = factory
+    response = await client.post("/runs", json={"messages": [{"role": "user", "content": "Failure after draft"}]})
+    assert response.status_code == 200
+    run_id = response.json()["run_id"]
+    await settle(service)
+    durable, _ = await service.store.load(run_id, "alice")
+    assert durable.status == "failed"
+    assert durable.final_report == "Committed draft before terminal failure"
+    snapshot = (await client.get(f"/runs/{run_id}")).json()
+    assert snapshot["status"] == "failed"
+    assert snapshot["output"]["markdown"] == ""
+    assert snapshot["output"]["status"] != "success"
+    listing = (await client.get("/runs")).json()
+    item = next(row for row in listing["items"] if row["run_id"] == run_id)
+    assert item["status"] == "failed" and item["output"]["markdown"] == ""
+    assert (await client.post(f"/runs/{run_id}/publications", json={"format": "markdown"})).status_code == 409
+    assert (await client.get(f"/runs/{run_id}/publications")).json()["items"] == []

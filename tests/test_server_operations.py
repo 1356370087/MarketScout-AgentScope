@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from open_deep_research import server
+from open_deep_research.api import operations
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import RunEventStore
 from open_deep_research.run_context import RunContextStore
@@ -105,9 +106,9 @@ def test_report_review_output_projection_is_bounded_and_redacted() -> None:
 async def test_readyz_reports_degraded_search_without_failing(monkeypatch) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
-    monkeypatch.setattr(server, "_probe_runs_directory", lambda _config: None)
+    monkeypatch.setattr(operations, "_probe_runs_directory", lambda _config: None)
     monkeypatch.setattr(
-        server,
+        operations,
         "get_iam_settings",
         lambda: SimpleNamespace(database_url=""),
     )
@@ -123,12 +124,12 @@ async def test_readyz_reports_degraded_search_without_failing(monkeypatch) -> No
 async def test_readyz_fails_when_runs_directory_is_not_writable(monkeypatch) -> None:
     monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
     monkeypatch.setattr(
-        server,
+        operations,
         "_probe_runs_directory",
         lambda _config: (_ for _ in ()).throw(PermissionError("denied")),
     )
     monkeypatch.setattr(
-        server,
+        operations,
         "get_iam_settings",
         lambda: SimpleNamespace(database_url=""),
     )
@@ -146,9 +147,9 @@ async def test_readyz_fails_when_runs_directory_is_not_writable(monkeypatch) -> 
 @pytest.mark.asyncio
 async def test_readyz_immediately_fails_while_shutting_down(monkeypatch) -> None:
     monkeypatch.setenv("OBSERVABILITY_ENABLED", "false")
-    monkeypatch.setattr(server, "_probe_runs_directory", lambda _config: None)
+    monkeypatch.setattr(operations, "_probe_runs_directory", lambda _config: None)
     monkeypatch.setattr(
-        server,
+        operations,
         "get_iam_settings",
         lambda: SimpleNamespace(database_url=""),
     )
@@ -204,9 +205,10 @@ async def test_shutdown_drain_persists_trace_and_cancels_run(tmp_path, monkeypat
     )
     record.task = asyncio.create_task(live_task())
     server._remember_run(record, config)
-    monkeypatch.setattr(server, "get_trace_recorder", lambda _config: FakeRecorder())
+    from open_deep_research.api import run_registry
+    monkeypatch.setattr(run_registry, "get_trace_recorder", lambda _config: FakeRecorder())
     monkeypatch.setattr(
-        server,
+        run_registry,
         "event_publisher_from_config",
         lambda _config: FakePublisher(),
     )

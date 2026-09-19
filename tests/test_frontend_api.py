@@ -8,6 +8,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from open_deep_research import server
+from open_deep_research.api import configuration_routes
 from open_deep_research.events.public import RunEventStore
 from open_deep_research.events.task_activity import TaskActivityStore
 from open_deep_research.models.catalog import ModelCatalogEntry
@@ -131,6 +132,10 @@ def test_task_activity_is_owner_scoped_and_replays_terminal_stream(
         stream = owner.get(
             f"/runs/{run_id}/tasks/{task_id}/activity/stream?after=0"
         )
+        stream_url = f"/runs/{run_id}/tasks/{task_id}/activity/stream"
+        for cursor, status in [("bad", 400), ("-1", 400), ("99", 409)]:
+            assert owner.get(stream_url, headers={"Last-Event-ID": cursor}).status_code == status
+        assert owner.get(stream_url + "?after=99", headers={"Last-Event-ID": "1"}).text == ""
     finally:
         server.app.dependency_overrides.clear()
     assert page.status_code == 200
@@ -143,6 +148,7 @@ def test_task_activity_is_owner_scoped_and_replays_terminal_stream(
     other = _client("user-2")
     try:
         denied = other.get(f"/runs/{run_id}/tasks/{task_id}/activity")
+        assert other.get(stream_url).status_code == 404
     finally:
         server.app.dependency_overrides.clear()
     assert denied.status_code == 404
@@ -299,11 +305,11 @@ def _install_catalog_stub(monkeypatch, loader) -> None:
         async def aclose(self) -> None:
             return None
 
-    monkeypatch.setattr(server, "LiteLLMModelCatalogClient", StubCatalogClient)
+    monkeypatch.setattr(configuration_routes, "LiteLLMModelCatalogClient", StubCatalogClient)
 
 
 def test_models_returns_gateway_catalog_and_role_aliases(monkeypatch):
-    monkeypatch.setattr(server, "_model_catalog_cache", None)
+    monkeypatch.setattr(configuration_routes, "_model_catalog_cache", None)
     monkeypatch.setenv("MODEL_BACKEND", "litellm")
     monkeypatch.setenv("RESEARCH_MODEL", "if-research-v1")
     _set_litellm_run_key_env(monkeypatch)
@@ -350,7 +356,7 @@ def test_models_returns_gateway_catalog_and_role_aliases(monkeypatch):
 
 
 def test_models_serves_stale_cache_then_empty_when_gateway_unavailable(monkeypatch):
-    monkeypatch.setattr(server, "_model_catalog_cache", None)
+    monkeypatch.setattr(configuration_routes, "_model_catalog_cache", None)
     monkeypatch.setenv("MODEL_BACKEND", "litellm")
     _set_litellm_run_key_env(monkeypatch)
 
@@ -380,18 +386,18 @@ def test_models_serves_stale_cache_then_empty_when_gateway_unavailable(monkeypat
 
         # Age the snapshot past the TTL so the next request must hit the
         # gateway again; the failing loader then exercises the stale path.
-        assert server._model_catalog_cache is not None
-        server._model_catalog_cache["loaded_at"] -= 120
+        assert configuration_routes._model_catalog_cache is not None
+        configuration_routes._model_catalog_cache["loaded_at"] -= 120
         state["fail"] = True
         second = client.get("/models").json()
         assert second["stale"] is True
         assert [item["name"] for item in second["models"]] == ["if-research-v1"]
 
-        server._model_catalog_cache = None
+        configuration_routes._model_catalog_cache = None
         cold = client.get("/models").json()
     finally:
         server.app.dependency_overrides.clear()
-        server._model_catalog_cache = None
+        configuration_routes._model_catalog_cache = None
 
     assert cold["stale"] is True
     assert cold["models"] == []
@@ -399,7 +405,7 @@ def test_models_serves_stale_cache_then_empty_when_gateway_unavailable(monkeypat
 
 
 def test_models_reports_legacy_backend_without_touching_gateway(monkeypatch):
-    monkeypatch.setattr(server, "_model_catalog_cache", None)
+    monkeypatch.setattr(configuration_routes, "_model_catalog_cache", None)
     monkeypatch.setenv("MODEL_BACKEND", "legacy")
 
     def boom():

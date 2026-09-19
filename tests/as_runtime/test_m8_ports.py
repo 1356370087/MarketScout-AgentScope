@@ -157,6 +157,43 @@ async def test_sync_redirect_is_authorized_before_second_request():
     assert len(visited) == 2
 
 
+async def test_runtime_sync_callback_uses_host_authority(tmp_path, monkeypatch):
+    from urllib.parse import urlsplit
+
+    from open_deep_research.agentscope_runtime.app import ASRuntime
+    from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
+    from open_deep_research.agentscope_runtime.sandbox_policy import EgressAuthority, EgressModeBridge
+    from open_deep_research.sandbox.approvals import SecurityApprovalStore
+    from open_deep_research.sandbox.schema import NetworkPolicy
+
+    authority = EgressAuthority(
+        policy=NetworkPolicy(mode="allowlist", allow_domains=["public.test"], unknown_target="ask"),
+        mode_bridge=EgressModeBridge(baseline="manual"),
+        approvals=SecurityApprovalStore("sync-acceptance", runs_dir=str(tmp_path)),
+    )
+
+    async def authorize(url):
+        target = urlsplit(url)
+        decision = await authority.decide("sync-acceptance", host=target.hostname, port=443, fence_token=1)
+        if decision.decision != "allow":
+            raise PermissionError("sync egress " + decision.decision)
+
+    monkeypatch.setenv("RUNS_DIR", str(tmp_path))
+    runtime = await ASRuntime.create(ASRuntimeSettings(None, "unused", True, "unused"))
+    try:
+        port = runtime.knowledge_application("owner", AsyncMock(), authorize_url=authorize)
+        adapter = WebAdapter(port.authorize_url)
+        def respond(request):
+            assert request.url.host == "public.test"
+            return httpx.Response(302, headers={"location": "https://unapproved.test/private"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(PermissionError, match="sync egress ask"):
+                await adapter._get(client, "https://public.test/start", {})
+    finally:
+        await runtime.aclose()
+
+
 def config(tmp_path):
     cfg = Configuration(
         enable_memory=True,

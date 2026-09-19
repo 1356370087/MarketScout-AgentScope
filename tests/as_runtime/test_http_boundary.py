@@ -195,3 +195,104 @@ def test_stream_live_reauthorization_precedes_replay():
         assert frames == []
 
     asyncio.run(run())
+
+
+def test_historical_usage_reads_without_migration_or_langchain(tmp_path):
+    import subprocess
+    import sys
+    from open_deep_research.observability.tracing import SQLiteTraceStore, TokenUsage
+
+    context = archive(tmp_path)
+    (context / "session_memory.jsonl").write_text(SessionJournalRecord(
+        seq=1, run_id="old", record_type="query_state", stage="query.ready",
+        payload={"state": {"messages": [{"__message__": {
+            "type": "human", "data": {"content": "archived question"}
+        }}]}},
+    ).model_dump_json() + "\n", encoding="utf-8")
+    (context / "budget_ledger.json").write_text(json.dumps({"reservations": {
+        "pending": {"dimension": "input_tokens", "status": "uncertain", "reserved": 9},
+        "settled": {"dimension": "input_tokens", "status": "settled", "reserved": 30},
+    }}), encoding="utf-8")
+    trace = tmp_path / "trace.sqlite3"
+    store = SQLiteTraceStore(str(trace))
+    store.start_run("old", "alice", {})
+    store.start_span(
+        span_id="old-call", run_id="old", parent_span_id=None,
+        name="writing", kind="llm", agent_role="writer", attributes={},
+        input_preview=None, provider="openai", model="test",
+    )
+    store.add_usage("old", "old-call", "openai", "test", TokenUsage(
+        input_tokens=4, output_tokens=2, total_tokens=6
+    ), event_key="historical-call", stage="writing")
+    # Close/checkpoint the fixture before recording the archive's bytes.
+    import sqlite3
+    import gc
+    from contextlib import closing
+    gc.collect()
+    with closing(sqlite3.connect(trace)) as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode=DELETE")
+    before = hashes(tmp_path)
+    script = r"""
+import importlib.abc, sys
+class NoLegacy(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith(('langchain', 'langgraph')):
+            raise AssertionError('Legacy import: ' + fullname)
+sys.meta_path.insert(0, NoLegacy())
+from open_deep_research.api.history import HistoricalRunReader
+reader = HistoricalRunReader(sys.argv[1], 'old', 'alice')
+usage = reader.usage(sys.argv[2], {})
+assert usage['totals']['reported']['total_tokens'] == 6, usage
+assert usage['totals']['budgets']['input_tokens']['reserved'] == 9, usage
+assert usage['status'] == 'completed'
+assert reader.snapshot()['read_only']
+assert reader.messages().messages[0].content[0].text == 'archived question'
+assert reader.publication_events() == []
+from open_deep_research.agentscope_runtime.messages import dump_messages, MessageCompatibilityError
+try:
+    dump_messages(reader.messages().messages)
+except MessageCompatibilityError:
+    pass
+else:
+    raise AssertionError('Historical messages became executable checkpoints')
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(tmp_path), str(trace)],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert hashes(tmp_path) == before
+    with pytest.raises(sqlite3.OperationalError):
+        SQLiteTraceStore(str(trace), read_only=True).start_run("forbidden", "alice", {})
+    assert hashes(tmp_path) == before
+
+
+@pytest.mark.asyncio
+async def test_native_usage_archive_dispatch_never_reconciles(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from open_deep_research import server
+    from tests.auth_helpers import research_principal
+
+    archive(tmp_path)
+    principal = research_principal("alice")
+    from open_deep_research.api.native_runs import NativeRuns
+    service = NativeRuns(
+        SimpleNamespace(load=AsyncMock(side_effect=KeyError("old"))),
+        None, None, runs_dir=tmp_path,
+    )
+    monkeypatch.setattr(server, "_native_research_service", service)
+    monkeypatch.setenv("TRACE_STORE_PATH", str(tmp_path / "missing" / "trace.sqlite3"))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Historical read entered a mutable legacy path")
+    from open_deep_research.api import run_usage
+    monkeypatch.setattr(run_usage, "_load_run_usage_response", forbidden)
+    monkeypatch.setattr(run_usage, "_reconcile_litellm_usage", forbidden)
+    before = hashes(tmp_path)
+    usage = await server.get_run_usage_accounting("old", principal)
+    assert usage["accounting_status"] == "unavailable"
+    assert usage["status"] == "completed"
+    assert not (tmp_path / "missing").exists()
+    assert hashes(tmp_path) == before
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as denied:
+        await server.get_run_usage_accounting("old", research_principal("bob"))
+    assert denied.value.status_code == 404
