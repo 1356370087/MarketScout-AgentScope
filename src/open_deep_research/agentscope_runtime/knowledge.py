@@ -231,20 +231,39 @@ class KnowledgeApplication:
 
 
 class KnowledgeAccessPolicy(ResourceAccessPolicyBase):
-    """Map explicit native resource bindings; domain membership stays authoritative.
+    """Project live domain grants into native read-only resource references.
 
-    bindings is a host-owned mapping native id -> (domain kb id, native owner).
-    It does not create native collections or mirror domain content.
+    Optional bindings map native id -> (domain kb id, native owner). Without
+    bindings, domain UUIDs identify the current readable knowledge spaces.
+    No native collections or duplicate content index are created.
     """
 
-    def __init__(self, bindings):
-        self.bindings = dict(bindings)
+    def __init__(self, bindings=None):
+        self.bindings = None if bindings is None else dict(bindings)
 
     async def list_accessible(self, viewer_id, kind, storage):
         if kind != ResourceKind.KNOWLEDGE_BASE:
             return []
+        bindings = self.bindings
+        if bindings is None:
+            from open_deep_research.documents.database import (
+                document_schema_available, get_document_pool,
+            )
+
+            if not document_schema_available():
+                return []
+            readable = await authz.readable_kb_ids(viewer_id)
+            pool = await get_document_pool()
+            async with pool.acquire() as connection:
+                rows = await connection.fetch(
+                    "SELECT id, owner_id FROM knowledge_bases WHERE id=ANY($1::uuid[]) AND archived_at IS NULL",
+                    readable,
+                )
+            # Domain UUIDs are stable resource identities; no second index or
+            # writable native knowledge-base record is created.
+            bindings = {str(row["id"]): (str(row["id"]), str(row["owner_id"])) for row in rows}
         refs = []
-        for native_id, (kb_id, owner_id) in self.bindings.items():
+        for native_id, (kb_id, owner_id) in bindings.items():
             if viewer_id != owner_id and authz.CAP_VIEW in await authz.kb_capabilities(
                 viewer_id, kb_id
             ):

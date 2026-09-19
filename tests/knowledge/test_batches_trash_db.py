@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import uuid
@@ -25,6 +26,73 @@ pytestmark = [
 ]
 
 OWNER = str(uuid.uuid4())
+
+
+@pytest.mark.parametrize("interruption", ["cancel", "revoke", "worker_exit"])
+async def test_batch_concurrent_claim_and_interruption(monkeypatch, interruption):
+    """A second executor cannot duplicate effects; interruption stops new work."""
+    from open_deep_research.knowledge import authz
+
+    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("DOCUMENT_DATABASE_URL", _TEST_DSN.replace("postgresql+asyncpg://", "postgresql://", 1))
+    actor = str(uuid.uuid4())
+    pool = await get_document_pool()
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects = []
+    revoked = False
+
+    async def access(*args):
+        return {"capabilities": frozenset() if revoked else {authz.CAP_MANAGE}}
+
+    async def effect(_actor, document):
+        effects.append(document)
+        entered.set()
+        await release.wait()
+        return {"status": "trashed"}
+
+    monkeypatch.setattr(authz, "document_access", access)
+    monkeypatch.setattr(trash, "trash_document", effect)
+    running = None
+    try:
+        batch = await batches.create_batch(actor, "trash", [str(uuid.uuid4()), str(uuid.uuid4())])
+        batch_id = batch["batch_id"]
+        running = asyncio.create_task(batches.execute_batch(actor, batch_id))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert (await batches.execute_batch(actor, batch_id))["status"] == "not_executable"
+        if interruption == "cancel":
+            await batches.cancel_batch(actor, batch_id)
+        elif interruption == "revoke":
+            revoked = True
+        else:
+            running.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await running
+        release.set()
+        if interruption == "worker_exit":
+            await batches.execute_batch(actor, batch_id)
+        else:
+            await running
+        detail = await batches.get_batch(actor, batch_id)
+        assert detail["completed"] == 1
+        if interruption == "cancel":
+            assert detail["status"] == "cancelled"
+            assert len(effects) == 1
+            assert {item["status"] for item in detail["items"]} == {"succeeded", "cancelled"}
+        else:
+            assert detail["failed"] == 1
+            failure = next(item for item in detail["items"] if item["status"] == "failed")
+            assert failure["failure_code"] == ("document_permission_revoked" if interruption == "revoke" else "interrupted_requires_review")
+            assert len(effects) == (1 if interruption == "revoke" else 2)
+            assert all(item["attempt"] == 1 for item in detail["items"])
+    finally:
+        release.set()
+        if running and not running.done():
+            running.cancel()
+            await asyncio.gather(running, return_exceptions=True)
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM knowledge_batch_items WHERE batch_id IN (SELECT id FROM knowledge_batches WHERE created_by=$1::uuid)", actor)
+            await connection.execute("DELETE FROM knowledge_batches WHERE created_by=$1::uuid", actor)
+        await close_document_pool()
 
 
 def _staged(name: str, content: bytes) -> StagedUpload:

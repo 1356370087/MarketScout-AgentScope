@@ -181,7 +181,7 @@ class WebAdapter(SourceAdapter):
         """Unconditional GET for the initial import."""
         try:
             async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                response = await client.get(source.input_url, headers={"User-Agent": USER_AGENT})
+                response = await self._get(client, source.input_url, {"User-Agent": USER_AGENT})
         except (httpx.HTTPError, OSError) as exc:
             raise SyncError("sync_unreachable") from exc
         if response.status_code >= 400:

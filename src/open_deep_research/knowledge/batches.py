@@ -166,23 +166,41 @@ async def retry_failed(actor_id: str, batch_id: str) -> dict[str, Any]:
 
 async def execute_batch(actor_id: str, batch_id: str) -> dict[str, Any]:
     """Execute pending items one at a time (API or worker entry point)."""
-    from open_deep_research.documents import versioning
-
-    from .trash import trash_document
-
     actor_id = document_owner_id(actor_id)
     pool = await get_document_pool()
+    # A session lock also survives across per-item transactions and is released
+    # by PostgreSQL if the worker dies. It permits safe takeover without a timer.
+    async with pool.acquire() as owner:
+        lock_key = "knowledge-batch:" + batch_id
+        if not await owner.fetchval("SELECT pg_try_advisory_lock(hashtextextended($1,0))", lock_key):
+            return {"batch_id": batch_id, "status": "not_executable"}
+        try:
+            return await _execute_owned_batch(actor_id, batch_id, pool)
+        finally:
+            await owner.execute("SELECT pg_advisory_unlock(hashtextextended($1,0))", lock_key)
+
+
+async def _execute_owned_batch(actor_id: str, batch_id: str, pool) -> dict[str, Any]:
+    """Continue pending items; interrupted side effects require explicit retry."""
+    from open_deep_research.documents import versioning
+
+    from . import authz
+    from .trash import trash_document
+
     async with pool.acquire() as connection:
         batch = await connection.fetchrow(
-            """SELECT * FROM knowledge_batches
-                WHERE id=$1::uuid AND created_by=$2::uuid AND status='pending'""",
+            """UPDATE knowledge_batches SET status='running', updated_at=now()
+                WHERE id=$1::uuid AND created_by=$2::uuid AND status IN ('pending','running')
+                RETURNING *""",
             batch_id,
             actor_id,
         )
         if not batch:
             return {"batch_id": batch_id, "status": "not_executable"}
         await connection.execute(
-            "UPDATE knowledge_batches SET status='running', updated_at=now() WHERE id=$1::uuid",
+            """UPDATE knowledge_batch_items SET status='failed',
+                   failure_code='interrupted_requires_review', finished_at=now()
+               WHERE batch_id=$1::uuid AND status='running'""",
             batch_id,
         )
         pending = await connection.fetch(
@@ -196,13 +214,22 @@ async def execute_batch(actor_id: str, batch_id: str) -> dict[str, Any]:
         for item in pending:
             item_id = str(item["id"])
             document_id = str(item["document_id"])
-            await connection.execute(
+            claimed = await connection.fetchval(
                 """UPDATE knowledge_batch_items
                       SET status='running', started_at=now(), attempt=attempt+1
-                    WHERE id=$1::uuid""",
+                    WHERE id=$1::uuid AND status='pending'
+                      AND EXISTS(SELECT 1 FROM knowledge_batches b
+                                 WHERE b.id=knowledge_batch_items.batch_id AND b.status='running')
+                    RETURNING id""",
                 item_id,
             )
+            if claimed is None:
+                continue
             try:
+                access = await authz.document_access(actor_id, document_id)
+                capability = authz.CAP_MANAGE if operation == "trash" else authz.CAP_SUBMIT
+                if not access or capability not in access["capabilities"]:
+                    raise authz.AuthorizationError("document_permission_revoked")
                 if operation == "trash":
                     result = await trash_document(actor_id, document_id)
                     if not result:
@@ -239,12 +266,12 @@ async def execute_batch(actor_id: str, batch_id: str) -> dict[str, Any]:
                 )
                 failed += 1
         await connection.execute(
-            """UPDATE knowledge_batches
-                  SET status='completed', completed_count=$2, failed_count=$3,
+            """UPDATE knowledge_batches b
+                  SET status=CASE WHEN status='cancelled' THEN status ELSE 'completed' END,
+                      completed_count=(SELECT count(*) FROM knowledge_batch_items i WHERE i.batch_id=b.id AND i.status='succeeded'),
+                      failed_count=(SELECT count(*) FROM knowledge_batch_items i WHERE i.batch_id=b.id AND i.status='failed'),
                       updated_at=now()
                 WHERE id=$1::uuid""",
             batch_id,
-            succeeded,
-            failed,
         )
     return {"batch_id": batch_id, "succeeded": succeeded, "failed": failed}

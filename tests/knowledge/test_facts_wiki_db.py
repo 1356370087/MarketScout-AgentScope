@@ -159,7 +159,14 @@ async def test_facts_wiki_and_export(monkeypatch):
         # Publish the first candidate.
         all_drafts = await facts.list_assertions(OWNER, str(kb_id), status="draft")
         first_draft = next(a for a in all_drafts if a["metric"] == "营收")
-        published = await facts.publish_assertion(OWNER, first_draft["id"])
+        from open_deep_research.agentscope_runtime.knowledge import KnowledgeApplication
+
+        async def authorize(command):
+            assert command == "fact_publish"
+
+        port = KnowledgeApplication(OWNER, authorize)
+        tool = port.operation_tools(["fact_publish"])[0]
+        published = (await tool.call(tool.input_schema(assertion_id=first_draft["id"]), None)).output
         assert published["status"] == "published"
 
         # Submit a conflicting value on the same key.

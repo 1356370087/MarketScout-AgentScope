@@ -14,6 +14,19 @@ from open_deep_research.knowledge.credentials import (
 from open_deep_research.knowledge.evaluation import _snippet_hit, ndcg_at_k, recall_at_k
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cutoff", [None, "2026-02-30", "not-a-date", "20260919"])
+async def test_as_of_rejects_invalid_dates_before_database_access(monkeypatch, cutoff):
+    async def unexpected_database():
+        raise AssertionError("invalid date reached database")
+
+    monkeypatch.setattr(search_service, "get_document_pool", unexpected_database)
+    with pytest.raises(search_service.SearchScopeError, match="as_of_.*date"):
+        await search_service.resolve_scope(search_service.SearchRequest(
+            owner_id="owner", query="q", version_mode="as_of", as_of_published=cutoff,
+        ))
+
+
 def test_recall_and_ndcg_at_k():
     results = [{"text": "营收 48.6 亿"}, {"text": "其他"}, {"text": "毛利率 31.2%"}]
     expected = ["营收 48.6 亿", "毛利率 31.2%"]

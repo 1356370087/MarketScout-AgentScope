@@ -308,6 +308,20 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
             )
         assert rows_feedback and all(row["feedback_kind"] for row in rows_feedback)
         _ = locator_dict  # imported for parity with other live tests
+        # A057: the public contract supplies an ISO string, not a datetime object.
+        from datetime import datetime, timedelta, timezone
+
+        for cutoff, expected_count in (
+            ("2000-01-01", 0),
+            ((datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat(), 2),
+        ):
+            historical = await search_service.resolve_scope(
+                search_service.SearchRequest(
+                    owner_id=OWNER, query="营收", kb_ids=[seeded["kb"]],
+                    version_mode="as_of", as_of_published=cutoff,
+                )
+            )
+            assert len(historical["documents"]) == expected_count
     finally:
         async with pool.acquire() as connection:
             await connection.execute(

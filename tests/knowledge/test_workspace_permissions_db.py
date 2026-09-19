@@ -48,7 +48,7 @@ def _staged(name: str, content: bytes) -> StagedUpload:
     )
 
 
-async def _seed_team_base(pool) -> dict:
+async def _seed_team_base(pool, name="团队库") -> dict:
     async with pool.acquire() as connection:
         workspace = await connection.fetchval(
             """INSERT INTO knowledge_workspaces(kind, name, created_by)
@@ -63,9 +63,10 @@ async def _seed_team_base(pool) -> dict:
         base = await connection.fetchval(
             """INSERT INTO knowledge_bases
                  (owner_id, name, description, workspace_id, visibility, created_by)
-               VALUES ($1::uuid, '团队库', '', $2::uuid, 'team', $1::uuid) RETURNING id""",
+               VALUES ($1::uuid, $3, '', $2::uuid, 'team', $1::uuid) RETURNING id""",
             OWNER,
             workspace,
+            name,
         )
     return {"workspace": str(workspace), "base": str(base)}
 
@@ -74,6 +75,71 @@ async def test_workspace_permission_matrix_and_revocation(monkeypatch):
     try:
         await _matrix_body(monkeypatch)
     finally:
+        await close_document_pool()
+
+
+async def test_owner_transfer_and_revoked_owner_cannot_transfer_again(monkeypatch):
+    from fastapi import HTTPException
+    from open_deep_research.documents.database import initialize_document_schema
+    from open_deep_research.knowledge.workspace_router import (
+        OwnershipTransferRequest, transfer_ownership,
+    )
+
+    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("DOCUMENT_DATABASE_URL", _TEST_DSN.replace("postgresql+asyncpg://", "postgresql://", 1))
+    assert await initialize_document_schema() is None
+    pool = await get_document_pool()
+    seeded = await _seed_team_base(pool, "ownership-" + uuid.uuid4().hex)
+    try:
+        result = await transfer_ownership(
+            seeded["workspace"], OwnershipTransferRequest(to_user_id=ALICE),
+            user=_principal(OWNER),
+        )
+        assert result["owner"] == ALICE
+        assert await authz.require_workspace_member(ALICE, seeded["workspace"]) == "owner"
+        assert await authz.require_workspace_member(OWNER, seeded["workspace"]) == "admin"
+        with pytest.raises(HTTPException) as error:
+            await transfer_ownership(
+                seeded["workspace"], OwnershipTransferRequest(to_user_id=OWNER),
+                user=_principal(OWNER),
+            )
+        assert error.value.status_code == 403
+        assert authz.CAP_MANAGE in await authz.kb_capabilities(ALICE, seeded["base"])
+    finally:
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM knowledge_bases WHERE id=$1::uuid", seeded["base"])
+            await connection.execute("DELETE FROM knowledge_workspaces WHERE id=$1::uuid", seeded["workspace"])
+        await close_document_pool()
+
+
+async def test_runtime_installs_live_knowledge_space_projection(monkeypatch, tmp_path):
+    from agentscope.app.access import ResourceKind
+    from open_deep_research.agentscope_runtime.app import ASRuntime
+    from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
+
+    monkeypatch.setenv("RUNS_DIR", str(tmp_path))
+    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("DOCUMENT_DATABASE_URL", _TEST_DSN.replace("postgresql+asyncpg://", "postgresql://", 1))
+    pool = await get_document_pool()
+    seeded = await _seed_team_base(pool, "projection-" + uuid.uuid4().hex)
+    runtime = await ASRuntime.create(ASRuntimeSettings(None, "unused", True, "unused"))
+    try:
+        app = runtime.build_app()
+        policy = app.state.resource_access_policy
+        assert policy is runtime.knowledge_access_policy
+        async def visible(actor):
+            return {ref.resource_id for ref in await policy.list_accessible(actor, ResourceKind.KNOWLEDGE_BASE, runtime.storage)}
+        assert seeded["base"] in await visible(ALICE)
+        assert seeded["base"] not in await visible(BOB)
+        async with pool.acquire() as connection:
+            await connection.execute("UPDATE knowledge_bases SET visibility='restricted' WHERE id=$1::uuid", seeded["base"])
+        assert seeded["base"] not in await visible(ALICE)
+        assert not await policy.can_edit(ALICE, ResourceKind.KNOWLEDGE_BASE, OWNER, seeded["base"], runtime.storage)
+    finally:
+        await runtime.aclose()
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM knowledge_bases WHERE id=$1::uuid", seeded["base"])
+            await connection.execute("DELETE FROM knowledge_workspaces WHERE id=$1::uuid", seeded["workspace"])
         await close_document_pool()
 
 

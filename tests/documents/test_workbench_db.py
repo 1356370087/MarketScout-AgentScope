@@ -211,6 +211,36 @@ async def test_workbench_corrections_reparse_and_diff(monkeypatch, tmp_path):
         )
     assert served and "人工修订后的标题内容" in served
 
+    # A056: the unpublished correction cannot leak into current retrieval.
+    current_hits = await retrieval.search_document_chunks(
+        owner_id=OWNER, document_ids=[doc_id], query="Revenue restated")
+    assert current_hits
+    assert all("人工修订后的标题内容" not in hit["text"] for hit in current_hits)
+
+    # Exercise HTTP status mapping against the real conflicting revision.
+    import httpx
+    from fastapi import FastAPI
+    from open_deep_research.documents import router as document_routes
+    from open_deep_research.documents.database import initialize_document_schema
+    from security.rbac.principal import Principal
+
+    assert await initialize_document_schema() is None
+    principal = Principal(user_id=OWNER, email="owner@test.invalid", status="active",
+                          session_id=None, roles=frozenset(), permissions=frozenset(),
+                          authz_version=0)
+    app = FastAPI()
+    app.include_router(document_routes.router)
+    route = next(r for r in document_routes.router.routes if getattr(r, "endpoint", None) is document_routes.apply_generation_corrections)
+    for dependency in route.dependant.dependencies:
+        if dependency.name == "user":
+            app.dependency_overrides[dependency.call] = lambda: principal
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        response = await client.post(
+            f"/documents/{doc_id}/generations/{draft_id}/corrections",
+            json={"revision": 0, "metadata_confirmed": {"x": "y"}},
+        )
+    assert response.status_code == 409, response.text
+
     # --- diff against the published baseline shows the edit ---
     diff = await versioning.diff_generations(OWNER, doc_id, draft_id)
     assert diff["base"]["id"] == str(generation["id"])

@@ -14,6 +14,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import date, datetime, time as datetime_time, timezone
 from typing import Any
 
 from open_deep_research.documents.database import get_document_pool
@@ -156,9 +157,21 @@ async def resolve_scope(request: SearchRequest) -> dict[str, Any]:
     ``current`` binds the document's current published generation at query
     time; ``pinned`` validates explicit generation ids; ``as_of`` picks the
     newest generation published before the cut-off (plus an optional business
-    validity date that a metadata validity range must cover).
+    validity date that a metadata validity range must cover). Date cut-offs
+    are interpreted at 00:00 UTC, independent of the database session timezone.
     """
     owner_id = document_owner_id(request.owner_id)
+    published_cutoff = None
+    if request.version_mode == "as_of":
+        if not request.as_of_published:
+            raise SearchScopeError("as_of_requires_date")
+        try:
+            cutoff_date = date.fromisoformat(request.as_of_published)
+            if cutoff_date.isoformat() != request.as_of_published:
+                raise ValueError("expected YYYY-MM-DD")
+        except (TypeError, ValueError) as exc:
+            raise SearchScopeError("as_of_invalid_date") from exc
+        published_cutoff = datetime.combine(cutoff_date, datetime_time.min, timezone.utc)
     pool = await get_document_pool()
     from .authz import resolve_readable_scope
 
@@ -226,8 +239,6 @@ async def resolve_scope(request: SearchRequest) -> dict[str, Any]:
                 return {"documents": []}
             raise SearchScopeError("scope_resolved_to_nothing")
         if request.version_mode == "as_of":
-            if not request.as_of_published:
-                raise SearchScopeError("as_of_requires_date")
             rows = await connection.fetch(
                 """SELECT DISTINCT ON (g.document_id)
                           g.document_id, g.id AS generation_id, g.metadata_snapshot
@@ -241,7 +252,7 @@ async def resolve_scope(request: SearchRequest) -> dict[str, Any]:
                 sorted(document_ids),
                 owner_id,
                 readable_kbs,
-                request.as_of_published,
+                published_cutoff,
             )
         else:
             rows = await connection.fetch(
