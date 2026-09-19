@@ -4,6 +4,78 @@
 
 ## 当前收口状态（2026-09-19）
 
+**T069 已完成，M10 已完成 5/6，整体实施完成 66/81。** 入口及领域模块拆分完成；149 个 OpenAPI 路径的请求/响应/schema/状态码与权限契约核对通过，74 项最终回归通过。T072 保持进行中：真实 Web 审批、反馈与降级 PDF 下载已通过，企业资料运行因 `UnknownOperation` 失败，四来源及活动/发现投影的真实补验仍待完成。见 [T069 收口](implementation/t069-api-closeout-20260919.md) 与 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T072 完整隔离栈已走通真实 Web 研究、计划/大纲审批、方向反馈及降级报告 PDF 发布下载。修正验收 Worker 的 MQ 主题前缀后，3 个子任务完成；真实补验同时发现任务活动 404，已修复原生 SQL 所有权与 Gateway 活动回传接线，回归通过，尚待更新镜像补验。正常质量报告、四来源模式和其余 M9/M10 门禁未齐，整体仍 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T068 评审提交后的容器恢复补验通过：前次失败确认为合成模型遗漏需求覆盖，补齐夹具后评审仅调用一次、最终通过且账本一致。产品门禁保持不变，容器已清理，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T068 报告模型提交后的真实 API 容器退出/新容器恢复通过，使用 PostgreSQL 与 HTTP，报告模型仅调用一次且完成事件/SQL 账本一致。本轮容器已清理；其余验收继续核对，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T068 修复失败运行残留 output.status=success 的 HTTP 投影问题，新增已提交正文后失败的真实 SQL/HTTP 验证；最终后端 13、前端 2 项通过，类型检查通过。部署组合验收继续，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T068 新增写作模型提交后的独立进程强杀恢复，确认模型不重复调用；原生报告专项 26 项通过，含发布 Worker 三个强杀窗口。部署组合验收仍待补齐，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 服务入口已收敛为装配及兼容引用（312 行），72 项联合回归通过，170/170 实际方法路径与基线一致。完整契约验收与 T068 前置继续核对，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出应用生命周期，48 passed / 1 skipped 及新增生命周期直接验证 1 passed。server.py 现 419 行，后续完成入口整理与验收核对，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出运行权限、配置和沙箱上下文，57 项专项回归通过；扩大旧工具安全批次因本地 MCP SDK 缺少 Client 导出而收集失败，已保留证据。server.py 现 546 行，生命周期继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出健康/就绪/指标端点及 HTTP 中间件，48 passed / 1 skipped 与 40 passed 两批回归通过（重叠）。server.py 现 753 行，启动生命周期与权限上下文继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出恢复扫描与请求/SSE 准入管理，61 passed / 1 skipped 与 51 passed 两批回归通过（重叠）。server.py 尚有 974 行启动检查和权限上下文等职责，继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出后台执行、恢复执行与控制命令监听，68 项回归通过。server.py 尚有 1262 行恢复扫描和启动等逻辑，继续推进，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出运行注册表、容量/延迟驱逐与关闭排空，53 passed / 1 Windows 既有 skipped。server.py 尚有 1381 行后台执行及启动逻辑，继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出创建、流式创建与恢复路由，61 项相关回归通过，170/170 方法路径保持。研究业务路由已分域，server.py 尚有 1615 行运行时管理与基础设施逻辑，继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出运行删除与保留策略，40 passed / 1 skipped，170/170 方法路径保持一致。server.py 仍有 1820 行，创建/恢复及运行时生命周期继续拆分，整体 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已进一步迁出运行列表/快照与审批/反馈/团队/取消接口；74、38、13 项相关回归批次通过（重叠），170/170 方法路径保持。server.py 尚有 2179 行，创建、恢复和生命周期继续拆分，完成数仍 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已迁出运行用量领域路由与对账，相关 81 项回归通过，170/170 公共方法路径保持一致。server.py 仍有 2487 行，研究与生命周期拆分继续；扩大旧 Supervisor 回归另有 5 项失败已记录，T069 不提前完成，总计 65/81。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+**T071 已完成，当前实施完成 65/81。** 领域 DTO/client/reducer/store 与真实 HTTP/SSE 样例核对通过；修复可空字段差异，前端 130 passed / 1 既有 skipped，类型检查通过。T069、T072 及 M9 剩余任务继续推进；见 [T071 验收](implementation/t071-state-contracts-closeout-20260919.md)。
+
+**T070 已完成，当前实施完成 64/81。** 六阶段投影与三类 SSE 恢复、心跳、终态和权限矩阵通过；原生后端 88 passed，前端 128 passed / 1 既有 skipped。M9/M10 其余原范围继续推进；见 [T070 验收](implementation/t070-sse-closeout-20260919.md)。
+
+T070/T071 已修复 SSE 断流、认证刷新、游标恢复及终态重连，并用服务端真实序列化样例对齐可空字段。前端 127 passed / 1 既有 skipped，后端 83 passed，样例一致性 1 passed，类型检查通过；完整投影/协议核验继续，63/81 完成数不变。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T071 已拆分七个领域 API 客户端与共享传输层，31 个请求方法及三类事件订阅保留原行为；前端 98 passed / 1 既有 skipped，类型检查通过。跨语言契约和状态层退出条件继续核对，完成数保持 63/81；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+**T073 已按原页面与场景验收完成，当前实施完成 63/81。** 真实角色/资料隔离、上传审核、重排问答、会话刷新和其余页面接线通过；前端 98 passed / 1 既有 skipped，类型检查与生产构建通过。M9/M10 其余任务继续推进；见 [T073 验收报告](implementation/t073-pages-closeout-20260919.md)。
+
+T073 已补齐当前部署的真实浏览器会话刷新/退出及四角色矩阵：CSRF、Cookie 安全标志、viewer 禁止创建、管理权限和私有运行隔离均通过。上传审核、资料可见性与问答流程尚待补齐，完成数保持 62/81；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T073 已建立当前版本的隔离认证部署，并修复容器端口映射下 BFF 将同源登录误判为跨站请求的问题。11 项认证回归、类型检查和生产构建通过，真实浏览器登录成功；角色、刷新和资料流程尚待补验，62/81 完成数不变。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+**T074 历史只读兼容已验收完成，当前实施完成 62/81。** 修复用量补写/对账与发布事件尾部修补副作用，83 项联合回归通过；历史工件下载、所有权、旧 resume 409、无 LangChain 导入和禁止双向转换均有当前证据。M9/M10 其余任务继续推进；见 [T074 验收](implementation/t074-history-closeout-20260919.md)。
+
+T074 历史用量的补写/对账副作用已修复，72 项历史、原生 HTTP、计账及观测回归通过；独立进程确认 Reader 无 LangChain 导入且存档内容不变。历史工件下载只读证据及 M9/M10 其他验收仍待完成，任务状态不提前升级；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已拆出活动流与能力/模型配置领域路由，40/24 项相关回归通过（批次重叠），170/170 公共方法和路径继续一致。研究 HTTP 与生命周期拆分、M9/M10 完整验收仍未完成，状态不提前升级；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 已进一步拆出发布与安全审批领域路由，67/20/54 项相关批次全部通过（重叠）；170 个公共接口清单仍一致。研究生命周期等拆分和 M9/M10 完整验收继续推进，状态不提前升级；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+T069 继续拆分用量与观测领域路由：75 项联合、10 项活动接口回归通过（重叠批次），实际 OpenAPI 与原盘点 170/170 方法及路径一致。server.py 仍有约 3789 行，研究生命周期等拆分及完整 E2E 尚未完成，M9/M10 目标继续进行；见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+M9/M10 继续推进：T064 大纲审批绕过证据预算的问题已修复，报告/审批/写作 87 项回归通过；前端 94 passed / 1 skipped，类型检查通过。正式路由拆分、真实长输入与完整浏览器验收仍在本次目标内，T064～T074 尚未升级完成。见 [推进记录](implementation/m9-m10-progress-20260919.md)。
+
+**M7、M8 的全部单项任务已完成。** 本轮新增关闭 T053～T063 共十一项，当前完成 **61/81**。真实 PG/远程 MQ 54 项、M8 真库/Docling 69 项、记忆组件 78 项、文档与维护锁 10 项通过（批次重叠），真实 Office 4 种组合及备份恢复通过。T057 日期错误已修复；按用户授权恢复现有知识服务 Key 登记后，两次真实重排/问答调用及引用校验通过。Mem0 按用户确认登记组件完成，明确尚未实际业务使用。此结论不覆盖 T048 跨主机组合故障、M10 全量 BFF/浏览器及 M11 生产切换。见 [本轮报告](implementation/m7-m8-closeout-20260919.md)。
+
+T047/T048 本轮继续推进：修复恢复申请 Key 的余额读取竞态，六维 PostgreSQL 双客户端预算验收通过，容器矩阵补齐审批提交后与完成事件入库后崩溃窗口。首批 17 passed，相关回归 58 passed / 1 skipped（批次重叠）；长时真实代理与跨主机/API+Gateway 组合故障仍待验证，两项维持进行中。见 [推进记录](implementation/t047-t048-progress-20260919.md)。
+
+T043/T046 当前版本验收通过并登记已完成：联合 98 passed / 1 skipped，新增真 PostgreSQL 故障专项 2 passed。验证领域事件/游标原子性、公共重放去重、决策失败不唤醒、新旧审批隔离及任务反馈恢复。M6 仍有 T047/T048 未完成；见 [验收记录](implementation/t043-t046-acceptance-20260919.md)。
+
+T023/T042 已完成原生实施收口：核验结果/计账/审计单事务、冲突账单隔离及 Gateway 已报告 token 校验已修复；联合 133 passed、最终专项 15 passed（重叠批次）。历史 77 条真实代理账单与 77 个 Gateway 操作唯一对应，隔离补回两次与原 SQL 一致。详见 [收口报告](implementation/t023-t042-closeout-20260919.md)；不据此宣称代理内部每次上游尝试已完成财务审计，T047/T048/T080/T081 边界保留。
+
+M6～M11 已按原验收条目复核：T041/T044/T045/T049～T052 七项更新为已完成；T064 因真实报告输入超限从待验收退回进行中。当前版本联合复验 151 passed / 1 skipped，原生静态守卫通过。其余任务不凭无知识库的部分成功运行升级；逐项证据与剩余条件见 [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)。
+
+Lead 分步替换依赖问题已编码修复：服务端拒绝单独删除未解除前置，要求同事务加入同一下游的新前置；回滚保留版本与依赖，正反向接口统一守卫。真实 PostgreSQL 联合回归 40 passed / 1 skipped，去重后的最终专项 6 passed。尚未重跑完整浏览器 E2E，报告输入超限仍待修复，详见 [依赖修复记录](implementation/quality-closeout-20260919.md)。
+
 2026-09-19 质量门禁专项排查：已确认接入 AgentScope 原生调用链，但发现 Judge 协议异常污染恢复会话、候选证据与准入混用、质量反馈未返回研究员等闭环缺口。排查时 teams 运行 `809657a6…` 已失败；后续修复及新运行结果见下一段。评分、状态与策略归因见 [质量门禁排查](implementation/agent-teams-quality-audit-20260918.md)，当前不登记完整 teams E2E 通过。
 
 2026-09-19 后续修复：上述 P0/P1 已编码，153 passed/1 skipped 联合回归、4 项真实历史错误回放通过；公开 PostgreSQL 历史三来源经新批次聚合和真实 Judge 重评一次通过（45 条候选全部保留）。前端类型检查通过。已按顺序完成新 E2E `fd178735…`：三项任务 accepted_with_caveats，原 mq 缺证据断言被拒后完成补证；无 evaluator_error，两名成员优雅退出、消息无积压。最终在报告大纲阶段因 139716 输入 token 超过 131072 上限而 failed；另记录 Lead 分两次替换依赖导致汇总提前领取的问题。完整 E2E 未通过，本次容器与浏览器已清理。见 [质量修复与回放记录](implementation/quality-closeout-20260919.md)。
@@ -14,7 +86,7 @@ Agent Teams 修订方案已获用户授权并实施 AT-1～AT-6：保留 collabo
 
 后续 Docker 真实复验已通过 Playwright 弹出浏览器执行公开网络异步研究，知识库关闭。发现并修复镜像依赖、迁移 schema、Worker 装配、工具路由、冻结配置、Web 准入、审批租约、Controller 并发连接及任务事件等实际联调问题；原生统一专项 **210 passed**，其后上下文归档与生产装配专项分别 **47 / 4 passed**（存在重叠）。实际搜索、抓取、证据抽取与质量拒绝已取得真实回执，完整报告交付以 [Docker 真实复验记录](implementation/docker-web-live-20260918.md) 为准。以下表格保留上一轮编码提交时的验收快照，不代表这些 live 实验尚未尝试。
 
-以当前工作区实现与本轮测试为准。正式实施完成数 **39/81**，加权约 **47.6%**，端到端业务验收仍为 **0/75**；这是原任务的验收计数，不是代码实现比例。此次用户授权对 E2E P0/P1 编码并执行一次本地提交；同日按用户要求完成 M5 T035/T036 复验验收（见 [M5 复验验收记录](implementation/m5-t035-t036-reacceptance.md)），完成数 37/81 → 39/81。
+以当前工作区实现与本轮测试为准。正式实施完成数 **50/81**，加权约 **61.3%**，端到端业务验收仍为 **0/75**；这是原任务的验收计数，不是代码实现比例。此次用户授权对 E2E P0/P1 编码并执行一次本地提交；此前 M5 T035/T036 复验使完成数 37/81 → 39/81；M6/M7 七项复核使完成数 39/81 → 46/81；T023/T042 收口后为 48/81；T043/T046 验收后为 50/81，阶段退出和业务验收仍单独跟踪。
 
 最新真实运行 `e290e2054b18532c94d93e89631d1ed4` 已 `completed`：异步双任务、动态出网审批、上下文归档、质量门禁降级、证据恢复报告、刷新和 Markdown/JSON 下载闭环完成。质量仍为 `degraded / research_incomplete`，不是完整技术简报验收通过；该运行发现的细粒度用量投影和预算标签缺口已在本轮编码修复，后端 138 项、前端 9 项回归及 TypeScript 检查通过，真实观测栈联调仍待验收。旧记录缺失的维度不伪造回填。
 
@@ -44,7 +116,7 @@ Agent Teams 修订方案已获用户授权并实施 AT-1～AT-6：保留 collabo
 | 九份主文档与任务定义落盘 | 已完成 | [文档验证通过](evidence/validation-results.json)：编号/链接/依赖/配置/源码依据均完整 |
 | 旧系统回归基线及分阶段真实设施验证 | 已执行，覆盖仍有缺口 | M0 回归与 M1/M2、M3 Docker、M5/M6 分阶段记录见下表；不是整仓库无失败或生产切换通过 |
 
-业务功能迁移 **0/75**；实施任务完成 **39/81**（M0/M1/M2、M4 全部；M3 的 T017～T022；M5 全部验收完成，其中 T035/T036 于 2026-09-18 复验关闭）。T021 原生组件已验收，T023 已按用户最新要求恢复实施。加权实施进度 **约 47.6%**。本地组件及真实模型部分成功不等同业务切换完成，实际人日未记录。
+业务功能迁移 **0/75**；实施任务完成 **61/81**（原 50 项，加上本轮 T053～T063 十一项）。M7、M8 单项验收已完成，M6 跨主机组合故障与 M10/M11 发布门禁仍待关闭。加权实施进度 **约 75.1%**（完成估算中点 90.25 / 总中点 120.25 人日）。本地组件及真实模型部分成功不等同业务切换完成，实际人日未记录。
 
 M6 八项任务均已推进并于 2026-09-17 在当前代码树完成组件验收复验：AS-A041～A048 全部通过（35 项故障矩阵 + 470 项全套件联合回归，含真实 PostgreSQL）；但按原定义的依赖与旧路径退出条件（T023 暂缓、默认入口仍为 QueryEngine、真实出网审批与部署故障矩阵未接线），无任务登记已完成，T041/T043/T044/T046 维持待验收、T042/T045/T047/T048 维持进行中，详见 [M6 验收复验记录](implementation/m6-acceptance-report.md)与 [M6 实施报告](implementation/m6-recovery-report.md)。
 
@@ -103,7 +175,7 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 | [AS-T020](05-migration-roadmap.md#as-t020) 接入模型网关适配 | M3 | 用户+编码 Agent | 1～2 | — | 已完成 | [Docker 验收](implementation/m3-docker-acceptance.md)：Docker LiteLLM 普通/结构化/SSE、Sandbox V2 双鉴权/真实预算拒绝/重放通过；后续调用方替换见 T033/T064/T081 | 2026-09-15 |
 | [AS-T021](05-migration-roadmap.md#as-t021) 统一 fallback、重试和熔断 | M3 | 用户+编码 Agent | 1～2 | — | 已完成 | [退出修复与验收](implementation/m3-t021-stream-closeout.md)：探针对齐生产 httpx；修复跨 Task ContextVar 关闭；137 项通过，三轮真实接口含取消退出通过；旧路径清退仍由 T081 跟踪 | 2026-09-17 |
 | [AS-T022](05-migration-roadmap.md#as-t022) 迁移输出与上下文恢复 | M3 | 用户+编码 Agent | 1～2 | — | 已完成 | [Docker 验收](implementation/m3-docker-acceptance.md)：真实 length→stop 有限升级通过，155 项原生回归通过；领域 Pipeline 接线与旧循环清退见 T037/T064/T081 | 2026-09-15 |
-| [AS-T023](05-migration-roadmap.md#as-t023) 接入一次计账边界 | M3 | 用户+编码 Agent | 1～2 | — | 进行中 | [T023 实施记录](implementation/m3-t023-accounting-report.md)：物理尝试回执、失败流与幂等补回已落地；全量 500 passed/2 skipped，最终专项 26 passed、真实 PG 专项 1 passed；代理账单关联、Gateway 迟到账单及旧计账退出待关闭；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
+| [AS-T023](05-migration-roadmap.md#as-t023) 接入一次计账边界 | M3 | 用户+编码 Agent | 1～2 | — | 已完成 | [T023/T042 收口](implementation/t023-t042-closeout-20260919.md)：应用可见物理尝试一次计账、缓存/重试/流式失败与缺失值处理通过；历史 77 条代理账单两次补回与 SQL 完全一致；代理内部逐次审计边界见报告 | 2026-09-19 |
 | [AS-T024](05-migration-roadmap.md#as-t024) 迁移工具协议与装配 | M4 | 用户+编码 Agent | 1～2 | — | 已完成 | [组件验收](implementation/m4-t024-t025-report.md)：原生 Toolkit/ToolBase、统一装配、描述和动态提示词、框架保留名称验证通过；旧连接器及循环清退见 T026～T033/T081 | 2026-09-15 |
 | [AS-T025](05-migration-roadmap.md#as-t025) 迁移工具权限和执行治理 | M4 | 用户+编码 Agent | 1～2 | — | 已完成 | [组件验收](implementation/m4-t024-t025-report.md)：26 项工具契约测试、181 项原生回归、118 项旧接口回归通过；副作用/出网/执行区/幂等/并发/取消验证完成，跨进程提交账本仍属 M6 | 2026-09-15 |
 | [AS-T026](05-migration-roadmap.md#as-t026) 迁移 MCP stdio/HTTP | M4 | 用户+编码 Agent | 1～2 | — | 已完成 | [M4 收尾报告](implementation/m4-t026-t032-report.md)：真实 stdio/HTTP/SSE fixture 完成 list/call/cancel，连接不泄漏、关闭不可复活，schema 嵌套约束与原始引用保留 | 2026-09-15 |
@@ -121,40 +193,40 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 | [AS-T038](05-migration-roadmap.md#as-t038) 接入覆盖与来源契约 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T039](05-migration-roadmap.md#as-t039) 接入证据及内外质量门禁 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
 | [AS-T040](05-migration-roadmap.md#as-t040) 实现补研与业务完成策略 | M5 | 用户+编码 Agent | 1～2 | — | 已完成 | [M5 全阶段验收](implementation/m5-all-acceptance.md)：210 项目标回归通过；组件验收完成，业务切换边界见报告 | 2026-09-15 |
-| [AS-T041](05-migration-roadmap.md#as-t041) 实现框架与业务检查点 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；整项仍依赖旧 QueryLoopState 写入退出（T036 验收已于 2026-09-18 满足）| 2026-09-17 |
-| [AS-T042](05-migration-roadmap.md#as-t042) 接入模型及工具提交账本 | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [T048 部署与账本记录](implementation/m6-t048-deployment-closeout.md)：扩展 SQL 工具回执、批量 fetch 实测量和模型失败尝试计费；T023 进行中、生产资源提供器及全链路未知结果对账仍未关闭；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T043](05-migration-roadmap.md#as-t043) 实现领域 outbox 和事件重放 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；等 T042 全调用链与旧事件入口退出 | 2026-09-17 |
-| [AS-T044](05-migration-roadmap.md#as-t044) 接入运行租约与 fencing | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；旧运行路由/锁退出仍待集成 | 2026-09-17 |
-| [AS-T045](05-migration-roadmap.md#as-t045) 实现全部审批与暂停 | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；真实出网审批服务仍为注入接口、未部署接线；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T046](05-migration-roadmap.md#as-t046) 实现决策幂等及反馈消费 | M6 | 用户+编码 Agent | 1～2 | — | 待验收 | [M6 验收复验](implementation/m6-acceptance-report.md)：组件通过（当前树复验）；等 T045 真实审批与旧进程内审批状态退出 | 2026-09-17 |
-| [AS-T047](05-migration-roadmap.md#as-t047) 接入跨任务预算与 deadline | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [T048 部署与账本记录](implementation/m6-t048-deployment-closeout.md)：远区工具外层不重复记账、SQL 工具结算及失败已计费 usage 已扩展；完整生产六维预算闭环仍待验收；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T048](05-migration-roadmap.md#as-t048) 执行恢复与取消故障矩阵 | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [容器部署矩阵](implementation/m6-t048-deployment-closeout.md)：API+uvicorn+PG 三窗口强杀/自毁恢复已执行；等待真实租约过期、审批 ID 保留、外部副作用与账本对齐；跨主机及 Gateway/API 同故障仍未关闭；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T049](05-migration-roadmap.md#as-t049) 接入团队及成员会话 | M7 | 用户+编码 Agent | 1～2 | — | 待验收 | [Worker 报告](implementation/m7-worker-report.md)：真实原生分派、任务独立会话和独立消费者通过；旧 TeammatePool 生命周期退出待服务切换；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T050](05-migration-roadmap.md#as-t050) 接入任务依赖与认领 | M7 | 用户+编码 Agent | 1～2 | — | 待验收 | [Worker 报告](implementation/m7-worker-report.md)：持久认领、令牌心跳、执行中取消和迟到回执拒绝通过；完整暂停审批部署闭环依赖 M6 | 2026-09-16 |
-| [AS-T051](05-migration-roadmap.md#as-t051) 接入团队消息和控制优先 | M7 | 用户+编码 Agent | 1～2 | — | 待验收 | [Worker 报告](implementation/m7-worker-report.md)：TeamSay 工具、双向普通消息消费、去重反馈进入模型、Worker 控制打断和远程 MQ 通过；旧转发层退出待服务切换 | 2026-09-16 |
-| [AS-T052](05-migration-roadmap.md#as-t052) 接入交接及结果准入 | M7 | 用户+编码 Agent | 1～2 | — | 待验收 | [Worker 报告](implementation/m7-worker-report.md)：真实 Researcher/质量门禁/工件校验/Supervisor 覆盖汇合通过；整项关闭受前置 T050/T051 验收约束 | 2026-09-16 |
-| [AS-T053](05-migration-roadmap.md#as-t053) 验证团队恢复及资源回收 | M7 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮关键项报告](implementation/m10-ledger-container-factory-report.md)：Docker 分派、工具提交后及交接提交后强杀恢复通过；正式 Worker 宿主、leader/跨主机组合故障与旧路径退出待验收；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T054](05-migration-roadmap.md#as-t054) 迁移文档上传与解析适配 | M8 | 用户+编码 Agent | 1～2 | — | 进行中 | [M8 文档适配](implementation/m8-document-report.md)：原生 Parser/Chunker、Worker 接线及35项回归通过；上传配额、真库/Docling/Office恢复验收待完成 | 2026-09-16 |
-| [AS-T055](05-migration-roadmap.md#as-t055) 接入文档版本与发布 | M8 | 用户+编码 Agent | 1～2 | — | 待验收 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T056](05-migration-roadmap.md#as-t056) 接入纠错与局部重解析 | M8 | 用户+编码 Agent | 1～2 | — | 待验收 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T057](05-migration-roadmap.md#as-t057) 接入统一检索与问答 | M8 | 用户+编码 Agent | 1～2 | — | 待验收 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T058](05-migration-roadmap.md#as-t058) 接入知识授权及工作空间 | M8 | 用户+编码 Agent | 1～2 | — | 待验收 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T059](05-migration-roadmap.md#as-t059) 接入批量、回收与同步 | M8 | 用户+编码 Agent | 1～2 | — | 进行中 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T060](05-migration-roadmap.md#as-t060) 接入事实与 Wiki | M8 | 用户+编码 Agent | 1～2 | — | 待验收 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T061](05-migration-roadmap.md#as-t061) 接入健康、导出与备份 | M8 | 用户+编码 Agent | 1～2 | — | 进行中 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T062](05-migration-roadmap.md#as-t062) 接入基础记忆 | M8 | 用户+编码 Agent | 1～2 | — | 进行中 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T063](05-migration-roadmap.md#as-t063) 接入高级记忆与维护 | M8 | 用户+编码 Agent | 1～2 | — | 进行中 | [M8 验收报告](implementation/m8-acceptance-report.md)：原生适配/真库与回归证据已记录，剩余部署/专项验收详见报告 | 2026-09-16 |
-| [AS-T064](05-migration-roadmap.md#as-t064) 迁移报告产品及写作 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
+| [AS-T041](05-migration-roadmap.md#as-t041) 实现框架与业务检查点 | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：检查点版本/身份/凭据引用及强杀重建通过；原生路径使用 SQL RecoveryStore，旧 QueryLoopState 物理清退归 T081 | 2026-09-19 |
+| [AS-T042](05-migration-roadmap.md#as-t042) 接入模型及工具提交账本 | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [T023/T042 收口](implementation/t023-t042-closeout-20260919.md)：已提交工具不重做、未知非幂等隔离、回执先于消费通过；核验结果/结算/审计现为单事务，SQLite/PG 故障回滚和幂等复验通过 | 2026-09-19 |
+| [AS-T043](05-migration-roadmap.md#as-t043) 实现领域 outbox 和事件重放 | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [T043/T046 验收](implementation/t043-t046-acceptance-20260919.md)：领域更新/outbox 与投影/游标同事务；真 PG 发布后崩溃重放保持完成及用量事件不重复；原生 SQL 公共事件接线通过 | 2026-09-19 |
+| [AS-T044](05-migration-roadmap.md#as-t044) 接入运行租约与 fencing | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：SQL 过期接管、跨实例旧 fence 拒绝、并发恢复和迟到回执通过；正式 Docker 成员失租恢复已有实证 | 2026-09-19 |
+| [AS-T045](05-migration-roadmap.md#as-t045) 实现全部审批与暂停 | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：持久审批/部分确认/预算与敏感工具恢复通过；真实出网批准拒绝已接线；计划及成员审批实测，大纲输入超限另归 T064 | 2026-09-19 |
+| [AS-T046](05-migration-roadmap.md#as-t046) 实现决策幂等及反馈消费 | M6 | 用户+编码 Agent | 1～2 | — | 已完成 | [T043/T046 验收](implementation/t043-t046-acceptance-20260919.md)：真 PG 决策插入后失败完整回滚且不唤醒；重复旧决策不影响新审批；任务反馈隔离及恢复消费通过 | 2026-09-19 |
+| [AS-T047](05-migration-roadmap.md#as-t047) 接入跨任务预算与 deadline | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [最新推进](implementation/t047-t048-progress-20260919.md)：修复创建 Key 的余额读取竞态；六维 PostgreSQL 双客户端竞争、接管、未知结果预留与幂等结算通过；长时真实代理续期及账单持续联动仍待验证 | 2026-09-19 |
+| [AS-T048](05-migration-roadmap.md#as-t048) 执行恢复与取消故障矩阵 | M6 | 用户+编码 Agent | 1～2 | — | 进行中 | [最新推进](implementation/t047-t048-progress-20260919.md)：真实 API+PG 容器矩阵扩展到五窗口，新增审批消费提交后、完成事件入库后强制退出恢复；跨主机及 Gateway/API 同故障仍未关闭 | 2026-09-19 |
+| [AS-T049](05-migration-roadmap.md#as-t049) 接入团队及成员会话 | M7 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：成员复用、任务/运行会话隔离、正式独立 Docker Worker 多任务与重新绑定通过；原生路径退出旧 TeammatePool | 2026-09-19 |
+| [AS-T050](05-migration-roadmap.md#as-t050) 接入任务依赖与认领 | M7 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：单次领取、所有权/取消/幂等、接纳后解锁通过；分步替换守卫已补真库并发回归，不再暴露无阻塞窗口 | 2026-09-19 |
+| [AS-T051](05-migration-roadmap.md#as-t051) 接入团队消息和控制优先 | M7 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：双通道控制优先、普通消息持久去重和死 Worker 回执恢复通过；真实 RocketMQ 完整信封与 27 条发件零积压 | 2026-09-19 |
+| [AS-T052](05-migration-roadmap.md#as-t052) 接入交接及结果准入 | M7 | 用户+编码 Agent | 1～2 | — | 已完成 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：委派需求/工件校验/质量准入通过；真实正常退出但无证据断言被拒，补证接纳；失败或拒绝不冒充完成接纳 | 2026-09-19 |
+| [AS-T053](05-migration-roadmap.md#as-t053) 验证团队恢复及资源回收 | M7 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：真实 PG/远程 MQ 54 项通过；prepare/commit/replay、提交失败、Worker 强杀与 leader 新租约重建通过；跨主机组合故障仍由 T048 跟踪 | 2026-09-19 |
+| [AS-T054](05-migration-roadmap.md#as-t054) 迁移文档上传与解析适配 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：HTTP 上传配额/去重、真实租约接管和并发重试通过；真实 Office/Docling 4 种组合及无 Docling 降级通过 | 2026-09-19 |
+| [AS-T055](05-migration-roadmap.md#as-t055) 接入文档版本与发布 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：真库待审、发布、撤回及运行代次冻结通过，T054 前置验收已补齐 | 2026-09-19 |
+| [AS-T056](05-migration-roadmap.md#as-t056) 接入纠错与局部重解析 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：真实 Docling、HTTP 修订冲突 409、发布代次不可变与草稿检索隔离通过 | 2026-09-19 |
+| [AS-T057](05-migration-roadmap.md#as-t057) 接入统一检索与问答 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：as_of 日期类型错误已修复；真库检索/配额/拒答/引用回归与两次真实 LiteLLM 重排/问答通过；按用户授权恢复现有服务 Key 登记 | 2026-09-19 |
+| [AS-T058](05-migration-roadmap.md#as-t058) 接入知识授权及工作空间 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：启动安装动态 ResourceAccessPolicy、领域知识库只读投影接线通过；成员/可见性/撤权/owner 转移/SQL 过滤通过 | 2026-09-19 |
+| [AS-T059](05-migration-roadmap.md#as-t059) 接入批量、回收与同步 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：批量并发认领、逐项撤权、取消及中断恢复已修复并通过；引用保护/恢复/快照去重与宿主逐跳出网审核通过 | 2026-09-19 |
+| [AS-T060](05-migration-roadmap.md#as-t060) 接入事实与 Wiki | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：真库事实审核/撤回、Wiki 版本、旧引用与过期检查通过，原生事实发布工具实调用通过 | 2026-09-19 |
+| [AS-T061](05-migration-roadmap.md#as-t061) 接入健康、导出与备份 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：导入预检/导出/健康及实际 restic/pg_dump/pg_restore 演练通过，恢复文件校验和与运行引用链一致 | 2026-09-19 |
+| [AS-T062](05-migration-roadmap.md#as-t062) 接入基础记忆 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：按用户确认完成 Mem0 组件验收；Platform/OSS/noop、身份隔离、合格证据及故障回归通过，尚未实际业务使用 | 2026-09-19 |
+| [AS-T063](05-migration-roadmap.md#as-t063) 接入高级记忆与维护 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：高级记忆固定时间/遗忘/并发回归及维护退出真实锁释放通过；Mem0 按用户确认的组件接入范围完成 | 2026-09-19 |
+| [AS-T064](05-migration-roadmap.md#as-t064) 迁移报告产品及写作 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：七类报告组件保留；真实 fd178735 大纲输入 139716 token 超过 131072，退回修复输入预算后再验收 | 2026-09-19 |
 | [AS-T065](05-migration-roadmap.md#as-t065) 接入引用与 CanonicalReport | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
 | [AS-T066](05-migration-roadmap.md#as-t066) 迁移报告评审及修订 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
 | [AS-T067](05-migration-roadmap.md#as-t067) 接入发布 Worker 与格式 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
 | [AS-T068](05-migration-roadmap.md#as-t068) 验证报告及发布恢复 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
-| [AS-T069](05-migration-roadmap.md#as-t069) 重组兼容 API 与 BFF | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮关键项报告](implementation/m10-ledger-container-factory-report.md)：运行工厂、团队/反馈/预算及签名账本路由已接入原生组合；生产资源提供器、其余路由和默认入口切换未完成；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T070](05-migration-roadmap.md#as-t070) 重组 SSE 与任务活动投影 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮关键项报告](implementation/m10-ledger-container-factory-report.md)：团队 HTTP 所有权、消息幂等、SQL 权威任务投影与原生宿主路由挂载通过；完整 SSE/业务契约及前端联合回归待验收；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T071](05-migration-roadmap.md#as-t071) 重组前端共享类型与状态 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [M10 首批记录](implementation/m10-api-report.md)：组件验证通过，应用接线和整项验收待完成 | 2026-09-17 |
-| [AS-T072](05-migration-roadmap.md#as-t072) 重组研究创建及运行工作区 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [领取与实施报告](implementation/m10-t072-t073-report.md)：功能模块/路由拆分已实现，类型检查通过，91 项组件与10项桌面浏览器通过；完整业务 E2E 与继承 lint 债务待验收；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T073](05-migration-roadmap.md#as-t073) 重组知识库、管理及账户页面 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [领取与实施报告](implementation/m10-t072-t073-report.md)：功能模块/路由拆分已实现，类型检查通过，91 项组件与10项桌面浏览器通过；完整业务 E2E 与继承 lint 债务待验收 | 2026-09-17 |
-| [AS-T074](05-migration-roadmap.md#as-t074) 实现历史只读兼容 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮执行记录](implementation/m10-sandbox-team-host-report.md)：原生沙箱/团队绑定/发布组件通过，默认宿主与完整切换未完成 | 2026-09-17 |
+| [AS-T069](05-migration-roadmap.md#as-t069) 重组兼容 API 与 BFF | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [收口报告](implementation/t069-api-closeout-20260919.md)：入口及领域 routers/use cases/BFF 拆分；170/170 公共路径保持，149 个 OpenAPI 路径契约及权限闭包核对通过；最终 74 passed，所有权、错误状态和发布下载兼容 | 2026-09-19 |
+| [AS-T070](05-migration-roadmap.md#as-t070) 重组 SSE 与任务活动投影 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/t070-sse-closeout-20260919.md)：六阶段原生映射、三类 schema/游标/重连/终态/心跳/权限矩阵通过；后端 88 passed，前端 128 passed / 1 既有 skipped，类型检查通过 | 2026-09-19 |
+| [AS-T071](05-migration-roadmap.md#as-t071) 重组前端共享类型与状态 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/t071-state-contracts-closeout-20260919.md)：领域 DTO/client/reducer/store 拆分、真实 HTTP/SSE 样例对齐与唯一实现核对通过；前端 130 passed / 1 既有 skipped，类型检查通过 | 2026-09-19 |
+| [AS-T072](05-migration-roadmap.md#as-t072) 重组研究创建及运行工作区 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [最新推进](implementation/m9-m10-progress-20260919.md)：真实 Web 计划/大纲审批、方向反馈及降级 PDF 下载通过；任务活动所有权修复已部署；资料模式 UnknownOperation 失败待修复，来源/发现与 V2 活动投影已编码并通过专项，完整四来源 E2E 待补验 | 2026-09-19 |
+| [AS-T073](05-migration-roadmap.md#as-t073) 重组知识库、管理及账户页面 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [验收报告](implementation/t073-pages-closeout-20260919.md)：真实角色/资料可见性、上传审核、重排问答、会话刷新及页面接线；前端 98 passed / 1 既有 skipped | 2026-09-19 |
+| [AS-T074](05-migration-roadmap.md#as-t074) 实现历史只读兼容 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [验收报告](implementation/t074-history-closeout-20260919.md)：83 项联合通过；历史用量与发布事件无写入、工件下载、旧 resume 409、独立进程无 LangChain 与禁止双向转换 | 2026-09-19 |
 | [AS-T075](05-migration-roadmap.md#as-t075) 统一 tracing 与运营指标 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | 原生 SQL 用量 HTTP 投影与代理账单关联已实施；完整 tracing/sink 与实际账单核验待验收，见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
 | [AS-T076](05-migration-roadmap.md#as-t076) 迁移研究与知识评估 | M11 | 待领取 | 1～2 | — | 待开始 | — | 2026-09-14 |
 | [AS-T077](05-migration-roadmap.md#as-t077) 重构架构检查及移植测试 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | [M11 首批记录](implementation/m11-readiness-report.md)：架构/镜像改造及清退盘点，完整验收未通过 | 2026-09-17 |
@@ -228,3 +300,11 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 - 生产接线补验：原生全量 508 passed/1 failed/2 skipped；新 Worker 测试夹具的冻结指纹错误修正后真库专项 1 passed。真实研究生成、正式 Worker 命令的容器联调及长时凭据续期仍未关闭，不升级任务完成状态。
 
 - 2026-09-18：按用户要求对 M5 T035/T036 执行复验验收：2026-09-15 扣验的三项（旧研究入口退出、工具级确认/外部执行恢复、持久异步团队）分别被引擎路由缝与 migration_check 守卫、M6 部署矩阵三窗口强杀恢复（489/515 全量）、M7 Worker 与正式 Controller 团队通道，及当日真实公开网络异步双任务运行（`e290e205…`，`completed`）覆盖；两项登记已完成，完成数 39/81、加权约 47.6%。旧循环物理删除仍由 T081 跟踪，业务验收 0/75 不变。见 [M5 复验验收记录](implementation/m5-t035-t036-reacceptance.md)。
+
+- 2026-09-19：M6～M11 逐项复核，当前代码联合复验 151 passed/1 skipped，原生导入守卫通过。T041/T044/T045/T049～T052 单项实施验收关闭，T064 因大纲输入超限退回进行中；实施完成 46/81、加权 56.3%，业务 0/75 与阶段整体验收边界不变。测试容器已清理；本轮未启动新浏览器 E2E。
+
+- 2026-09-19：T023/T042 原生实施收口，修复未知操作核验的两事务窗口、账单冲突覆盖和已报告 token 校验；133 项联合与 15 项最终专项通过，77 条真实历史代理账单在隔离账本幂等复核通过。完成数 48/81、加权 58.8%，业务 0/75 不变；本次数据库和测试容器已清理。
+
+- 2026-09-19：T043/T046 验收通过，新增 PG 决策事务失败及新旧审批隔离、投影/日志重放专项，联合 98 passed/1 skipped、真库 2 passed。未修改生产代码。完成数 50/81、加权 61.3%，业务 0/75 不变，测试容器已回收。
+
+| 2026-09-19 | M7/M8 补齐上传恢复、真实 Office、动态权限投影、批量并发/中断、备份恢复与维护锁；按用户确认关闭 Mem0 组件验收 | 新增十一项完成，61/81；T057 日期修复与真实重排/问答通过，知识服务 Key 经用户授权恢复登记，见本轮报告 |
