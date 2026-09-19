@@ -5,54 +5,65 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="07355fec-7b27-4edf-892e-c274f25e56d0" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/Dockerfile" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Dockerfile.sandbox-gateway" beforeDir="false" afterPath="$PROJECT_DIR$/Dockerfile.sandbox-gateway" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/deploy/compose.native-e2e.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/deploy/compose.native-e2e.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/deploy/grafana/provisioning/datasources/prometheus.yml" beforeDir="false" afterPath="$PROJECT_DIR$/deploy/grafana/provisioning/datasources/prometheus.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/deploy/research-console.nginx.conf" beforeDir="false" afterPath="$PROJECT_DIR$/deploy/research-console.nginx.conf" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docker-compose.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yaml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/docs/agentscope-migration/07-progress.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/agentscope-migration/07-progress.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/research-workspace-approvals.test.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/research-workspace-approvals.test.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/run-quality-status.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/run-quality-status.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/token-usage-dashboard.test.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/token-usage-dashboard.test.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/token-usage-dashboard.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/token-usage-dashboard.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/features/research/research-workspace.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/features/research/research-workspace.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/lib/contracts/usage.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/contracts/usage.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/context.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/context.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/gateway.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/gateway.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/gateway_ledger.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/gateway_ledger.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/model_accounting.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/model_accounting.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/production.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/production.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/agentscope-migration/implementation/quality-closeout-20260919.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/agentscope-migration/implementation/quality-closeout-20260919.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/features/knowledge/review-panel.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/features/knowledge/review-panel.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/features/research/task-activity-drawer.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/features/research/task-activity-drawer.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/hooks/use-publications.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/hooks/use-publications.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/hooks/use-task-activity.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/hooks/use-task-activity.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/contracts/documents.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/contracts/documents.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/contracts/research.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/contracts/research.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/knowledge-api.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/knowledge-api.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/run-reducer.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/run-reducer.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/server-auth.test.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/server-auth.test.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/server-auth.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/server-auth.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/lib/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/lib/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/knowledge.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/knowledge.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/production_resources.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/production_resources.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_events.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_events.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_store.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/recovery_store.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/report.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/report.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_agents.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_agents.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/sandbox_catalog.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/sandbox_catalog.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_stages.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/research_stages.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/spend_reconciliation.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/spend_reconciliation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/storage.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/storage.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/team_executor.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/team_executor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/usage_projection.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/usage_projection.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/web_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/web_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/teams_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/agentscope_runtime/teams_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/api/history.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/api/history.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/api/native_runs.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/api/native_runs.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/sandbox/controller_client.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/sandbox/controller_client.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/api/publications.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/api/publications.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/events/publications.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/events/publications.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/events/task_activity.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/events/task_activity.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/batches.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/batches.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/search_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/search_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/knowledge/sync.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/knowledge/sync.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/models/spend.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/models/spend.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/observability/tracing.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/observability/tracing.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/sandbox/gateway.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/sandbox/gateway.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/sandbox/internal_api.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/sandbox/internal_api.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/open_deep_research/sandbox/team_controller.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/sandbox/team_controller.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/open_deep_research/server.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/server.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_e2e_closeout.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_e2e_closeout.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_model_execution.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_model_execution.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/open_deep_research/tasks/teams_domain.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/open_deep_research/tasks/teams_domain.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/deployment_api_host.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/deployment_api_host.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_agent_teams.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_agent_teams.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_deployment_fault_matrix.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_deployment_fault_matrix.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_http_boundary.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_http_boundary.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_m8_ports.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_m8_ports.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_native_http.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_native_http.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_production_resources.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_production_resources.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_report_native.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_report_native.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_sandbox_service_acceptance.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_sandbox_service_acceptance.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_team_executor.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_team_executor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_web_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_web_tools.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_sandbox_controller_lifecycle.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_sandbox_controller_lifecycle.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/uv.lock" beforeDir="false" afterPath="$PROJECT_DIR$/uv.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_sandbox_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_sandbox_provider.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/as_runtime/test_storage_migrations.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/as_runtime/test_storage_migrations.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/documents/test_workbench_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/documents/test_workbench_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_batches_trash_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_batches_trash_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_facts_wiki_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_facts_wiki_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_search_flow_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_search_flow_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_search_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_search_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/knowledge/test_workspace_permissions_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/knowledge/test_workspace_permissions_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_egress_approval_pending.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_egress_approval_pending.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_frontend_api.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_frontend_api.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_server_operations.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_server_operations.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_supervisor_budget_drain.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_supervisor_budget_drain.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -62,18 +73,80 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "1356370087"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;1356370087&quot;
   }
-}]]></component>
-  <component name="GithubPullRequestsUISettings"><![CDATA[{
-  "selectedUrlAndAccountId": {
-    "url": "https://github.com/1356370087/MarketScout-AgentScope.git",
-    "accountId": "b3f82285-327f-4167-bfd5-5e18fbbda991"
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/1356370087/MarketScout-AgentScope.git&quot;,
+    &quot;accountId&quot;: &quot;b3f82285-327f-4167-bfd5-5e18fbbda991&quot;
   }
-}]]></component>
+}</component>
+  <component name="LangSmithConfigNotification">
+    <option name="notified" value="true" />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.6141349848784803" />
+      <entry key="MS500" value="3.68298630798683" />
+      <entry key="S2" value="5.528093282954547" />
+      <entry key="S5" value="7.29978950462963" />
+      <entry key="S10" value="8.682085047033066" />
+      <entry key="S30" value="10.087365013749952" />
+      <entry key="S60" value="10.523278748255004" />
+      <entry key="M2" value="10.756290244173366" />
+      <entry key="M5" value="10.901199113934172" />
+      <entry key="M10" value="10.950377232009533" />
+      <entry key="M15" value="10.966868537430889" />
+      <entry key="M30" value="10.98340940695306" />
+      <entry key="H1" value="10.99169847805149" />
+      <entry key="H2" value="10.995847681419637" />
+      <entry key="H4" value="10.997923451151946" />
+      <entry key="D1" value="10.99965385440679" />
+      <entry key="W1" value="10.999950549304016" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="1.5009659449032375" />
+      <entry key="MS500" value="3.6180198789464146" />
+      <entry key="S2" value="5.499939271823241" />
+      <entry key="S5" value="7.28075208977932" />
+      <entry key="S10" value="8.669017835337746" />
+      <entry key="S30" value="10.081731030310905" />
+      <entry key="S60" value="10.520257926830718" />
+      <entry key="M2" value="10.754724899623408" />
+      <entry key="M5" value="10.900559250302269" />
+      <entry key="M10" value="10.950054965984542" />
+      <entry key="M15" value="10.966653171198825" />
+      <entry key="M30" value="10.983301461848654" />
+      <entry key="H1" value="10.99164443983659" />
+      <entry key="H2" value="10.995820645875767" />
+      <entry key="H4" value="10.997909929268314" />
+      <entry key="D1" value="10.999651600188226" />
+      <entry key="W1" value="10.9999502272588" />
+    </decayedShown>
+  </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0,
   &quot;fromUser&quot;: false
@@ -83,221 +156,32 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "git-widget-placeholder": "main",
-    "ignore.virus.scanning.warn.message": "true",
-    "last_opened_file_path": "D:/WorkSpace/pycharm/MarketScout-AgentScope/frontend",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.jshint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.jshint": "",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "python.packages.toolwindow.project.migrated.to.right.top.v2": "true",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/WorkSpace/pycharm/MarketScout-AgentScope&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.jshint&quot;: &quot;&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;python.packages.toolwindow.project.migrated.to.right.top.v2&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="D:\WorkSpace\pycharm\MarketScout-AgentScope\frontend" />
       <recent name="D:\WorkSpace\pycharm\MarketScout-AgentScope" />
     </key>
-  </component>
-  <component name="RunManager">
-    <configuration default="true" type="DjangoTestsConfigurationType">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="TARGET" value="" />
-      <option name="SETTINGS_FILE" value="" />
-      <option name="CUSTOM_SETTINGS" value="false" />
-      <option name="USE_OPTIONS" value="false" />
-      <option name="OPTIONS" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="PythonConfigurationType" factoryName="Python">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <envs>
-        <env name="PYTHONUNBUFFERED" value="1" />
-      </envs>
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="" />
-      <option name="PARAMETERS" value="" />
-      <option name="SHOW_COMMAND_LINE" value="false" />
-      <option name="EMULATE_TERMINAL" value="false" />
-      <option name="MODULE_MODE" value="false" />
-      <option name="REDIRECT_INPUT" value="false" />
-      <option name="INPUT_FILE" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="Python.Celery" factoryName="Python.Celery.Task">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="Python.Celery" factoryName="Python.Celery.App">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="Python.FlaskServer">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="launchJavascriptDebuger" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="Tox" factoryName="Tox">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="docs" factoryName="Docutils task">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="docutils_input_file" value="" />
-      <option name="docutils_output_file" value="" />
-      <option name="docutils_params" value="" />
-      <option name="docutils_task" value="" />
-      <option name="docutils_open_in_browser" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="docs" factoryName="Sphinx task">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <option name="RUN_TOOL" value="" />
-      <option name="docutils_input_file" value="" />
-      <option name="docutils_output_file" value="" />
-      <option name="docutils_params" value="" />
-      <option name="docutils_task" value="" />
-      <option name="docutils_open_in_browser" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="tests" factoryName="Doctests">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="SCRIPT_NAME" value="" />
-      <option name="CLASS_NAME" value="" />
-      <option name="METHOD_NAME" value="" />
-      <option name="FOLDER_NAME" value="" />
-      <option name="TEST_TYPE" value="TEST_SCRIPT" />
-      <option name="PATTERN" value="" />
-      <option name="USE_PATTERN" value="false" />
-      <method v="2" />
-    </configuration>
-    <configuration default="true" type="tests" factoryName="Autodetect">
-      <module name="marketscout-agentscope" />
-      <option name="ENV_FILES" value="" />
-      <option name="INTERPRETER_OPTIONS" value="" />
-      <option name="PARENT_ENVS" value="true" />
-      <option name="SDK_HOME" value="" />
-      <option name="WORKING_DIRECTORY" value="" />
-      <option name="IS_MODULE_SDK" value="false" />
-      <option name="ADD_CONTENT_ROOTS" value="true" />
-      <option name="ADD_SOURCE_ROOTS" value="true" />
-      <option name="DEBUG_JUST_MY_CODE" value="false" />
-      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
-      <option name="RUN_TOOL" value="" />
-      <option name="_new_additionalArguments" value="&quot;&quot;" />
-      <option name="_new_target" value="&quot;&quot;" />
-      <option name="_new_targetType" value="&quot;PATH&quot;" />
-      <method v="2" />
-    </configuration>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -315,7 +199,9 @@
       <option name="presentableId" value="Default" />
       <updated>1789223620786</updated>
       <workItem from="1789223621913" duration="758000" />
-      <workItem from="1789224390030" duration="66384000" />
+      <workItem from="1789224390030" duration="67945000" />
+      <workItem from="1789729686248" duration="9445000" />
+      <workItem from="1789826715956" duration="4287000" />
     </task>
     <servers />
   </component>
