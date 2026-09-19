@@ -83,6 +83,44 @@ def config(tmp_path, **kwargs):
 
 
 @pytest.mark.asyncio
+async def test_approval_outline_bounds_whole_evidence_and_preserves_feedback(tmp_path):
+    import json
+
+    from open_deep_research.agentscope_runtime.research_stages import NativeResearchStages
+
+    snapshot = state()
+    snapshot.feedback = ["请突出研究限制"]
+    records = [
+        {"evidence_id": f"ev-{i}", "claim": "支持结论" * 300,
+         "supporting_excerpt": "来源原文" * 300, "source_url": f"https://example.com/{i}",
+         "security_status": "accepted"}
+        for i in range(100)
+    ]
+    snapshot.findings = [{"evidence_registry": records, "compressed_research": "冗余交接数据" * 100000}]
+    factory = Factory()
+
+    async def complete(role, messages, **kwargs):
+        assert messages[0].role == "system"
+        assert sum(len(message.get_text_content().encode("utf-8")) + 16 for message in messages) <= 16000 - 1024 - 800
+        payload = json.loads(messages[1].get_text_content())
+        evidence = json.loads(messages[2].get_text_content())
+        assert payload["feedback"] == snapshot.feedback
+        assert 0 < len(evidence["records"]) < len(records)
+        assert evidence["omitted_record_count"] == len(records) - len(evidence["records"])
+        assert all(item["claim"] == records[0]["claim"] for item in evidence["records"])
+        assert "冗余交接数据" not in str(messages)
+        return ChatResponse(content=[TextBlock(text="## 发现\n## 研究限制")], is_last=True)
+
+    factory.complete_with_recovery = complete
+    models = ResearchModels(factory)
+    cfg = config(tmp_path, enable_human_in_loop=True, web_pipeline_mode="enforced",
+                 model_context_window_overrides={"openai:gpt-4.1": 16000})
+    stages = NativeResearchStages(models, None, lambda: cfg, report_writer=NativeReportWriter(models))
+    decision = await stages.outline_approval(snapshot)
+    assert decision.question == snapshot.outline == "## 发现\n## 研究限制"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("genre", REPORT_PROFILES)
 async def test_all_native_genres_preserve_product_contract(tmp_path, genre):
     factory = Factory()
@@ -368,3 +406,49 @@ async def test_killed_publication_worker_recovers_one_job_and_one_terminal_event
     assert len(jobs.list()) == 1
     events = PublicationEventStore(run_id, runs_dir=tmp_path).read()
     assert sum(e.type == "publication.completed" for e in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_killed_writer_replays_durable_model_commit_without_second_call(tmp_path):
+    import asyncio
+    import os
+    import sys
+    from pathlib import Path
+
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+    from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "journal.db").as_posix())
+    await store.create_tables()
+    snapshot = state()
+    await store.create_run("owner", snapshot)
+    child = await asyncio.create_subprocess_exec(
+        sys.executable, "tests/as_runtime/report_model_process.py", str(tmp_path),
+        env=dict(os.environ, PYTHONPATH=str(Path("src").resolve())),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    resumed = None
+    try:
+        for _ in range(300):
+            if (tmp_path / "model-ready").exists() or child.returncode is not None:
+                break
+            await asyncio.sleep(0.1)
+        assert (tmp_path / "model-ready").exists(), "Writer did not reach durable commit"
+        child.kill()
+        await child.communicate()
+        await asyncio.sleep(1.2)
+        resumed = await RecoverySession.open(store, snapshot.run_id, "owner")
+        factory = Factory()
+        factory.fail = True
+        with resumed.scope("final_report_generation", 0):
+            report = await NativeReportWriter(ResearchModels(factory, recovery=resumed))(state(), config(tmp_path))
+        assert "Supported finding" in report
+        assert factory.calls == []
+        assert (tmp_path / "model-calls").read_text(encoding="utf-8").splitlines() == ["final_report"]
+    finally:
+        if child.returncode is None:
+            child.kill()
+        await child.communicate()
+        if resumed is not None:
+            await resumed.close()
+        await store.aclose()

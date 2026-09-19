@@ -4,6 +4,7 @@ import asyncio
 import base64
 import time
 import os
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -54,10 +55,11 @@ def config():
 
 
 @pytest.mark.parametrize(
-    "fail_registration, renew", [(False, False), (True, False), (False, True)]
+    "fail_registration, renew, late_charge",
+    [(False, False, False), (True, False, False), (False, True, False), (False, False, True)],
 )
 async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
-    store, monkeypatch, tmp_path, fail_registration, renew
+    store, monkeypatch, tmp_path, fail_registration, renew, late_charge
 ):
     events = []
     settings = SimpleNamespace(
@@ -84,6 +86,7 @@ async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
 
         async def ensure(self, **kwargs):
             events.append("key")
+            assert kwargs["requested_budget_micro_usd"] == (50 if late_charge else 60)
             return SimpleNamespace(
                 key="secret-run-key", metadata=SimpleNamespace(expires_at=0)
             )
@@ -111,7 +114,25 @@ async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
 
     monkeypatch.setattr(resources, "RunKeyManager", Manager)
     monkeypatch.setattr(resources, "SandboxGatewayControlClient", Control)
-    state, lease = await create(store)
+    state, lease = await create(store, limits={"cost_micro_usd": 100})
+    await store.begin_operation(lease, "settled", "model", {}, reserve={"cost_micro_usd": 40})
+    await store.commit_operation(lease, "settled", {}, actual={"cost_micro_usd": 30})
+    await store.begin_operation(lease, "unknown", "model", {}, reserve={"cost_micro_usd": 10})
+    if late_charge:
+        original_transaction = store.transaction
+        charged = False
+
+        @asynccontextmanager
+        async def late_settlement(current):
+            nonlocal charged
+            if not charged:
+                charged = True
+                # A receipt lands just before resource creation takes the row lock.
+                await store.commit_operation(lease, "unknown", {}, actual={"cost_micro_usd": 20})
+            async with original_transaction(current) as locked:
+                yield locked
+
+        monkeypatch.setattr(store, "transaction", late_settlement)
     session = RecoverySession(store, lease, state)
     cfg = config()
     run = RunConfig.compile(cfg)
@@ -175,6 +196,7 @@ async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):
     from open_deep_research.sandbox.gateway import GatewayRuntime
     from open_deep_research.sandbox.internal_api import (
         EgressTargetCheckRequest,
+        TaskActivityPublishRequest,
         TeamBridgeRequest,
         build_internal_sandbox_router,
     )
@@ -184,6 +206,7 @@ async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):
     ledger = SQLGatewayLedger(session, {})
     cfg = config()
     cfg["configurable"]["runs_dir"] = str(tmp_path)
+    cfg["metadata"] = {"run_id": state.run_id}
     ledger.config = cfg
     root = cfg["configurable"]["sandbox_root_signing_key"]
     gateway = GatewayRuntime(resources.Configuration.from_runnable_config(cfg))
@@ -234,7 +257,28 @@ async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):
                 "/internal/sandbox/team", json=request.model_dump(mode="json")
             )
         ).json() == {"tools": []}
+        from open_deep_research.events.task_activity import TaskActivityStore
+
+        activity_request = gateway.internal.signed(
+            TaskActivityPublishRequest, run_id=state.run_id, task_id="t",
+            fence_token=lease.fence, event_type="model.completed", kind="model",
+            phase="reasoning", status="success", title="Model completed",
+            payload={"model": "fixture", "input_tokens": 12, "api_key": "do-not-expose"},
+            dedupe_key="physical-model-1",
+        )
+        activity_url = "/internal/sandbox/task-activity"
+        response = await client.post(activity_url, json=activity_request.model_dump(mode="json"))
+        assert response.status_code == 200 and response.json() == {"published": True}
+        assert (await client.post(activity_url, json=activity_request.model_dump(mode="json"))).status_code == 401
+        records = TaskActivityStore(state.run_id, "t", runs_dir=str(tmp_path)).read()
+        assert len(records) == 1 and records[0].payload["input_tokens"] == 12
+        assert "do-not-expose" not in records[0].model_dump_json()
         await store.release(lease)
+        stale = gateway.internal.signed(
+            TaskActivityPublishRequest, run_id=state.run_id, task_id="t",
+            fence_token=lease.fence, event_type="model.completed", dedupe_key="late",
+        )
+        assert (await client.post(activity_url, json=stale.model_dump(mode="json"))).status_code == 409
         request = gateway.internal.signed(
             EgressTargetCheckRequest,
             run_id=state.run_id,

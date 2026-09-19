@@ -648,9 +648,10 @@ class TestUsageLoaderTerminalAuthority:
             def get_usage_accounting(self, _run_id, reserved_budget=None):
                 return {"status": "running", "duration_ms": None}
 
-        monkeypatch.setattr(server, "SQLiteTraceStore", FakeStore)
+        from open_deep_research.api import run_usage
+        monkeypatch.setattr(run_usage, "SQLiteTraceStore", FakeStore)
         monkeypatch.setattr(
-            server, "_outstanding_usage_budget", lambda _c, _r: {}
+            run_usage, "_outstanding_usage_budget", lambda _c, _r: {}
         )
         configurable = Configuration.from_runnable_config(
             {"configurable": {"runs_dir": str(tmp_path)}}

@@ -11,6 +11,7 @@ _STAGES = {
     "final_report_generation": "writing",
     "memory_extract_and_write": "finalizing",
 }
+_PUBLIC_STAGES = tuple(dict.fromkeys(_STAGES.values()))
 
 
 def public_events(event):
@@ -142,9 +143,9 @@ def public_event(event):
             "stage.started",
             _STAGES.get(stage),
             {
-                "stage_id": stage,
-                "stage_index": len(payload["completed"]),
-                "stage_count": 9,
+                "stage_id": _STAGES[stage],
+                "stage_index": _PUBLIC_STAGES.index(_STAGES[stage]),
+                "stage_count": len(_PUBLIC_STAGES),
             },
         )
     if payload.get("completed"):
@@ -153,9 +154,9 @@ def public_event(event):
             "stage.completed",
             _STAGES.get(stage),
             {
-                "stage_id": stage,
-                "stage_index": len(payload["completed"]) - 1,
-                "stage_count": 9,
+                "stage_id": _STAGES[stage],
+                "stage_index": _PUBLIC_STAGES.index(_STAGES[stage]),
+                "stage_count": len(_PUBLIC_STAGES),
             },
         )
     return "run.started", "preparing", {"status": status}

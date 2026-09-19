@@ -278,17 +278,25 @@ class TokenUsage:
 class SQLiteTraceStore:
     """Small SQLite-backed store for runs, spans, and usage events."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, *, read_only: bool = False):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
         self._lock = threading.Lock()
-        self._ensure_schema()
-        self._migrate()
+        if not read_only:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_schema()
+            self._migrate()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=5)
+        conn = sqlite3.connect(
+            self.path.resolve().as_uri() + "?mode=ro" if self.read_only else self.path,
+            timeout=5,
+            uri=self.read_only,
+        )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
+        if self.read_only:
+            return conn
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")

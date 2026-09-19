@@ -15,6 +15,41 @@ class NativeReportWriter:
     def __init__(self, models):
         self.models = models
 
+    async def outline(self, snapshot, config):
+        """Budget approval outlines using the same evidence authority as writing."""
+        token = native_report.set(_ReportRun(self.models, snapshot))
+        try:
+            return await self._outline(snapshot, config)
+        finally:
+            native_report.reset(token)
+
+    async def _outline(self, snapshot, config):
+        from open_deep_research.configuration import Configuration
+        from open_deep_research.report.assembly import ReportContext
+        from open_deep_research.report.profiles import get_profile
+
+        cfg = Configuration.from_runnable_config(config)
+        context = ReportContext.from_state(
+            {
+                "research_brief": snapshot.research_brief,
+                "notes": [item.get("compressed_research", "") for item in snapshot.findings],
+                "evidence_registry": [record for item in snapshot.findings for record in item.get("evidence_registry", [])],
+                "coverage_contract": snapshot.coverage_contract,
+                "coverage_ledger": snapshot.coverage_ledger,
+            },
+            config,
+            get_profile(cfg.report_type),
+        )
+        messages = context.stage_messages(
+            "基于已准入证据编写待用户审批的报告大纲，保留需求归属、缺口和用户修订反馈。",
+            {"brief": snapshot.research_brief, "feedback": snapshot.feedback,
+             "completion_outcome": snapshot.completion_outcome},
+        )
+        response = await native_report.get().invoke(
+            "final_report", messages, cfg, span_name="approval_outline"
+        )
+        return response.content
+
     async def __call__(self, snapshot, config):
         from open_deep_research.report.orchestrator import build_report
 

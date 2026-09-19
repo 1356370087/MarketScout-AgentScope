@@ -1,11 +1,11 @@
 """Join trusted LiteLLM bills to SQL receipts without replaying unknown effects."""
 
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
 
-from open_deep_research.agentscope_runtime.recovery_store import digest
+from open_deep_research.agentscope_runtime.recovery_store import RecoveryConflict, digest
 
 
 async def reconcile_spend(store, lease, logs):
@@ -15,10 +15,18 @@ async def reconcile_spend(store, lease, logs):
     collapsed into one upstream call. Unknown execution results remain isolated.
     """
     candidates = {}
+    conflicts = set()
     for log in logs:
         tags = log.get("request_tags") or []
         if isinstance(tags, str):
-            tags = json.loads(tags)
+            try:
+                tags = json.loads(tags)
+            except ValueError:
+                continue
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            continue
+        if [tag for tag in tags if tag.startswith("run:")] != [f"run:{lease.run_id}"]:
+            continue
         if f"run:{lease.run_id}" not in tags:
             continue
         operations = [
@@ -29,7 +37,12 @@ async def reconcile_spend(store, lease, logs):
         if len(operations) != 1 or not log.get("request_id"):
             continue
         key = "gateway:model:" + operations[0]
-        candidates.setdefault(key, {})[log["request_id"]] = log
+        bills = candidates.setdefault(key, {})
+        prior = bills.get(log["request_id"])
+        if prior is not None and any(prior.get(k) != log.get(k) for k in
+                                     ("prompt_tokens", "completion_tokens", "spend")):
+            conflicts.add(key)
+        bills[log["request_id"]] = log
     result = {"corrected": [], "unresolved": []}
     async with store.engine.connect() as conn:
         rows = (
@@ -46,7 +59,7 @@ async def reconcile_spend(store, lease, logs):
         )
     for row in rows:
         bills = list(candidates.get(row["key"], {}).values())
-        if len(bills) != 1 or row["state"] != "committed":
+        if row["key"] in conflicts or len(bills) != 1 or row["state"] != "committed":
             result["unresolved"].append(row["key"])
             continue
         bill = bills[0]
@@ -55,20 +68,30 @@ async def reconcile_spend(store, lease, logs):
             bill.get("completion_tokens"),
             bill.get("spend"),
         )
-        if type(incoming) is not int or type(outgoing) is not int or cost is None:
+        if (type(incoming) is not int or type(outgoing) is not int or cost is None
+                or incoming < 0 or outgoing < 0):
             result["unresolved"].append(row["key"])
             continue
-        amount = Decimal(str(cost))
+        try:
+            amount = Decimal(str(cost))
+        except InvalidOperation:
+            result["unresolved"].append(row["key"])
+            continue
         if not amount.is_finite() or amount < 0:
-            raise ValueError("invalid proxy bill cost")
-        await store.reconcile_model_usage(
-            lease,
-            row["key"],
-            receipt_id=digest(["litellm", bill["request_id"]]),
-            input_tokens=incoming,
-            output_tokens=outgoing,
-            cost_micro_usd=int(amount * 1_000_000),
-        )
+            result["unresolved"].append(row["key"])
+            continue
+        try:
+            await store.reconcile_model_usage(
+                lease,
+                row["key"],
+                receipt_id=digest(["litellm", bill["request_id"]]),
+                input_tokens=incoming,
+                output_tokens=outgoing,
+                cost_micro_usd=int(amount * 1_000_000),
+            )
+        except RecoveryConflict:
+            result["unresolved"].append(row["key"])
+            continue
         result["corrected"].append(row["key"])
     return result
 

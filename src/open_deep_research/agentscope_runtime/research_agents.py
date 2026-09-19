@@ -674,6 +674,9 @@ class Supervisor:
                             owned_requirement_ids=assignment.requirement_ids,
                         )
                 results[assignment.task_id] = outcome
+                from open_deep_research.agentscope_runtime.public_findings import publish_handoff
+
+                await publish_handoff(self.models, outcome, context_chars=self.context_chars)
                 return outcome
 
         async def execute(assignment):

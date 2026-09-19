@@ -55,12 +55,16 @@ class ASRuntime:
     _close_task: Any | None = None
     _team_host: Any | None = None
     _team_start_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    knowledge_access_policy: Any | None = None
 
     @classmethod
     async def create(cls, settings: ASRuntimeSettings | None = None) -> ASRuntime:
         settings = settings or ASRuntimeSettings.from_env()
         storage = build_storage(settings)
         runtime = cls(settings=settings, storage=storage, message_bus=None)
+        from open_deep_research.agentscope_runtime.knowledge import KnowledgeAccessPolicy
+
+        runtime.knowledge_access_policy = KnowledgeAccessPolicy()
         runtime.shutdown_stack.push_base(
             "storage", lambda: storage.__aexit__(None, None, None)
         )
@@ -147,6 +151,7 @@ class ASRuntime:
             "message_bus": BorrowedResource(self.message_bus),
             "enable_channel_worker": False,
             "enable_scheduler": False,
+            "resource_access_policy": self.knowledge_access_policy,
         }
         if self.workspace_manager is not None:
             kwargs["workspace_manager"] = self.workspace_manager
@@ -191,13 +196,13 @@ class ASRuntime:
         app.router.lifespan_context = lifespan
         return app
 
-    def knowledge_application(self, user_id, authorize):
+    def knowledge_application(self, user_id, authorize, *, authorize_url=None):
         """Bind the authenticated identity and live IAM check to domain operations."""
         from open_deep_research.agentscope_runtime.knowledge import KnowledgeApplication
 
         if self.gate.closed:
             raise RuntimeError("runtime_shutting_down")
-        return KnowledgeApplication(user_id, authorize)
+        return KnowledgeApplication(user_id, authorize, authorize_url=authorize_url)
 
     async def bind_research_team(self, recovery, *, max_iters=10):
         """Bind an authenticated recovery lease to deployment-owned team resources."""

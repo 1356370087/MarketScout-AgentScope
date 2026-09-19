@@ -19,14 +19,19 @@ async def test_migrations_isolate_iam_revision_and_are_repeatable(pg_url):
         async with engine.begin() as conn:
             await conn.execute(text("CREATE TABLE public.alembic_version (version_num varchar(64) PRIMARY KEY)"))
             await conn.execute(text("INSERT INTO public.alembic_version VALUES ('0016_research_teams')"))
+            await conn.execute(text("CREATE TABLE public.as_recovery_runs (legacy_marker text)"))
+            await conn.execute(text("INSERT INTO public.as_recovery_runs VALUES ('untouched')"))
         await run_storage_migrations(settings)
         await run_storage_migrations(settings)
         async with engine.connect() as conn:
             assert await conn.scalar(text("SELECT version_num FROM public.alembic_version")) == "0016_research_teams"
+            assert await conn.scalar(text("SELECT legacy_marker FROM public.as_recovery_runs")) == "untouched"
+            assert await conn.scalar(text(f'SELECT count(*) FROM "{schema}".as_recovery_runs')) == 0
             assert await conn.scalar(text(f'SELECT count(*) FROM "{schema}".alembic_version')) == 1
             assert await conn.scalar(text("SELECT count(*) FROM information_schema.tables WHERE table_schema = :schema"), {"schema": schema}) > 10
     finally:
         async with engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
             await conn.execute(text("DROP TABLE IF EXISTS public.alembic_version"))
+            await conn.execute(text("DROP TABLE IF EXISTS public.as_recovery_runs"))
         await engine.dispose()

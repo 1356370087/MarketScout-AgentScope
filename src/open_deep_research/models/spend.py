@@ -12,6 +12,7 @@ instead of failing the analytics endpoints.
 from __future__ import annotations
 
 import math
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -115,6 +116,11 @@ def run_spend_index(entries: list[GatewayKeySpend]) -> dict[str, int]:
 
 def _tags_of(log: Mapping[str, Any]) -> list[str]:
     tags = log.get("request_tags")
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            return []
     if isinstance(tags, list):
         return [str(tag) for tag in tags if isinstance(tag, str)]
     return []
@@ -259,7 +265,7 @@ class LiteLLMSpendClient:
         return [
             log
             for log in logs
-            if tag in [str(item) for item in (log.get("request_tags") or [])]
+            if tag in _tags_of(log)
         ]
 
     async def aclose(self) -> None:

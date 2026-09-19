@@ -176,18 +176,19 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
                         await team_admin.aclose()
                 # Serialize key rotation with the leader fence: an old owner must
                 # never replace/block the key acquired by its successor.
-                budget = await recovery.store.budget(run_id, recovery.lease.user_id)
-                limit = budget["limits"].get("cost_micro_usd")
-                remaining = (
-                    None
-                    if limit is None
-                    else limit
-                    - budget["used"].get("cost_micro_usd", 0)
-                    - budget["reserved"].get("cost_micro_usd", 0)
-                )
-                if remaining is not None and remaining <= 0:
-                    raise ValueError("run_cost_budget_exhausted")
-                async with recovery.store.transaction(recovery.lease):
+                async with recovery.store.transaction(recovery.lease) as (_, budget):
+                    # Read under the same fence/row lock as key creation: a late
+                    # receipt must not change the balance between read and mint.
+                    limit = budget["limits"].get("cost_micro_usd")
+                    remaining = (
+                        None
+                        if limit is None
+                        else limit
+                        - budget["used"].get("cost_micro_usd", 0)
+                        - budget["reserved"].get("cost_micro_usd", 0)
+                    )
+                    if remaining is not None and remaining <= 0:
+                        raise ValueError("run_cost_budget_exhausted")
                     lease = await manager.ensure(
                         run_id=run_id,
                         requested_budget_micro_usd=remaining,

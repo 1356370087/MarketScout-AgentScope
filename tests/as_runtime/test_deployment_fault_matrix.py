@@ -5,6 +5,9 @@
   继续服务，审批后完成；
 - ``model_committed`` / ``tool_committed``：操作提交后容器内 ``os._exit(73)``
   （不经 finally）→ 新容器 resume 回放，外部副作用恰一次。
+- ``report_committed``：原生报告模型结果提交后立即退出，新容器重放正文，报告模型只调用一次；
+- ``approval_committed`` / ``event_committed``：审批消费或完成状态与事件
+  入库后立即退出，验证重启后决策不丢失、完成事件可重放。
 
 组件边界：PG 为真实容器（conftest 会话级），API 宿主为主镜像真实容器
 （只读 bind mount 当前源码，uvicorn 真实 HTTP）。网关/LiteLLM 组合故障与
@@ -157,6 +160,8 @@ async def _wait_status(client, run_id, wanted, timeout=60.0):
         last = response.json()
         if last["status"] in wanted:
             return last
+        if last["status"] in {"failed", "cancelled"}:
+            raise AssertionError(f"run entered unexpected terminal state: {last['status']}")
         await asyncio.sleep(0.5)
     events = await client.get(f"/runs/{run_id}/events")
     raise TimeoutError(
@@ -213,17 +218,17 @@ async def matrix(pg_url, tmp_path):
 
 @pytest.mark.parametrize(
     "window",
-    ["approval_pause", "model_committed", "tool_committed"],
+    ["approval_pause", "model_committed", "tool_committed", "approval_committed", "event_committed", "report_committed", "review_committed"],
 )
 async def test_api_container_crash_windows_recover_exactly_once(matrix, window):
-    """三个强杀窗口：外部副作用恰一次、恢复完成、账本与物理调用一致。"""
+    """部署强杀窗口：副作用恰一次、决策持久化、事件与账本一致。"""
     container, engine, evidence = matrix
     container.start(window)
     await container.wait_healthy()
     async with await container.client() as client:
         body = {
             "messages": [{"role": "user", "content": "市场规模"}],
-            "configurable": {"enable_human_in_loop": window == "approval_pause"},
+            "configurable": {"enable_human_in_loop": window in {"approval_pause", "approval_committed"}, "report_review_enabled": window == "review_committed", "report_review_fail_open": False},
         }
         response = await client.post("/runs", json=body)
         assert response.status_code == 200, response.text
@@ -251,7 +256,18 @@ async def test_api_container_crash_windows_recover_exactly_once(matrix, window):
             )
             assert decision.status_code == 200, decision.text
         else:
-            # 容器在首个模型/工具操作提交后自行退出，退出码必须是 73。
+            if window == "approval_committed":
+                paused = await _wait_status(client, run_id, {"awaiting_plan_approval"})
+                action_id = paused["pending_human_action"]["action_id"]
+                try:
+                    decision = await client.post(
+                        f"/runs/{run_id}/human-actions/{action_id}",
+                        json={"action": "approve"},
+                    )
+                    assert decision.status_code == 200, decision.text
+                except httpx.RemoteProtocolError:
+                    pass  # The durable decision may precede the HTTP response.
+            # 必须实际命中指定提交窗口，不能把正常退出算作故障注入成功。
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 code = container.exit_code()
@@ -264,15 +280,27 @@ async def test_api_container_crash_windows_recover_exactly_once(matrix, window):
             container.restart()
             await container.wait_healthy()
             await _wait_lease_expired(engine, run_id)
-            resume = await client.post(
-                f"/runs/{run_id}/resume", json={"configurable": {}}
-            )
-            assert resume.status_code == 202, resume.text
+            if window != "event_committed":
+                resume = await client.post(
+                    f"/runs/{run_id}/resume", json={"configurable": {}}
+                )
+                assert resume.status_code == 202, resume.text
+            if window == "approval_committed":
+                outline = await _wait_status(client, run_id, {"awaiting_outline_approval"})
+                snapshot, _ = await engine.load(run_id, "local-dev-user")
+                assert action_id in snapshot.decisions
+                decision = await client.post(
+                    f"/runs/{run_id}/human-actions/{outline['pending_human_action']['action_id']}",
+                    json={"action": "approve"},
+                )
+                assert decision.status_code == 200, decision.text
+            if window in {"approval_committed", "event_committed", "report_committed", "review_committed"}:
+                assert (evidence / "crash-window.txt").read_text().strip() == window
 
         completed = await _wait_status(client, run_id, {"completed"}, timeout=90)
         assert completed["output"]["markdown"]
         replay = await client.get(f"/runs/{run_id}/events")
-        assert "event: run.completed" in replay.text
+        assert replay.text.count("event: run.completed") == 1
 
     effects = (evidence / "tool-effects.txt").read_text(encoding="utf-8").splitlines()
     assert effects == ["effect"], f"tool side effect repeated: {effects}"
@@ -290,3 +318,10 @@ async def test_api_container_crash_windows_recover_exactly_once(matrix, window):
     assert used.get("tool_calls") == sum(row["actual"]["tool_calls"] for row in tool_ops)
     # 部署边界的账本一致性：物理模型调用数与 SQL 结算的 model_calls 相等。
     assert used.get("model_calls") == physical_calls, (used, physical_calls)
+
+    if window == "report_committed":
+        assert (evidence / "report-calls.txt").read_text(encoding="utf-8").splitlines() == ["final_report"]
+
+    if window == "review_committed":
+        assert (evidence / "review-calls.txt").read_text(encoding="utf-8").splitlines() == ["review"]
+        assert completed["output"]["report_review"]["decision"] == "pass"

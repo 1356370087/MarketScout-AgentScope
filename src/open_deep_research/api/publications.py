@@ -124,6 +124,7 @@ def build_publication_router(service):
         from open_deep_research.api.streams import (
             StreamOptions,
             _publication_event_iterator,
+            _publication_sse,
             _sse_headers,
         )
         from open_deep_research.configuration import Configuration
@@ -133,12 +134,26 @@ def build_publication_router(service):
 
         with http_errors():
             await store_for(run_id, principal.user_id)
+            snapshot = await service.snapshot(run_id, principal.user_id)
         try:
             cursor = int(last_event_id) if last_event_id is not None else after
         except ValueError:
             raise HTTPException(400, "invalid_publication_event_cursor") from None
         if cursor < 0:
             raise HTTPException(400, "invalid_publication_event_cursor")
+        if snapshot.get("read_only"):
+            try:
+                archive = service.history(run_id, principal.user_id)
+                records = await asyncio.to_thread(archive.publication_events)
+            except (OSError, ValueError):
+                raise HTTPException(409, "historical_artifact_corrupted") from None
+            if cursor > (records[-1].sequence if records else 0):
+                raise HTTPException(409, "publication_event_cursor_ahead")
+            return StreamingResponse(
+                (_publication_sse(event) for event in records if event.sequence > cursor),
+                media_type="text/event-stream",
+                headers=_sse_headers(),
+            )
         store = PublicationEventStore(run_id, runs_dir=str(service.runs_dir))
         if cursor > await asyncio.to_thread(store.last_sequence):
             raise HTTPException(409, "publication_event_cursor_ahead")

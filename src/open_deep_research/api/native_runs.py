@@ -314,6 +314,7 @@ class NativeRuns:
                     .get("output_format"),
                 ),
                 "markdown": state.final_report if state.status == "completed" else "",
+                **({"status": status} if state.status in {"failed", "cancelled"} else {}),
             },
             "last_event_id": projection.last_event_id,
             "events_url": f"/runs/{run_id}/events",

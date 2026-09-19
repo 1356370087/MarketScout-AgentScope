@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from open_deep_research.api.projections import _stable_output
@@ -103,6 +104,48 @@ class HistoricalRunReader:
         """Return recorded accounting facts; missing usage is not zero usage."""
         path = self._path("context/budget_ledger.json")
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def publication_events(self):
+        """Validate archived publication events without repairing their tail."""
+        from open_deep_research.events.publications import PublicationEventStore
+
+        return PublicationEventStore(self.run_id, runs_dir=self.root).read(read_only=True)
+
+    def usage(self, trace_path, unavailable):
+        """Project persisted usage without schema migration, backfill or reconciliation."""
+        from open_deep_research.observability.tracing import SQLiteTraceStore
+
+        budget = self.budget() or {}
+        reserved = {}
+        for item in budget.get("reservations", {}).values():
+            if item.get("status") in {"reserved", "uncertain"}:
+                dimension = item["dimension"]
+                amount = item.get("actual")
+                reserved[dimension] = reserved.get(dimension, 0) + int(
+                    item["reserved"] if amount is None else amount
+                )
+        try:
+            response = SQLiteTraceStore(trace_path, read_only=True).get_usage_accounting(
+                self.run_id, reserved_budget=reserved
+            )
+        except (OSError, sqlite3.Error):
+            response = unavailable
+        response["status"] = self.manifest.status
+        response["duration_ms"] = max(
+            0, int((self.manifest.updated_at - self.manifest.created_at) * 1000)
+        )
+        spend = self.manifest.litellm_spend_micro_usd
+        if spend is not None:
+            response["totals"]["cost"] = {
+                "estimated_cost_micro_usd": spend,
+                "cost_source": "stale_gateway_snapshot",
+                "price_table_hash": None,
+            }
+            response["cost_source"] = "stale_gateway_snapshot"
+            response["totals"]["budgets"]["cost_micro_usd"].update(
+                settled=spend, estimated=0, reserved=0
+            )
+        return response
 
     def snapshot(self):
         """Browser DTO without persisted credentials, configuration or checkpoint state."""

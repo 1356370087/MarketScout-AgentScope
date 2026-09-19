@@ -168,6 +168,9 @@ class NativeResearchStages:
             self.config_provider()
         ).enable_human_in_loop:
             return
+        if self.report_writer is not None and hasattr(self.report_writer, "outline"):
+            state.outline = await self.report_writer.outline(state, self.config_provider())
+            return PendingDecision(stage="outline_approval", question=state.outline)
         state.outline = await self.models.text(
             "final_report",
             "基于研究发现编写报告大纲，保留需求归属和用户修订反馈。\n"

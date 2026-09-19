@@ -321,11 +321,16 @@ class PublicationEventStore:
         self._validate_stored_event(event)
         return event
 
-    def read(self, after: int = 0) -> list[PublicationEvent]:
+    def read(self, after: int = 0, *, read_only: bool = False) -> list[PublicationEvent]:
         """Read events with sequence greater than ``after``."""
         _reject_symlink(self.path)
         if not self.path.exists():
             return []
+        if read_only:
+            return [
+                event for event in self._read_unlocked(repair_tail=False)
+                if event.sequence > after
+            ]
         self.root.mkdir(parents=True, exist_ok=True)
         with portalocker.Lock(str(self.lock_path), mode="a+b", timeout=30):
             return [event for event in self._read_unlocked() if event.sequence > after]

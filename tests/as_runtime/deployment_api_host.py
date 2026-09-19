@@ -11,6 +11,9 @@ evidence_dir。window 取值：
   ``docker kill`` 强杀（稳定窗口）。
 - ``model_committed`` / ``tool_committed``：journal 失败点在首个模型/工具
   操作**提交后** ``os._exit(73)``（不依赖 finally），验证部署边界回放。
+- ``report_committed``：原生报告模型结果提交后立即退出，新容器重放正文，报告模型只调用一次；
+- ``approval_committed`` / ``event_committed``：审批消费或完成状态与事件
+  已提交、宿主尚未继续处理时退出，验证持久决策及事件重放。
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -69,6 +73,16 @@ async def main() -> None:
     )
     from test_research_migration import Empty, ScriptedModel, cfg, evidence, tool_call
 
+    from open_deep_research.report import orchestrator
+    original_review = orchestrator.review_report
+
+    async def traced_review(*args, **kwargs):
+        result = await original_review(*args, **kwargs)
+        _append_evidence(evidence_dir / "reviews.jsonl", json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
+        return result
+
+    orchestrator.review_report = traced_review
+
     config = cfg(max_researcher_iterations=4, quality_evaluation_min_sources=1)
 
     class Model(ScriptedModel):
@@ -78,6 +92,25 @@ async def main() -> None:
 
         async def generate_structured_output(self, messages, schema):
             _append_evidence(evidence_dir / "model-calls.txt", "call:structured")
+            if schema.__name__ == "ReportReview":
+                _append_evidence(evidence_dir / "review-calls.txt", "review")
+                return StructuredResponse(content={
+                    "decision": "pass",
+                    "coverage": [
+                        {"requirement_id": requirement_id, "status": "covered", "explanation": "Synthetic evidence covers the fixture requirement."}
+                        for requirement_id in sorted(set(re.findall(
+                            r"COV-\d+-[a-f0-9]+", str(messages),
+                        )))
+                    ],
+                    "dimensions": {key: 1.0 for key in (
+                        "coverage", "citation_correctness", "contradictions",
+                        "unsupported_claims", "redundancy", "executive_readability",
+                    )},
+                    "citation_audit": [{
+                        "claim": "市场增长", "citation_target": "https://example.test/source",
+                        "supported": True, "evidence_ids": ["ev1"],
+                    }],
+                })
             return StructuredResponse(content={"research_brief": "市场规模"})
 
     class Factory:
@@ -105,6 +138,8 @@ async def main() -> None:
 
         def build(self, role):
             # 装配模型不等于物理调用；计数在真正调用入口完成。
+            if role == "report_review":
+                return Model([])
             return self.models[role]
 
         def descriptor(self, role):
@@ -117,6 +152,9 @@ async def main() -> None:
 
         async def complete_with_recovery(self, *args, **kwargs):
             _append_evidence(evidence_dir / "model-calls.txt", "call:complete")
+            role = args[0] if args else kwargs.get("role")
+            if role == "final_report":
+                _append_evidence(evidence_dir / "report-calls.txt", "final_report")
             return ChatResponse(
                 content=[
                     TextBlock(
@@ -149,6 +187,16 @@ async def main() -> None:
         async def crash(point):
             if point != "operation_committed":
                 return
+            if window == "review_committed":
+                if recovery.task_id.get().startswith("report:lead.report_review:"):
+                    _append_evidence(evidence_dir / "crash-window.txt", window)
+                    os._exit(73)
+                return
+            if window == "report_committed":
+                if recovery.stage.get().startswith("final_report_generation:"):
+                    _append_evidence(evidence_dir / "crash-window.txt", window)
+                    os._exit(73)
+                return
             if window not in {"model_committed", "tool_committed"}:
                 return
             wanted = "model" if window == "model_committed" else "tool"
@@ -165,6 +213,18 @@ async def main() -> None:
                 os._exit(73)
 
         recovery.failpoint = crash
+        original_save = store.save
+
+        async def crash_after_save(lease, snapshot, **kwargs):
+            await original_save(lease, snapshot, **kwargs)
+            if (
+                window == "approval_committed" and kwargs.get("command_id")
+                and snapshot.decisions
+            ) or (window == "event_committed" and snapshot.status == "completed"):
+                _append_evidence(evidence_dir / "crash-window.txt", window)
+                os._exit(73)
+
+        store.save = crash_after_save
         merged = run_config.compatibility_projection()
         effective = {
             "configurable": {
@@ -200,6 +260,7 @@ async def main() -> None:
             yield pipeline
         finally:
             recovery.failpoint = None
+            store.save = original_save
 
     async def prepare_config(http_request, principal):
         configurable = dict(http_request.configurable)

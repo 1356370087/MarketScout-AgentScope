@@ -535,54 +535,58 @@ class RecoveryStore:
     async def commit_operation(self, lease, key, result, *, actual=None):
         _no_credentials(result)
         async with self.transaction(lease) as (conn, row):
-            op = (
-                (
-                    await conn.execute(
-                        select(self.ops).where(
-                            self.ops.c.run_id == lease.run_id, self.ops.c.key == key
-                        )
+            await self._commit_operation(conn, row, lease, key, result, actual=actual)
+
+    async def _commit_operation(self, conn, row, lease, key, result, *, actual=None):
+        """Commit within the caller's fenced transaction, including reconciliation."""
+        op = (
+            (
+                await conn.execute(
+                    select(self.ops).where(
+                        self.ops.c.run_id == lease.run_id, self.ops.c.key == key
                     )
                 )
-                .mappings()
-                .one()
             )
-            if op["state"] == "committed":
-                original = {k: v for k, v in op["result"].items() if k != "usage_correction"}
-                incoming = {k: v for k, v in result.items() if k != "usage_correction"}
-                if digest(original) != digest(incoming):
-                    raise RecoveryConflict("conflicting operation receipt")
-                return
-            if op["state"] != "started" or op["fence"] != lease.fence:
-                raise FenceLost(
-                    "operation belongs to another epoch or needs reconciliation"
-                )
-            used, reserved = dict(row["used"]), dict(row["reserved"])
-            actual = dict(op["reservation"] if actual is None else actual)
-            for dimension, amount in actual.items():
-                BudgetDimension(dimension)
-                if amount < 0:
-                    raise ValueError("negative settlement")
-                # Keep actual accounting even if a provider violated its declared cap.
-                used[dimension] = used.get(dimension, 0) + amount
-            for dimension, amount in op["reservation"].items():
-                reserved[dimension] = reserved.get(dimension, 0) - amount
-            await conn.execute(
-                update(self.runs)
-                .where(self._identity(lease))
-                .values(used=used, reserved=reserved)
+            .mappings()
+            .one()
+        )
+        if op["state"] == "committed":
+            original = {k: v for k, v in op["result"].items() if k != "usage_correction"}
+            incoming = {k: v for k, v in result.items() if k != "usage_correction"}
+            if digest(original) != digest(incoming):
+                raise RecoveryConflict("conflicting operation receipt")
+            return
+        if op["state"] != "started" or op["fence"] != lease.fence:
+            raise FenceLost(
+                "operation belongs to another epoch or needs reconciliation"
             )
-            await conn.execute(
-                update(self.ops)
-                .where(self.ops.c.run_id == lease.run_id, self.ops.c.key == key)
-                .values(state="committed", result=result, actual=actual)
-            )
-            await self._event(
-                conn,
-                row,
-                "research.operation_committed",
-                {"operation_key": key, "kind": op["kind"], "usage": actual},
-                event_id=digest([lease.run_id, key]),
-            )
+        used, reserved = dict(row["used"]), dict(row["reserved"])
+        actual = dict(op["reservation"] if actual is None else actual)
+        for dimension, amount in actual.items():
+            BudgetDimension(dimension)
+            if amount < 0:
+                raise ValueError("negative settlement")
+            # Keep actual accounting even if a provider violated its declared cap.
+            used[dimension] = used.get(dimension, 0) + amount
+        for dimension, amount in op["reservation"].items():
+            reserved[dimension] = reserved.get(dimension, 0) - amount
+        await conn.execute(
+            update(self.runs)
+            .where(self._identity(lease))
+            .values(used=used, reserved=reserved)
+        )
+        await conn.execute(
+            update(self.ops)
+            .where(self.ops.c.run_id == lease.run_id, self.ops.c.key == key)
+            .values(state="committed", result=result, actual=actual)
+        )
+        await self._event(
+            conn,
+            row,
+            "research.operation_committed",
+            {"operation_key": key, "kind": op["kind"], "usage": actual},
+            event_id=digest([lease.run_id, key]),
+        )
 
     async def reconcile_model_usage(self, lease, key, *, receipt_id, input_tokens,
                                     output_tokens, cost_micro_usd=None):
@@ -614,6 +618,11 @@ class RecoveryStore:
                 "input_tokens": input_tokens, "output_tokens": output_tokens,
             }:
                 raise RecoveryConflict("provider receipt conflicts with reported tokens")
+            if op["kind"] == "gateway:model":
+                reported = (result.get("outcome") or {}).get("usage") or {}
+                if any(reported.get(k) is not None and reported[k] != facts[k]
+                       for k in ("input_tokens", "output_tokens")):
+                    raise RecoveryConflict("provider receipt conflicts with reported tokens")
             actual = dict(op["actual"])
             actual.update(facts)
             pricing = result.get("pricing_micro_usd")
@@ -633,43 +642,37 @@ class RecoveryStore:
                               event_id=digest([lease.run_id, key, "usage_correction"]))
 
     async def resolve_operation(self, lease, key, *, result=None, not_executed=False):
-        """Explicit reconciliation after a human/service checks the external effect."""
+        """Apply externally verified resolution and settlement in one transaction."""
+        if not_executed and result is not None:
+            raise ValueError("resolution cannot both report a result and deny execution")
+        if not not_executed:
+            if not isinstance(result, dict):
+                raise ValueError("verified operation result required")
+            _no_credentials(result)
         async with self.transaction(lease) as (conn, row):
-            op = (
-                (
-                    await conn.execute(
-                        select(self.ops).where(
-                            self.ops.c.run_id == lease.run_id, self.ops.c.key == key
-                        )
-                    )
-                )
-                .mappings()
-                .one()
-            )
+            op = (await conn.execute(select(self.ops).where(
+                self.ops.c.run_id == lease.run_id, self.ops.c.key == key
+            ))).mappings().one()
             if op["state"] == "committed":
-                raise RecoveryConflict("cannot reconcile a committed operation")
+                if not_executed:
+                    raise RecoveryConflict("cannot deny a committed operation")
+                await self._commit_operation(conn, row, lease, key, result)
+                return
             if not_executed:
                 reserved = dict(row["reserved"])
                 for dimension, amount in op["reservation"].items():
                     reserved[dimension] -= amount
-                await conn.execute(
-                    update(self.runs)
-                    .where(self._identity(lease))
-                    .values(reserved=reserved)
-                )
-                await conn.execute(
-                    delete(self.ops).where(
-                        self.ops.c.run_id == lease.run_id, self.ops.c.key == key
-                    )
-                )
+                await conn.execute(update(self.runs).where(self._identity(lease)).values(reserved=reserved))
+                await conn.execute(delete(self.ops).where(
+                    self.ops.c.run_id == lease.run_id, self.ops.c.key == key
+                ))
             else:
-                await conn.execute(
-                    update(self.ops)
-                    .where(self.ops.c.run_id == lease.run_id, self.ops.c.key == key)
-                    .values(state="started", fence=lease.fence)
-                )
-        if not not_executed:
-            await self.commit_operation(lease, key, result)
+                await conn.execute(update(self.ops).where(
+                    self.ops.c.run_id == lease.run_id, self.ops.c.key == key
+                ).values(state="started", fence=lease.fence))
+                await self._commit_operation(conn, row, lease, key, result)
+            await self._event(conn, row, "research.operation_resolved",
+                              {"operation_key": key, "not_executed": not_executed})
 
     async def events(self, run_id, user_id, *, after=0):
         await self.load(run_id, user_id)

@@ -86,7 +86,10 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
         # 演示模式无独立迁移概念：直接建表。
         async with build_storage(settings):
             return
-    engine = create_async_engine(settings.database_url, **build_engine_kwargs(settings))
+    # Migration existence checks must not mistake legacy public tables for
+    # tables owned by the native schema.
+    migration_kwargs = {"connect_args": {"server_settings": {"search_path": settings.database_schema}}}
+    engine = create_async_engine(settings.database_url, **migration_kwargs)
     try:
         await ensure_runtime_schema(engine, settings.database_schema)
         # SDK 的 auto_migrate 会另建连接且丢弃 engine_kwargs，误读 public
@@ -122,21 +125,21 @@ async def run_storage_migrations(settings: ASRuntimeSettings | None = None) -> N
         settings.database_url,
         create_tables=False,
         auto_migrate=False,
-        engine_kwargs=build_engine_kwargs(settings),
+        engine_kwargs=migration_kwargs,
     )
     async with storage:
         from open_deep_research.agentscope_runtime.durable import DurableCommandBridge
         from open_deep_research.agentscope_runtime.pgbus import PostgreSQLMessageBus
         async with PostgreSQLMessageBus(
             settings.database_url, table_prefix=settings.bus_table_prefix,
-            engine_kwargs=build_engine_kwargs(settings),
+            engine_kwargs=migration_kwargs,
         ), DurableCommandBridge(
             settings.database_url, table_prefix=settings.bus_table_prefix,
-            engine_kwargs=build_engine_kwargs(settings),
+            engine_kwargs=migration_kwargs,
         ):
             pass
         from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
-        recovery = RecoveryStore(settings.database_url, engine_kwargs=build_engine_kwargs(settings))
+        recovery = RecoveryStore(settings.database_url, engine_kwargs=migration_kwargs)
         try:
             await recovery.create_tables()
         finally:
