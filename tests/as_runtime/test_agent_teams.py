@@ -226,6 +226,81 @@ async def test_cycle_and_stale_dependency_version(env):
         )
 
 
+@pytest.mark.parametrize("reverse,status", [
+    (False, "pending"), (False, "failed"), (False, "cancelled"),
+    (False, "completed"), (True, "pending"),
+])
+async def test_unresolved_dependency_removal_cannot_race_claim(env, reverse, status):
+    team, pool = await setup(env)
+    who, token = await member(team, pool, "worker")
+    await task(team, "old")
+    await task(team, "aggregate", ["old"])
+    async with pool.acquire() as db:
+        await db.execute(
+            "UPDATE research_team_tasks SET status=$2,admission_status='rejected' WHERE run_id=$1 AND task_id='old'",
+            team.lease.run_id, status,
+        )
+    before = {row["task_id"]: row for row in await team.service.tasks(team.lease.run_id)}
+    target = "old" if reverse else "aggregate"
+    removal = {"task_id": target, "version": before[target]["version"],
+               "removeBlocks" if reverse else "removeBlockedBy": ["aggregate" if reverse else "old"]}
+
+    async def remove():
+        with pytest.raises(ValueError, match="unresolved_dependency_requires_atomic_replacement"):
+            await team.command("unsafe-remove", "task_update", removal)
+
+    results = await asyncio.gather(remove(), *(claim(team, who, token, "aggregate") for _ in range(5)))
+    assert all(not result["claimed"] for result in results[1:])
+    after = {row["task_id"]: row for row in await team.service.tasks(team.lease.run_id)}
+    assert after["aggregate"]["blockedBy"] == ["old"]
+    assert after["aggregate"]["version"] == before["aggregate"]["version"]
+    assert after["old"]["version"] == before["old"]["version"]
+
+
+async def test_atomic_dependency_replacement_blocks_until_new_result_accepted(env):
+    team, pool = await setup(env)
+    who, token = await member(team, pool, "worker")
+    await task(team, "old")
+    await task(team, "other")
+    await task(team, "replacement")
+    await task(team, "aggregate", ["old", "other"])
+    async with pool.acquire() as db:
+        await db.execute(
+            "UPDATE research_team_tasks SET status='completed',admission_status=CASE WHEN task_id='old' THEN 'rejected' ELSE 'accepted' END WHERE run_id=$1 AND task_id=ANY($2::text[])",
+            team.lease.run_id, ["old", "other"],
+        )
+    row = next(r for r in await team.service.tasks(team.lease.run_id) if r["task_id"] == "aggregate")
+    for additions in (["old"], ["other"], ["missing"]):
+        with pytest.raises(ValueError):
+            await team.command("invalid:" + additions[0], "task_update", {
+                "task_id": "aggregate", "version": row["version"],
+                "removeBlockedBy": ["old"], "addBlockedBy": additions,
+            })
+    payload = {"task_id": "aggregate", "version": row["version"],
+               "removeBlockedBy": ["old"], "addBlockedBy": ["replacement"]}
+    results = await asyncio.gather(
+        team.command("replace", "task_update", payload),
+        *(claim(team, who, token, "aggregate") for _ in range(10)),
+    )
+    assert all(not result["claimed"] for result in results[1:])
+    assert await team.command("replace", "task_update", payload) == results[0]
+    rows = {r["task_id"]: r for r in await team.service.tasks(team.lease.run_id)}
+    assert rows["aggregate"]["blockedBy"] == ["other", "replacement"]
+    assert rows["old"]["blocks"] == []
+    assert rows["replacement"]["blocks"] == ["aggregate"]
+    assert not (await claim(team, who, token, "aggregate"))["claimed"]
+    # Removing an already accepted predecessor remains a supported operation.
+    await team.command("remove-accepted", "task_update", {
+        "task_id": "aggregate", "version": rows["aggregate"]["version"], "removeBlockedBy": ["other"],
+    })
+    async with pool.acquire() as db:
+        await db.execute(
+            "UPDATE research_team_tasks SET status='completed',admission_status='accepted_with_caveats' WHERE run_id=$1 AND task_id='replacement'",
+            team.lease.run_id,
+        )
+    assert (await claim(team, who, token, "aggregate"))["claimed"]
+
+
 async def test_plan_inheritance_rejection_and_explicit_approval(env):
     team, pool = await setup(env, "plan_approval")
     who, token = await member(team, pool, "planner")

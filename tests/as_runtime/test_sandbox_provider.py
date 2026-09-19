@@ -186,10 +186,12 @@ async def test_gateway_replays_native_outcome_without_second_charge():
     runtime = GatewayRuntime(
         Configuration(sandbox_root_signing_key=base64.b64encode(b"x" * 32).decode())
     )
-    journal, posts, attempts = {}, [], []
+    journal, posts, attempts, activities = {}, [], [], []
 
     async def post(path, body):
         posts.append(path)
+        if path.endswith("/task-activity"):
+            activities.append(body)
         if path.endswith("/get"):
             return {"found": bool(journal), "operation": journal.copy()}
         if path.endswith("/transition"):
@@ -219,3 +221,7 @@ async def test_gateway_replays_native_outcome_without_second_charge():
     assert second == first and attempts == ["op"]
     assert posts.count("/internal/sandbox/budgets/reserve") == 1
     assert posts.count("/internal/sandbox/budgets/settle") == 1
+    assert [event.event_type for event in activities] == ["model.started", "model.completed"]
+    assert all(event.task_id == "t" and event.fence_token == 1 for event in activities)
+    assert activities[-1].payload["input_tokens"] == 3
+    assert "messages" not in activities[-1].payload

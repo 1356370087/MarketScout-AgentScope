@@ -245,14 +245,13 @@ class TaskActivityPublishRequest(ServiceRequest):
 
     The Gateway container runs on a read-only filesystem, so its model-call
     activity is forwarded here and persisted by the API process that owns
-    the writable runs directory. Fence validation is intentionally omitted:
-    the observability emit sites hold no fence token, and the service
-    signature already proves the same root-key trust as every other
-    internal request.
+    the writable runs directory. Native runs use the signed run fence;
+    legacy emitters retain their service-signature authorization.
     """
     model_config = ConfigDict(extra="forbid")
 
     run_id: str
+    fence_token: int = 0
     task_id: str = ""
     event_type: str
     kind: str = "model"
@@ -983,17 +982,24 @@ def build_internal_sandbox_router(
     async def publish_task_activity_internal(
         request: TaskActivityPublishRequest,
     ) -> dict[str, Any]:
-        context = resolve_run(request.run_id)
-        if context is None:
-            raise HTTPException(status_code=404, detail="run_not_active")
-        try:
-            authorize(request, context)
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        ledger = await native_ledger_for(request)
+        if ledger is not None:
+            config = getattr(ledger, "config", None)
+            if config is None:
+                raise HTTPException(503, "native_resources_unavailable")
+        else:
+            context = resolve_run(request.run_id)
+            if context is None:
+                raise HTTPException(status_code=404, detail="run_not_active")
+            try:
+                authorize(request, context)
+            except ValueError as exc:
+                raise HTTPException(status_code=401, detail=str(exc)) from exc
+            config = context.config
         from open_deep_research.events.task_activity import publish_task_activity
 
         event = await publish_task_activity(
-            context.config,
+            config,
             request.event_type,
             task_id=request.task_id or None,
             update_run_summary=request.update_run_summary,

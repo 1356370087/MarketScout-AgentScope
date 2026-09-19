@@ -73,8 +73,8 @@ class TaskUpdateInput(BaseModel):
     metadata: dict = Field(default_factory=dict)
     addBlocks: list[str] = Field(default_factory=list)
     addBlockedBy: list[str] = Field(default_factory=list)
-    removeBlocks: list[str] = Field(default_factory=list)
-    removeBlockedBy: list[str] = Field(default_factory=list)
+    removeBlocks: list[str] = Field(default_factory=list, description="移除反向依赖；未解除的阻塞必须为同一下游在本次调用中加入替代前置，否则事务拒绝。补证优先更新下游的 removeBlockedBy/addBlockedBy。")
+    removeBlockedBy: list[str] = Field(default_factory=list, description="移除前置依赖；尚未完成且质量接纳的前置不可单独删除。先创建补证任务，再在同一次调用中 addBlockedBy 新任务并 removeBlockedBy 旧任务。")
 
 
 class ProposalDecision(BaseModel):

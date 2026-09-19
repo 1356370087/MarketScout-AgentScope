@@ -400,7 +400,8 @@ class TestPendingSignalMapping:
             },
         )
 
-        async def fake_call(_path, _tool, _input, _context):
+        async def fake_call(_path, _tool, _input, _context, *, gateway_url=None, task_token=None):
+            assert gateway_url is None and task_token is None
             return outcome
 
         monkeypatch.setattr(

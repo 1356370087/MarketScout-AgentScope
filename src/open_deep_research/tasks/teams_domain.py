@@ -121,6 +121,38 @@ async def edit_dependencies(db, run, task_id, payload):
             edges.append(
                 (other if reverse else task_id, task_id if reverse else other, remove)
             )
+    # A remove-only command must not expose an unresolved downstream task to
+    # autonomous claims before Lead sends a second command adding remediation.
+    # Normalize both API directions first, and require a genuinely new edge for
+    # the same dependent task in this transaction (not an existing/no-op edge).
+    for target, blocker, remove in set(edges):
+        if not remove:
+            continue
+        unresolved = await db.fetchval(
+            """SELECT 1 FROM research_team_dependencies d
+               JOIN research_team_tasks b ON b.run_id=d.run_id AND b.task_id=d.blocker_id
+               WHERE d.run_id=$1 AND d.task_id=$2 AND d.blocker_id=$3
+                 AND (b.status<>'completed' OR b.admission_status NOT IN ('accepted','accepted_with_caveats'))""",
+            run, target, blocker,
+        )
+        if not unresolved:
+            continue
+        replacements = [
+            other for dependent, other, removing in edges
+            if dependent == target and not removing and (target, other, True) not in edges
+        ]
+        replacement = await db.fetchval(
+            """SELECT 1 FROM unnest($3::text[]) AS candidate(blocker_id)
+               WHERE NOT EXISTS (SELECT 1 FROM research_team_dependencies d
+                   WHERE d.run_id=$1 AND d.task_id=$2 AND d.blocker_id=candidate.blocker_id)
+               LIMIT 1""",
+            run, target, replacements,
+        )
+        if not replacement:
+            raise ValueError(
+                f"unresolved_dependency_requires_atomic_replacement: {target} <- {blocker}; "
+                "use one TaskUpdate on the dependent task with removeBlockedBy and addBlockedBy"
+            )
     for target, blocker, remove in sorted(set(edges)):
         found = await db.fetchval(
             """UPDATE research_team_tasks SET version=version+1 WHERE run_id=$1 AND task_id=$2

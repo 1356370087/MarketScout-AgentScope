@@ -60,6 +60,7 @@ from open_deep_research.sandbox.internal_api import (
     ServiceRequest,
     ToolBudgetReserveRequest,
     ToolBudgetSettleRequest,
+    TaskActivityPublishRequest,
 )
 from open_deep_research.sandbox.policy import egress_target_from_url
 from open_deep_research.sandbox.schema import (
@@ -2369,6 +2370,26 @@ class GatewayRuntime:
         async with lock:
             return await self._invoke_model_operation_v2_locked(request, context)
 
+    async def _model_activity_v2(self, request, context, event_type, *, outcome=None):
+        """Forward safe Wire V2 model activity through the signed API boundary."""
+        payload = {"provider": "litellm", "model": request.model}
+        if outcome is not None:
+            payload.update({key: outcome.usage.get(key, 0) for key in ("input_tokens", "output_tokens")})
+            if outcome.error_code:
+                payload["error_code"] = outcome.error_code
+        try:
+            event = self.internal.signed(
+                TaskActivityPublishRequest, run_id=request.run_id, task_id=request.task_id,
+                fence_token=context.fence_token, event_type=event_type,
+                kind="model", phase="reasoning",
+                status={"model.started": "running", "model.completed": "success", "model.failed": "error"}[event_type],
+                title="模型调用", summary="", payload=payload, update_run_summary=True,
+                dedupe_key=f"gateway-v2:{request.logical_operation_id}:{event_type}",
+            )
+            await self.internal.post("/internal/sandbox/task-activity", event)
+        except Exception as exc:
+            logger.warning("Wire V2 activity unavailable: %s", type(exc).__name__)
+
     async def lookup_model_operation_v2(self, request, context):
         """Read the matching V2 receipt without reserving or dispatching again."""
         lookup = self.internal.signed(
@@ -2473,6 +2494,7 @@ class GatewayRuntime:
             )
             await budget.flush_pending()
             dispatched = True
+            await self._model_activity_v2(request, context, "model.started")
             outcome = await gateway.complete(request.model_copy(update={"tools": tools, "tool_choice": tool_choice}))
             budget.settle_model_call(
                 operation_key,
@@ -2493,6 +2515,7 @@ class GatewayRuntime:
                 error_type=None,
             )
             await self.internal.post("/internal/sandbox/operations/transition", transition)
+            await self._model_activity_v2(request, context, "model.completed", outcome=outcome)
             return outcome
         except asyncio.CancelledError:
             # The Worker (and its budget authority) may vanish mid-dispatch; the
@@ -2557,6 +2580,7 @@ class GatewayRuntime:
             )
             with suppress(httpx.HTTPError, ValueError, KeyError):
                 await self.internal.post("/internal/sandbox/operations/transition", transition)
+            await self._model_activity_v2(request, context, "model.failed", outcome=outcome)
             return outcome
 def create_gateway_app(
     runtime: GatewayRuntime,

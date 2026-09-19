@@ -465,6 +465,7 @@ async def _publish_via_internal_api(
         request = client.signed(
             TaskActivityPublishRequest,
             run_id=run_id,
+            fence_token=int(metadata.get("run_fence_token") or 0),
             task_id=resolved_task_id,
             event_type=event_type,
             update_run_summary=update_run_summary,
