@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from datetime import date
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -29,10 +29,6 @@ from open_deep_research.models.protocol_errors import (
     MessageCodecError,
     ModelGatewayError,
 )
-from open_deep_research.models.resolution import (
-    build_model_config,
-    is_dashscope_qwen,
-)
 from open_deep_research.quality.contract import (
     AdmissionStatus,
     HandoffPolicyInput,
@@ -53,25 +49,11 @@ from open_deep_research.tools.governance import classify_llm_retryable_error
 
 
 def get_trace_recorder(*args, **kwargs):
-    from open_deep_research.observability import get_trace_recorder as legacy
-    return legacy(*args, **kwargs)
+    from open_deep_research.observability.tracing import get_trace_recorder as get
+    return get(*args, **kwargs)
 
 async def publish_task_activity(*args, **kwargs):
     from open_deep_research.events.task_activity import publish_task_activity as legacy
-    return await legacy(*args, **kwargs)
-
-async def complete_model(*args, **kwargs):
-    from open_deep_research.models.invocation import complete_model as legacy
-    return await legacy(*args, **kwargs)
-
-async def invoke_with_model_fallback(*args, **kwargs):
-    from open_deep_research.models.fallback import invoke_with_model_fallback as legacy
-    return await legacy(*args, **kwargs)
-
-async def invoke_model_with_retry_observability(*args, **kwargs):
-    from open_deep_research.observability import (
-        invoke_model_with_retry_observability as legacy,
-    )
     return await legacy(*args, **kwargs)
 
 
@@ -396,39 +378,6 @@ Propose rejected for unsupported exclusive requirements, unsupported factual cla
 """
 
 
-def _build_quality_model(configurable: Configuration, config: RuntimeConfig):
-    """Create a provider-isolated evaluator model.
-
-    DashScope Qwen receives its documented thinking and JSON-mode options.
-    Thinking-only Qwen Max models omit ``max_tokens`` because DashScope warns
-    that an explicit cap can truncate structured JSON before the answer begins.
-    Other providers rely on the strict JSON system prompt so OpenAI-only request
-    fields are not leaked into native Anthropic, Google, or other clients.
-    """
-    model_spec = configurable.quality_evaluation_model
-    configured_base_url = configurable.quality_evaluation_base_url
-    is_dashscope = is_dashscope_qwen(model_spec, configured_base_url)
-    kwargs = build_model_config(
-        model_spec,
-        configurable.quality_evaluation_model_max_tokens,
-        config,
-        role="quality_evaluation",
-        tags=False,
-        configured_base_url=configured_base_url,
-        temperature=configurable.quality_evaluation_temperature,
-    )
-    if kwargs.get("api_key") is None:
-        kwargs.pop("api_key")
-    from open_deep_research.models.resolution import (
-        get_configurable_model_template,
-    )
-
-    model = get_configurable_model_template().with_config(kwargs)
-    if is_dashscope:
-        return model.bind(response_format={"type": "json_object"})
-    return model
-
-
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
         text = content
@@ -632,153 +581,12 @@ def _quality_activity_dedupe_key(
     return f"activity:quality:tool-result:{digest}"
 
 
-async def _evaluate_json(
-    schema: type[BaseModel],
-    system_prompt: str,
-    payload: dict[str, Any],
-    config: RuntimeConfig,
-    *,
-    span_name: str,
-    protocol_validator: Callable[[BaseModel], list[str]] | None = None,
-) -> BaseModel:
-    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+class NativeQualityRuntimeMissing(RuntimeError):
+    """A quality gate must not reconstruct an ungoverned legacy model."""
 
-    configurable = Configuration.from_runnable_config(config)
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(
-            content="Evaluate this JSON research payload:\n"
-            + json.dumps(payload, ensure_ascii=False)
-        ),
-    ]
-    encountered_protocol_errors: list[str] = []
-    # Cross-provider routing is the most likely source of wrapped/degenerate
-    # payloads, so both branches normalize through the same helpers.
-    expected_fields = (
-        {
-            field_name
-            for field_name in schema.model_fields
-            if re.search(rf"\b{re.escape(field_name)}\b", system_prompt)
-        }
-        or None
-    )
 
-    def _normalize_payload(raw: dict[str, Any]) -> dict[str, Any]:
-        normalized = _normalize_quality_payload(
-            _unwrap_single_key_schema_payload(schema, raw, expected_fields=expected_fields)
-        )
-        # Only Judge-owned fields cross this boundary. Runtime diagnostics remain
-        # serializable for persistence, but must never be supplied by the model
-        # (including old journal responses containing evaluator_error="null").
-        judge_fields = schema.model_json_schema()["properties"]
-        return {key: value for key, value in normalized.items() if key in judge_fields}
-
-    # A protocol-repair attempt is a new logical request, so it deliberately
-    # restarts at the configured primary before traversing the fallback chain.
-    repair_attempts = (
-        configurable.max_structured_output_retries
-        if configurable.model_backend == "litellm"
-        else 2
-    )
-    for attempt in range(repair_attempts):
-        async def invoke_quality_candidate(
-            candidate_model: str,
-            request_messages: list,
-        ):
-            candidate_configurable = configurable.model_copy(
-                update={"quality_evaluation_model": candidate_model}
-            )
-            model = _build_quality_model(candidate_configurable, config)
-            return await invoke_model_with_retry_observability(
-                model,
-                request_messages,
-                config,
-                span_name=(
-                    span_name
-                    if attempt == 0
-                    else f"{span_name}.protocol_repair"
-                ),
-                agent_role="quality_evaluator",
-                model_name=candidate_model,
-                stage="finalizing",
-            )
-
-        if configurable.model_backend == "litellm":
-            result = await complete_model(
-                messages,
-                config,
-                role="quality_evaluation",
-                stage="finalizing",
-                model=configurable.quality_evaluation_model,
-                max_output_tokens=configurable.quality_evaluation_model_max_tokens,
-                span_name=(
-                    span_name
-                    if attempt == 0
-                    else f"{span_name}.protocol_repair"
-                ),
-                output_schema=schema,
-                temperature=configurable.quality_evaluation_temperature,
-                output_payload_transform=_normalize_payload,
-            )
-            # Journal replay can return an already validated assessment from an
-            # older schema; apply the same ownership boundary to that result.
-            result = schema.model_validate(_normalize_payload(result.model_dump()))
-            response_text = result.model_dump_json()
-        else:
-            response = await invoke_with_model_fallback(
-                invoke_quality_candidate,
-                messages,
-                primary_model=configurable.quality_evaluation_model,
-                model_fallbacks=configurable.model_fallbacks,
-                role="quality_evaluation",
-                config=config,
-            )
-            response_text = _content_text(response.content)
-            try:
-                response_payload = json.loads(response_text)
-            except json.JSONDecodeError:
-                object_start = response_text.find("{")
-                object_end = response_text.rfind("}")
-                if object_start < 0 or object_end <= object_start:
-                    raise
-                response_payload = json.loads(
-                    response_text[object_start : object_end + 1]
-                )
-            if not isinstance(response_payload, dict):
-                raise ValueError("Quality evaluator must return one JSON object")
-            result = schema.model_validate(_normalize_payload(response_payload))
-        protocol_errors = (
-            protocol_validator(result) if protocol_validator else []
-        )
-        if not protocol_errors:
-            if hasattr(result, "protocol_repair_count"):
-                setattr(result, "protocol_repair_count", attempt)
-            if hasattr(result, "protocol_errors"):
-                setattr(
-                    result,
-                    "protocol_errors",
-                    list(dict.fromkeys(encountered_protocol_errors)),
-                )
-            return result
-        encountered_protocol_errors.extend(protocol_errors)
-        if attempt + 1 >= repair_attempts:
-            raise QualityProtocolError(
-                list(dict.fromkeys(encountered_protocol_errors))
-            )
-        messages.extend(
-            [
-                AIMessage(content=response_text[:8000]),
-                HumanMessage(
-                    content=(
-                        "Your JSON violates the quality decision protocol. "
-                        "Correct the contradictions and return one replacement JSON "
-                        "object only. Protocol errors: "
-                        + json.dumps(protocol_errors, ensure_ascii=False)
-                    )
-                ),
-            ]
-        )
-    raise AssertionError("quality protocol repair loop exhausted")
+async def _evaluate_json(*args, **kwargs):
+    raise NativeQualityRuntimeMissing("native_quality_evaluator_required")
 
 
 def _unwrap_single_key_schema_payload(
@@ -2199,6 +2007,8 @@ async def evaluate_tool_results(
         )
         result = ToolResultAssessment.model_validate(result)
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
+        if isinstance(exc, NativeQualityRuntimeMissing):
+            raise
         evaluator_failed = True
         protocol_errors = _protocol_errors_from_exception(exc)
         failure_diagnostics = {
@@ -2588,6 +2398,8 @@ async def evaluate_subagent_handoff(
         )
         result = HandoffAssessment.model_validate(result)
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
+        if isinstance(exc, NativeQualityRuntimeMissing):
+            raise
         evaluator_failed = True
         protocol_errors = _protocol_errors_from_exception(exc)
         if configurable.quality_evaluation_fail_open:

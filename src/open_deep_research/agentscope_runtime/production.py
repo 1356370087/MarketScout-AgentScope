@@ -52,6 +52,12 @@ class RunResources:
     local_zones: frozenset = frozenset({ToolExecutionZone.HOST_CONTROL})
 
 
+def user_egress_intent(messages):
+    """Anchor network review to bounded user messages, excluding retrieved text."""
+    text = " ".join(message.get_text_content() or "" for message in messages if message.role == "user")
+    return " ".join(text.split())[:500]
+
+
 class ProductionRunFactory:
     """Compose persisted runs without importing QueryEngine or trusting HTTP identity.
 
@@ -89,6 +95,7 @@ class ProductionRunFactory:
             **snapshot.application.get("request_configurable", {}),
             **config["configurable"],
         }
+        config["metadata"] = {**snapshot.application.get("request_metadata", {}), **config["metadata"]}
         config["metadata"].update(
             run_id=recovery.lease.run_id,
             deployment_surface="http",
@@ -96,6 +103,7 @@ class ProductionRunFactory:
             run_fence_token=recovery.lease.fence,
             source_selection=snapshot.application.get("source_selection", {}),
             publication_theme=snapshot.application.get("publication_theme", {}),
+            sandbox_egress_intent=user_egress_intent(snapshot.messages),
         )
         selected = snapshot.application.get("selected_source_snapshots", [])
         if selected:

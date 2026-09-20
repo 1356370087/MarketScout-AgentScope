@@ -14,10 +14,7 @@ from open_deep_research.tools.base import (
 )
 
 _REGISTRY_EXPORTS = {
-    "assemble_toolset",
-    "bindable_definitions",
-    "get_all_tools",
-    "prepare_toolset",
+    "prepare_existing_toolset",
     "render_tool_guidance",
 }
 
@@ -36,12 +33,9 @@ __all__ = [
     "ToolContext",
     "ToolOrigin",
     "ToolResult",
-    "assemble_toolset",
-    "bindable_definitions",
     "build_tool",
     "build_tool_registry",
-    "get_all_tools",
-    "prepare_toolset",
+    "prepare_existing_toolset",
     "render_tool_guidance",
     "serialize_tool_output",
     "tool_to_model_definition",

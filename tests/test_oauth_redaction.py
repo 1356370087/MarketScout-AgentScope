@@ -6,9 +6,9 @@ import logging
 
 import pytest
 
-from open_deep_research.observability.core import _redact_text
+from open_deep_research.observability.tracing import _redact_text
 from open_deep_research.security.redaction import redact_text
-from open_deep_research.tools.mcp import oauth
+from open_deep_research.agentscope_runtime import mcp as oauth
 
 
 class _Response:

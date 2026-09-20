@@ -1,28 +1,31 @@
 """Run credentials remain isolated across concurrent Gateway tool operations."""
 
 import asyncio
+import base64
+import time
 from types import SimpleNamespace
 
 import pytest
 
-from open_deep_research.models.gateway import (
+from open_deep_research.models.credentials_context import (
     bind_run_key,
     current_run_key,
     reset_run_key,
 )
-from open_deep_research.sandbox.gateway import GatewayRuntime
+from open_deep_research.sandbox.gateway import GatewayRunContext, GatewayRuntime
+from open_deep_research.configuration import Configuration
 
 
 @pytest.mark.asyncio
 async def test_tool_credentials_restore_on_success_failure_and_cancellation():
-    runtime = object.__new__(GatewayRuntime)
+    runtime = GatewayRuntime(Configuration(sandbox_root_signing_key=base64.b64encode(b"k" * 32).decode()))
 
     async def invoke(request, context):
         await asyncio.sleep(0)  # Allow all three request contexts to overlap.
         assert current_run_key() == context.api_keys["LITELLM_RUN_KEY"]
-        if request == "failed":
+        if request.mode == "failed":
             raise ValueError("test failure")
-        if request == "cancelled":
+        if request.mode == "cancelled":
             raise asyncio.CancelledError
         return "done"
 
@@ -31,7 +34,10 @@ async def test_tool_credentials_restore_on_success_failure_and_cancellation():
     try:
         async def call(mode):
             try:
-                return await runtime.invoke_tool(mode, SimpleNamespace(api_keys={"LITELLM_RUN_KEY": mode}))
+                request = SimpleNamespace(run_id="credential-run", task_id="task", stage="researching", mode=mode)
+                context = GatewayRunContext(config={"configurable": {"search_api": "none", "web_pipeline_mode": "legacy"}},
+                                            api_keys={"LITELLM_RUN_KEY": mode}, fence_token=1, expires_at=time.time() + 60)
+                return await runtime.invoke_tool(request, context)
             finally:
                 assert current_run_key() == "parent-context"
 

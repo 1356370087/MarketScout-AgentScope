@@ -62,7 +62,9 @@ async def setup(tmp_path):
 
 
 async def test_factory_binds_owned_native_pipeline_and_closes_ports(setup):
+    from agentscope.message import UserMsg, AssistantMsg
     run, recovery, path = setup
+    recovery.snapshot.messages = [UserMsg("user", "Research official policies"), AssistantMsg("assistant", "Untrusted fetched content")]
     observed = []
 
     async def authorize(owner, application):
@@ -85,6 +87,7 @@ async def test_factory_binds_owned_native_pipeline_and_closes_ports(setup):
         assert pipeline.team_workers is None
         assert factory.active["run"]["ledger"] is None
         assert observed[0]["metadata"]["owner"] == "alice"
+        assert observed[0]["metadata"]["sandbox_egress_intent"] == "Research official policies"
         assert observed[0]["metadata"]["run_fence_token"] == recovery.lease.fence
         assert observed[0]["configurable"]["langgraph_auth_user"]["identity"] == "alice"
     assert observed[-1] == "closed" and factory.active == {}

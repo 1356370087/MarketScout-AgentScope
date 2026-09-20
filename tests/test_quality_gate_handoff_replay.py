@@ -3,11 +3,11 @@
 import re
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from open_deep_research.report.runtime import AIMessage, HumanMessage
+from tests.report_helpers import patch_report_model
 
 from open_deep_research.events.task_activity import TaskActivityStore
-from open_deep_research.models.codec import MessageCodecError
-from open_deep_research.models.gateway import ModelGatewayError
+from open_deep_research.models.protocol_errors import MessageCodecError, ModelGatewayError
 from open_deep_research.quality import gate
 from open_deep_research.quality.contract import build_research_coverage_contract
 from open_deep_research.report import assembly, build_report, orchestrator
@@ -41,7 +41,7 @@ async def test_quality_gate_preserves_writer_number_to_source_binding(monkeypatc
     async def fake_invoke(*_args, **_kwargs):
         return AIMessage(content=writer_markdown)
 
-    monkeypatch.setattr(assembly, "invoke_model_with_retry_observability", fake_invoke)
+    patch_report_model(monkeypatch, fake_invoke)
     update = await build_report(
         {
             "messages": [],
@@ -50,6 +50,12 @@ async def test_quality_gate_preserves_writer_number_to_source_binding(monkeypatc
             "notes": [
                 "[US project](https://www.energy.gov/lpo/redwood-materials)",
                 "[EU regulation](https://eur-lex.europa.eu/eli/reg/2023/1542/oj)",
+            ],
+            "evidence_registry": [
+                {"evidence_id": "EV-US", "claim": "US project", "supporting_excerpt": "US project",
+                 "source_title": "US project", "source_url": "https://www.energy.gov/lpo/redwood-materials", "security_status": "accepted"},
+                {"evidence_id": "EV-EU", "claim": "EU regulation", "supporting_excerpt": "EU regulation",
+                 "source_title": "EU regulation", "source_url": "https://eur-lex.europa.eu/eli/reg/2023/1542/oj", "security_status": "accepted"},
             ],
         },
         {"configurable": {"runs_dir": str(tmp_path)}, "metadata": {"run_id": "citation-replay"}},
@@ -92,7 +98,7 @@ async def test_unresolvable_citation_uses_evidence_limited_recovery(monkeypatch,
         assert len(records) == 1
         return "# Partial\n\nUS project [EV-1].\n\n## 来源\n[EV-1] [US](https://www.energy.gov/lpo/redwood-materials)"
 
-    monkeypatch.setattr(assembly, "invoke_model_with_retry_observability", fake_invoke)
+    patch_report_model(monkeypatch, fake_invoke)
     monkeypatch.setattr(orchestrator, "build_evidence_limited_report", restricted)
     update = await build_report(
         {

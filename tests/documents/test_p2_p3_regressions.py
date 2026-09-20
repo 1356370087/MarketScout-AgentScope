@@ -28,10 +28,43 @@ from open_deep_research.report.orchestrator import (
 from open_deep_research.tools.governance import AgentRole
 from open_deep_research.tools.registry import prepare_existing_toolset
 from open_deep_research.tools.research_complete import research_complete
-from open_deep_research.tools.think_tool import think_tool
-from open_deep_research.tools.web_research import pipeline
-from open_deep_research.web.models import SearchRequest
+from open_deep_research.agentscope_runtime.research_agents import _control_tool, _Thought
+from open_deep_research.tools.base import ToolContext, ToolResult
+from open_deep_research.agentscope_runtime import web_tools as pipeline
+from open_deep_research.web.models import SearchRequest, WebResearchResult, GapAnalysis, BudgetSnapshot
 from open_deep_research.web.pipeline import rank_candidates
+
+
+async def _thought(*args):
+    return ToolResult(output="thought")
+
+
+think_tool = _control_tool("think_tool", _Thought, _thought)
+
+
+async def _discover_native(monkeypatch, request, config, fake_search):
+    batches = []
+
+    class Client:
+        async def search(self, query, **kwargs):
+            results = await fake_search([query], **kwargs)
+            return results[0] if results else {"query": query, "results": []}
+
+    class Pipeline:
+        def __init__(self, *, search, **kwargs):
+            self.search = search
+
+        async def run(self, request, **kwargs):
+            batches.append(await self.search(request))
+            return WebResearchResult(request=request, gap_analysis=GapAnalysis(
+                decision="complete", reason="fixture", budget=BudgetSnapshot()))
+
+    monkeypatch.setattr(pipeline, "WebResearchPipeline", Pipeline)
+    tool = pipeline.web_research_tool(lambda: config, None, pipeline.WebFetchLedger(),
+                                      tavily_client_factory=lambda _: Client())
+    await tool.call(tool.input_schema(objective=request.objective, queries=request.queries),
+                    ToolContext(config=config, role="researcher", tool_call_id="source-discovery"))
+    return batches[0]
 
 
 @pytest.mark.asyncio
@@ -86,7 +119,6 @@ async def test_specific_url_matching_uses_canonical_identity(
             }
         ]
 
-    monkeypatch.setattr(pipeline, "tavily_search_async", fake_search)
     config = {
         "configurable": {"search_api": "tavily"},
         "metadata": {
@@ -100,9 +132,9 @@ async def test_specific_url_matching_uses_canonical_identity(
         },
     }
 
-    batch = await pipeline._discover_web_candidates(  # noqa: SLF001
+    batch = await _discover_native(monkeypatch,
         SearchRequest(objective="report", queries=["report"], candidate_limit=10),
-        config,
+        config, fake_search,
     )
 
     assert captured
@@ -181,7 +213,6 @@ async def test_specific_domain_queries_keep_the_full_cartesian_product(
         captured.append(list(queries))
         return []
 
-    monkeypatch.setattr(pipeline, "tavily_search_async", fake_search)
     domains = [f"source-{index}.example.com" for index in range(4)]
     config = {
         "configurable": {"search_api": "tavily"},
@@ -193,20 +224,20 @@ async def test_specific_domain_queries_keep_the_full_cartesian_product(
         },
     }
 
-    await pipeline._discover_web_candidates(  # noqa: SLF001
+    await _discover_native(monkeypatch,
         SearchRequest(
             objective="report",
             queries=["market", "risk", "outlook"],
             candidate_limit=10,
         ),
-        config,
+        config, fake_search,
     )
 
-    assert captured == [[
+    assert [query for batch in captured for query in batch] == [
         f"site:{domain} {query}"
         for domain in domains
         for query in ("market", "risk", "outlook")
-    ]]
+    ]
 
 
 @pytest.mark.asyncio
@@ -220,7 +251,6 @@ async def test_specific_domain_queries_are_bounded_with_an_overflow_warning(
         captured.append(list(queries))
         return []
 
-    monkeypatch.setattr(pipeline, "tavily_search_async", fake_search)
     domains = [f"source-{index}.example.com" for index in range(100)]
     config = {
         "configurable": {"search_api": "tavily"},
@@ -232,18 +262,18 @@ async def test_specific_domain_queries_are_bounded_with_an_overflow_warning(
         },
     }
 
-    batch = await pipeline._discover_web_candidates(  # noqa: SLF001
+    batch = await _discover_native(monkeypatch,
         SearchRequest(
             objective="report",
             queries=["market", "risk", "outlook"],
             candidate_limit=10,
         ),
-        config,
+        config, fake_search,
     )
 
     assert captured
-    assert len(captured[0]) == pipeline.MAX_SPECIFIC_DOMAIN_QUERIES
-    assert len(captured[0]) < len(domains) * 3
+    assert sum(map(len, captured)) == pipeline.MAX_SPECIFIC_DOMAIN_QUERIES
+    assert sum(map(len, captured)) < len(domains) * 3
     assert any("specific_domain_query_limit_exceeded" in error for error in batch.errors)
 
 

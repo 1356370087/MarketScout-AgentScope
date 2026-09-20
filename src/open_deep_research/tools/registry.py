@@ -2,67 +2,19 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Iterable, cast
 
 from open_deep_research.config_types import RuntimeConfig
 
-from open_deep_research.configuration import Configuration, SearchAPI
-from open_deep_research.documents.contracts import SourceMode, selection_from_config
+from open_deep_research.configuration import Configuration
+from open_deep_research.documents.contracts import selection_from_config
 from open_deep_research.tools.base import (
     Tool,
-    ToolEffect,
-    ToolOrigin,
     build_tool_registry,
     tools_to_model_definitions,
 )
 from open_deep_research.tools.governance import AgentRole, filter_tools_by_permission
-
-
-def _researcher_builtins() -> tuple[Tool, ...]:
-    """Load transitional built-ins only when their catalog is requested."""
-    from open_deep_research.tools.anthropic_web_search import anthropic_web_search
-    from open_deep_research.tools.fetch_url import fetch_url
-    from open_deep_research.tools.fetch_webpage import fetch_webpage
-    from open_deep_research.tools.openai_web_search import openai_web_search
-    from open_deep_research.tools.read_file import read_file
-    from open_deep_research.tools.research_complete import research_complete
-    from open_deep_research.tools.search_documents import search_documents
-    from open_deep_research.tools.shell_exec import shell_exec
-    from open_deep_research.tools.tavily_search import tavily_search
-    from open_deep_research.tools.think_tool import think_tool
-    from open_deep_research.tools.web_research import web_research
-    from open_deep_research.tools.write_file import write_file
-
-    return (
-        research_complete,
-        think_tool,
-        tavily_search,
-        openai_web_search,
-        anthropic_web_search,
-        web_research,
-        fetch_url,
-        fetch_webpage,
-        shell_exec,
-        read_file,
-        write_file,
-        search_documents,
-    )
-
-
-async def load_mcp_tools(*args, **kwargs):
-    """Load the transitional MCP adapter on demand."""
-    from open_deep_research.tools.mcp import load_mcp_tools as load
-
-    return await load(*args, **kwargs)
-
-
-async def load_browser_mcp_tools(*args, **kwargs):
-    """Load the transitional browser adapter on demand."""
-    from open_deep_research.tools.mcp import load_browser_mcp_tools as load
-
-    return await load(*args, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,186 +34,6 @@ def render_tool_guidance(tools: Iterable[Tool], config: RuntimeConfig) -> str:
         if section and section.strip():
             sections.append(section.strip())
     return "\n\n".join(sections)
-
-
-async def get_search_tool(search_api: SearchAPI) -> list[Tool]:
-    """Return the folder-owned provider search tool for compatibility callers."""
-    from open_deep_research.tools.anthropic_web_search import anthropic_web_search
-    from open_deep_research.tools.openai_web_search import openai_web_search
-    from open_deep_research.tools.tavily_search import tavily_search
-
-    provider_tools: dict[SearchAPI, Tool] = {
-        SearchAPI.TAVILY: tavily_search,
-        SearchAPI.OPENAI: openai_web_search,
-        SearchAPI.ANTHROPIC: anthropic_web_search,
-    }
-    selected = provider_tools.get(SearchAPI(search_api))
-    return [selected] if selected is not None else []
-
-
-async def assemble_toolset(
-    role: AgentRole,
-    config: RuntimeConfig,
-    *,
-    supervisor_tools: Iterable[Tool] | None = None,
-) -> list[Tool]:
-    """Assemble enabled static and dynamic tools, then enforce uniqueness."""
-    from open_deep_research.skills import load_skill_tools
-    from open_deep_research.tools.adapters import adapt_langchain_tool
-
-    configurable = Configuration.from_runnable_config(config)
-    if role is AgentRole.SUPERVISOR:
-        tools = list(supervisor_tools or [])
-    else:
-        tools = [tool for tool in _researcher_builtins() if tool.is_enabled(config)]
-        selection = selection_from_config(config)
-        if selection.mode is SourceMode.DOCUMENTS:
-            tools = [
-                tool
-                for tool in tools
-                if tool.origin
-                not in {
-                    ToolOrigin.SEARCH,
-                    ToolOrigin.MCP,
-                    ToolOrigin.BROWSER,
-                    ToolOrigin.PROVIDER_NATIVE,
-                }
-                and tool.name != "fetch_webpage"
-            ]
-        elif selection.mode is SourceMode.SPECIFIC:
-            tools = [
-                tool
-                for tool in tools
-                if tool.origin
-                not in {
-                    ToolOrigin.MCP,
-                    ToolOrigin.BROWSER,
-                    ToolOrigin.PROVIDER_NATIVE,
-                }
-                and (
-                    tool.origin is not ToolOrigin.SEARCH
-                    or tool.name in {"web_research", "fetch_url"}
-                )
-                and tool.name != "fetch_webpage"
-            ]
-        existing_names = {tool.name for tool in tools}
-        if os.getenv("SANDBOX_TASK_TOKEN"):
-            from open_deep_research.sandbox.gateway_catalog import (
-                load_gateway_catalog_tools,
-            )
-
-            tools.extend(
-                await load_gateway_catalog_tools(
-                    role.value,
-                    config,
-                    existing_names,
-                )
-            )
-        else:
-            loaded_mcp_tools = (
-                []
-                if selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}
-                else await load_mcp_tools(config, existing_names)
-            )
-            mcp_tools = [
-                tool
-                if isinstance(tool, Tool)
-                else adapt_langchain_tool(
-                    tool,
-                    origin=ToolOrigin.MCP,
-                    effect=ToolEffect.DESTRUCTIVE,
-                    retryable=True,
-                )
-                for tool in loaded_mcp_tools
-            ]
-            tools.extend(mcp_tools)
-            existing_names.update(tool.name for tool in mcp_tools)
-
-            loaded_browser_tools = (
-                []
-                if selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}
-                else await load_browser_mcp_tools(config, existing_names)
-            )
-            browser_effects = (
-                configurable.browser_mcp_config.tool_effects
-                if configurable.browser_mcp_config is not None
-                else {}
-            )
-            browser_tools = [
-                tool
-                if isinstance(tool, Tool)
-                else adapt_langchain_tool(
-                    tool,
-                    origin=ToolOrigin.BROWSER,
-                    effect=ToolEffect(
-                        browser_effects.get(
-                            tool.name,
-                            ToolEffect.DESTRUCTIVE.value,
-                        )
-                    ),
-                    retryable=True,
-                )
-                for tool in loaded_browser_tools
-            ]
-            if configurable.web_pipeline_mode == "enforced":
-                browser_tools = [
-                    tool
-                    for tool in browser_tools
-                    if tool.effect is ToolEffect.READ_ONLY
-                ]
-            tools.extend(browser_tools)
-            existing_names.update(tool.name for tool in browser_tools)
-
-            skill_tools = (
-                []
-                if selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}
-                else await load_skill_tools(config, existing_names)
-            )
-            tools.extend(
-                tool
-                if isinstance(tool, Tool)
-                else adapt_langchain_tool(
-                    tool,
-                    origin=ToolOrigin.SKILL,
-                    retryable=True,
-                )
-                for tool in skill_tools
-            )
-        if selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}:
-            allowed_names = {"ResearchComplete", "think_tool", "search_documents"}
-            if selection.mode is SourceMode.SPECIFIC and selection.web_enabled:
-                allowed_names.update({"web_research", "fetch_url"})
-            if os.getenv("SANDBOX_TASK_TOKEN"):
-                from open_deep_research.tools.team.definitions import MEMBER_TOOL_NAMES
-                allowed_names.update(MEMBER_TOOL_NAMES)
-            tools = [tool for tool in tools if tool.name in allowed_names]
-    if role is AgentRole.RESEARCHER and not os.getenv("SANDBOX_TASK_TOKEN"):
-        from open_deep_research.tasks.team_protocol import member_identity
-        identity = member_identity.get()
-        if identity is not None:
-            from open_deep_research.tasks.registry import get_task_registry
-            from open_deep_research.tasks.team_bridge import member_dependencies
-            from open_deep_research.tools.team import build_team_tools
-            record = get_task_registry().get(str(config.get("metadata", {}).get("task_id", "")))
-            if record and record.run_id == identity.run_id:
-                tools.extend(build_team_tools(await member_dependencies(record), lead=False))
-    build_tool_registry(tools)
-    if os.getenv("SANDBOX_TASK_TOKEN"):
-        from open_deep_research.sandbox.gateway_tool import proxy_gateway_tools
-
-        tools = proxy_gateway_tools(tools)
-    return tools
-
-
-async def prepare_toolset(
-    role: AgentRole,
-    config: RuntimeConfig,
-    *,
-    supervisor_tools: Iterable[Tool] | None = None,
-) -> ToolAssembly:
-    """Assemble, permission-filter, project, and document a role toolset."""
-    tools = await assemble_toolset(role, config, supervisor_tools=supervisor_tools)
-    return await prepare_existing_toolset(tools, role, config)
 
 
 async def prepare_existing_toolset(
@@ -307,30 +79,4 @@ async def prepare_existing_toolset(
     )
 
 
-async def get_all_tools(config: RuntimeConfig) -> list[Tool]:
-    """Compatibility name for researcher tool assembly."""
-    return await assemble_toolset(AgentRole.RESEARCHER, config)
-
-
-async def bindable_definitions(
-    role: AgentRole,
-    config: RuntimeConfig,
-    *,
-    supervisor_tools: Iterable[Tool] | None = None,
-) -> list[dict]:
-    """Return the permitted definitions bound for a role."""
-    return (
-        await prepare_toolset(role, config, supervisor_tools=supervisor_tools)
-    ).definitions
-
-
-__all__ = [
-    "ToolAssembly",
-    "assemble_toolset",
-    "bindable_definitions",
-    "get_all_tools",
-    "get_search_tool",
-    "prepare_existing_toolset",
-    "prepare_toolset",
-    "render_tool_guidance",
-]
+__all__ = ["ToolAssembly", "prepare_existing_toolset", "render_tool_guidance"]

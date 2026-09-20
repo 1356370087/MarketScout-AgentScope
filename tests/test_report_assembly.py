@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
+from tests.report_helpers import patch_report_model
+from open_deep_research.report.runtime import AIMessage
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
 
-from open_deep_research.report import assembly as assembly_module
 from open_deep_research.report import build_report
 from open_deep_research.report.assembly import (
     AssemblyResult,
@@ -26,26 +26,8 @@ def _config(**configurable: Any) -> RunnableConfig:
     }
 
 
-class _FakeStructuredModel:
-    """Stands in for a concrete chat model so build_structured_model doesn't need an API key.
-
-    The actual LLM call is mocked (invoke_model_with_retry_observability), so the
-    model object only needs to support .with_structured_output().
-    """
-
-    def with_structured_output(self, _schema, **_kwargs):
-        return self
-
-    def with_config(self, _config):
-        return self
 
 
-def _patch_init_chat_model(monkeypatch):
-    monkeypatch.setattr(
-        assembly_module,
-        "_writer_model_template",
-        _FakeStructuredModel(),
-    )
 
 
 def test_sectioned_assemble_ordering():
@@ -195,10 +177,7 @@ async def test_comparison_matrix_builds_multi_section_report(monkeypatch):
             return outline
         return AIMessage(content=f"[{span_name}] body")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
-    _patch_init_chat_model(monkeypatch)
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -231,10 +210,7 @@ async def test_sectioned_report_appends_sources_from_findings(monkeypatch):
             return outline
         return AIMessage(content="section text [Source](https://x.io)")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
-    _patch_init_chat_model(monkeypatch)
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],

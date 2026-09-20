@@ -62,7 +62,7 @@ async def load_skill_tools(config, existing_tool_names: Optional[set] = None) ->
 
     v1 skills are context-only and contribute no tools. This remains the single
     extension point: future tool-contributing skills must return project
-    ``Tool`` objects with ``origin=ToolOrigin.SKILL``. External implementations
-    are adapted by ``tools.utils.get_all_tools`` before governance.
+    ``Tool`` objects with ``origin=ToolOrigin.SKILL`` and enter the native
+    catalog before ``tools.registry.prepare_existing_toolset`` governance.
     """
     return []

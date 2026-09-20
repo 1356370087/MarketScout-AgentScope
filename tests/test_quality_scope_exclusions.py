@@ -1,6 +1,6 @@
 """Excluding a research topic must not create positive evidence requirements."""
 import pytest
-from langchain_core.messages import HumanMessage
+from open_deep_research.report.runtime import HumanMessage
 
 from open_deep_research.quality.contract import (
     build_research_coverage_contract,

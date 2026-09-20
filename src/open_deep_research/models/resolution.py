@@ -1,6 +1,6 @@
 """Shared provider-neutral model parsing and configuration helpers.
 
-This module intentionally depends only on LangChain, the standard library, and
+This module intentionally depends only on the standard library and
 the small :mod:`model_capabilities` rule set.  Keeping it below configuration,
 agents, tools, and report assembly makes the model boundary safe to reuse from
 all of those layers without creating import cycles.
@@ -11,13 +11,8 @@ from __future__ import annotations
 import os
 from collections import ChainMap
 from collections.abc import Mapping
-from functools import lru_cache
 from typing import Any
 
-def init_chat_model(*args: Any, **kwargs: Any) -> Any:
-    """Legacy-only lazy constructor; native configuration must not load LangChain."""
-    from langchain.chat_models import init_chat_model as legacy_init
-    return legacy_init(*args, **kwargs)
 
 from open_deep_research.models.capabilities import (
     dashscope_qwen_enable_thinking,
@@ -26,17 +21,7 @@ from open_deep_research.models.capabilities import (
 _DASHSCOPE_DEFAULT_BASE_URL = (
     "https://dashscope.aliyuncs.com/compatible-mode/v1"
 )
-_CONFIGURABLE_MODEL_FIELDS = (
-    "model",
-    "max_tokens",
-    "max_retries",
-    "api_key",
-    "base_url",
-    "default_headers",
-    "headers",
-    "extra_body",
-    "temperature",
-)
+
 
 _PROVIDER_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
@@ -318,60 +303,3 @@ def build_model_config(
         extra_body["thinking_budget"] = max_tokens
         model_config.pop("max_tokens", None)
     return model_config
-
-
-@lru_cache(maxsize=1)
-def get_configurable_model_template() -> Any:
-    """Return the process-wide lazily initialized configurable chat template."""
-    sandbox_api_process = os.getenv("SANDBOX_ENABLED", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    } and os.getenv("SANDBOX_GATEWAY_PHYSICAL_PROCESS", "").lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    if os.getenv("SANDBOX_TASK_TOKEN") or sandbox_api_process:
-        from open_deep_research.sandbox.gateway_model import GatewayChatModel
-
-        return GatewayChatModel()
-    return init_chat_model(configurable_fields=_CONFIGURABLE_MODEL_FIELDS)
-
-
-_POOLED_CHAT_MODELS: dict[tuple[int, str], Any] = {}
-
-
-def pooled_chat_model(
-    model_config: dict[str, Any],
-    builder: Any = init_chat_model,
-) -> Any:
-    """Return one process-shared chat model for tool-side helper calls.
-
-    Search summarization, semantic rerank, and evidence extraction build a
-    fresh provider client per call; under first-wave concurrency that is a
-    TCP connection storm against self-hosted endpoints (observed as 24
-    ``network_error`` retry exhaustions in E2E round 9). Pooling by config
-    fingerprint reuses the provider HTTP connection pool. The builder
-    identity is part of the key so test monkeypatches never observe a stale
-    pooled client.
-    """
-    import json
-
-    try:
-        fingerprint = json.dumps(model_config, sort_keys=True, default=str)
-    except (TypeError, ValueError):
-        return builder(**model_config)
-    key = (id(builder), fingerprint)
-    model = _POOLED_CHAT_MODELS.get(key)
-    if model is None:
-        model = builder(**model_config)
-        _POOLED_CHAT_MODELS[key] = model
-    return model
-
-
-def clear_pooled_chat_models() -> None:
-    """Drop pooled helper clients (tests and configuration reloads)."""
-    _POOLED_CHAT_MODELS.clear()

@@ -206,6 +206,9 @@ async def test_ten_rubrics_and_journal_replay(tmp_path, crash_after_receipt):
                 assert replayed == metrics
                 assert len(factory.calls) == calls
             assert factory.calls.count("OverallQualityScore") == 1
+            assert factory.calls.count("EvidenceIntegrityScore") == 1
+            assert "GroundednessScore" not in factory.calls
+            assert "CitationAccuracyScore" not in factory.calls
             assert {m["evaluator"] for m in replayed} == set(METRICS)
             budget = await store.budget("judge", "evaluation")
             assert budget["used"]["model_calls"] == len(factory.calls)

@@ -5,8 +5,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-# Web 管线仍复用旧工具适配器，迁移期间显式安装桥接依赖。
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --extra legacy-bridge
+# Web、MCP 和模型调用使用 AgentScope 原生实现，不安装旧框架桥接依赖。
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 COPY config ./config
 RUN addgroup --gid 65532 gateway && \
     adduser --uid 65532 --gid 65532 --disabled-password --gecos "" gateway

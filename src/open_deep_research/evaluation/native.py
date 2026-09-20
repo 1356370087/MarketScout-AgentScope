@@ -64,6 +64,14 @@ async def evaluate_output(
     results = []
 
     for metric in METRICS:
+        if metric in {"groundedness", "citation_accuracy"}:
+            key = metric + "_score"
+            canonical = next((row for row in results if row["evaluator"] == "evidence_integrity" and row["key"] == key), None)
+            if canonical is None:
+                canonical = next((row for row in results if row["evaluator"] == "evidence_integrity" and row["status"] != "scored"), None)
+            if canonical is not None:
+                results.append({**canonical, "evaluator": metric, "key": key})
+                continue
 
         async def invoke(schema, messages, operation):
             from open_deep_research.agentscope_runtime.recovery import ApprovalPending

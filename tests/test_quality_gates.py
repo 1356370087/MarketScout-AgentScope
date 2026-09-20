@@ -4,18 +4,14 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import ToolMessage
+from tests.quality_helpers import patch_native_evaluator
 
-from open_deep_research.agents import deep_researcher
 from open_deep_research.configuration import Configuration
 from open_deep_research.quality.contract import ResearchCoverageContract
 from open_deep_research.quality.gate import (
-    TOOL_RESULT_EVALUATION_PROMPT,
     ToolResultAssessment,
     _bounded_evidence_records,
     _bounded_tool_results,
-    _build_quality_model,
-    _evaluate_json,
     _evidence_optional_requirement_ids,
     _normalize_quality_payload,
     _unwrap_single_key_schema_payload,
@@ -24,103 +20,12 @@ from open_deep_research.quality.gate import (
     evaluate_subagent_handoff,
     evaluate_tool_results,
 )
-from open_deep_research.tools.utils import get_notes_from_tool_calls
 
 
-def test_quality_model_uses_json_mode_and_disables_thinking(monkeypatch) -> None:
-    captured: dict = {}
-
-    class FakeModel:
-        def with_config(self, kwargs):
-            captured["init"] = kwargs
-            return self
-
-        def bind(self, **kwargs):
-            captured["bind"] = kwargs
-            return self
-
-    monkeypatch.setattr(
-        "open_deep_research.models.resolution.get_configurable_model_template",
-        lambda: FakeModel(),
-    )
-    configurable = Configuration(
-        quality_evaluation_model="openai:qwen3.7-plus",
-        quality_evaluation_base_url="https://example.test/v1",
-    )
-
-    _build_quality_model(configurable, {"configurable": {}})
-
-    # A self-hosted OpenAI-compatible endpoint is not DashScope: thinking is
-    # disabled through the chat-template kwargs channel and the DashScope
-    # JSON-mode binding (which routes langchain through the SDK's parse()
-    # helper) must not be applied.
-    assert captured["init"]["extra_body"] == {
-        "chat_template_kwargs": {"enable_thinking": False}
-    }
-    assert "bind" not in captured or not captured["bind"]
-    assert "JSON" in TOOL_RESULT_EVALUATION_PROMPT
 
 
-def test_quality_model_enables_thinking_for_qwen_max_series(monkeypatch) -> None:
-    captured: dict = {}
-
-    class FakeModel:
-        def with_config(self, kwargs):
-            captured["init"] = kwargs
-            return self
-
-        def bind(self, **kwargs):
-            captured["bind"] = kwargs
-            return self
-
-    monkeypatch.setattr(
-        "open_deep_research.models.resolution.get_configurable_model_template",
-        lambda: FakeModel(),
-    )
-    configurable = Configuration(
-        quality_evaluation_model="openai:qwen3.7-max-2026-05-17",
-        quality_evaluation_base_url=(
-            "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-        ),
-    )
-
-    _build_quality_model(configurable, {"configurable": {}})
-
-    assert captured["init"]["extra_body"] == {
-        "enable_thinking": True,
-        "thinking_budget": configurable.quality_evaluation_model_max_tokens,
-    }
-    assert "max_tokens" not in captured["init"]
-    assert captured["bind"]["response_format"] == {"type": "json_object"}
 
 
-def test_quality_model_applies_configured_temperature(monkeypatch) -> None:
-    captured: dict = {}
-
-    class FakeModel:
-        def with_config(self, kwargs):
-            captured["init"] = kwargs
-            return self
-
-        def bind(self, **kwargs):
-            return self
-
-    monkeypatch.setattr(
-        "open_deep_research.models.resolution.get_configurable_model_template",
-        lambda: FakeModel(),
-    )
-    monkeypatch.delenv("QUALITY_EVALUATION_TEMPERATURE", raising=False)
-
-    configurable = Configuration(quality_evaluation_model="openai:gpt-4.1")
-    _build_quality_model(configurable, {"configurable": {}})
-    assert "temperature" not in captured["init"]
-
-    configurable = Configuration(
-        quality_evaluation_model="openai:gpt-4.1",
-        quality_evaluation_temperature=0.1,
-    )
-    _build_quality_model(configurable, {"configurable": {}})
-    assert captured["init"]["temperature"] == 0.1
 
 
 def test_quality_temperature_reads_env_and_freezes_into_run_contract(
@@ -688,51 +593,6 @@ def test_quality_payload_wraps_provider_single_gap_strings() -> None:
     ]
 
 
-@pytest.mark.asyncio
-async def test_runtime_judge_repairs_strict_single_key_schema_wrapper(
-    monkeypatch,
-) -> None:
-    wrapped = {
-        "assessment": {
-            "decision": "complete",
-            "relevance": 5,
-            "source_quality": 5,
-            "evidence_coverage": 5,
-            "corroboration": 5,
-            "unresolved_conflicts": [],
-            "missing_information": [],
-            "suggested_queries": [],
-            "reason": "The evidence is complete.",
-        }
-    }
-
-    async def fake_invoke(*_args, **_kwargs):
-        return SimpleNamespace(content=json.dumps(wrapped))
-
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
-        fake_invoke,
-    )
-
-    result = await _evaluate_json(
-        ToolResultAssessment,
-        (
-            "Return decision, relevance, source_quality, evidence_coverage, "
-            "corroboration, unresolved_conflicts, missing_information, "
-            "suggested_queries, and reason as JSON."
-        ),
-        {"payload": "value"},
-        {"configurable": {}, "metadata": {"run_id": "wrapped-runtime"}},
-        span_name="quality.wrapper_test",
-    )
-
-    assert isinstance(result, ToolResultAssessment)
-    assert result.decision == "complete"
-    assert result.reason == "The evidence is complete."
 
 
 def test_runtime_judge_does_not_unwrap_incomplete_or_ambiguous_payload() -> None:
@@ -786,216 +646,16 @@ def test_runtime_judge_does_not_unwrap_incomplete_or_ambiguous_payload() -> None
     )
 
 
-def test_final_notes_include_only_accepted_research_handoffs() -> None:
-    messages = [
-        ToolMessage(content="planning", name="think_tool", tool_call_id="think-1"),
-        ToolMessage(
-            content='{"status":"rejected_by_supervisor_quality_gate"}',
-            name="ConductResearch",
-            tool_call_id="research-1",
-        ),
-        ToolMessage(
-            content="accepted evidence https://primary.example/paper",
-            name="ConductResearch",
-            tool_call_id="research-2",
-        ),
-        ToolMessage(
-            content='{"content":"selected evidence https://primary.example/detail"}',
-            name="ReadResearchArtifact",
-            tool_call_id="artifact-1",
-        ),
-        ToolMessage(
-            content='{"error_type":"validation_error"}',
-            name="ReadResearchArtifact",
-            tool_call_id="artifact-2",
-        ),
-    ]
-
-    assert get_notes_from_tool_calls(messages) == [
-        "accepted evidence https://primary.example/paper",
-        '{"content":"selected evidence https://primary.example/detail"}',
-    ]
 
 
-@pytest.mark.asyncio
-async def test_assessment_node_routes_retry_back_to_researcher(monkeypatch) -> None:
-    captured: dict = {}
-
-    async def fake_evaluate(*_args, **_kwargs):
-        captured["evidence_registry"] = _kwargs["evidence_registry"]
-        return ToolResultAssessment(
-            decision="retry",
-            relevance=4,
-            source_quality=4,
-            evidence_coverage=2,
-            corroboration=2,
-            missing_information=["independent confirmation"],
-            suggested_queries=["official confirmation"],
-            reason="More evidence is needed.",
-        )
-
-    monkeypatch.setattr(deep_researcher, "evaluate_tool_results", fake_evaluate)
-    state = {
-        "research_topic": "topic",
-        "tool_call_iterations": 1,
-        "pending_tool_results": [{
-            "name": "web_search",
-            "content": "Evidence https://a.example and https://b.example",
-            "error": False,
-        }],
-        "evidence_registry": [{
-            "claim": "Cumulative evidence",
-            "source_url": "https://a.example",
-        }],
-    }
-
-    command = await deep_researcher.assess_research_results(
-        state,
-        {"configurable": {"max_react_tool_calls": 10}},
-    )
-
-    assert command.goto == "researcher"
-    assert command.update["result_assessment"]["decision"] == "retry"
-    assert "assessment JSON" in command.update["researcher_messages"][0].content
-    assert captured["evidence_registry"] == state["evidence_registry"]
 
 
-@pytest.mark.asyncio
-async def test_assessment_node_routes_complete_to_compression(monkeypatch) -> None:
-    async def fake_evaluate(*_args, **_kwargs):
-        return ToolResultAssessment(
-            decision="complete",
-            relevance=5,
-            source_quality=4,
-            evidence_coverage=4,
-            corroboration=4,
-            reason="Evidence is sufficient.",
-        )
-
-    monkeypatch.setattr(deep_researcher, "evaluate_tool_results", fake_evaluate)
-    state = {
-        "research_topic": "topic",
-        "tool_call_iterations": 1,
-        "pending_tool_results": [{
-            "name": "web_search",
-            "content": "Evidence https://a.example and https://b.example",
-            "error": False,
-        }],
-    }
-
-    command = await deep_researcher.assess_research_results(
-        state,
-        {"configurable": {"max_react_tool_calls": 10}},
-    )
-
-    assert command.goto == "compress_research"
 
 
-@pytest.mark.asyncio
-async def test_assessment_node_stops_after_fetch_budget_exhaustion_streak(
-    monkeypatch,
-) -> None:
-    """A Worker must not spend more model turns behind a deterministic budget wall."""
-    async def fake_evaluate(*_args, **_kwargs):
-        return ToolResultAssessment(
-            decision="retry",
-            relevance=4,
-            source_quality=1,
-            evidence_coverage=1,
-            corroboration=1,
-            missing_information=["Fetch budget is exhausted."],
-            suggested_queries=["official documentation"],
-            reason="No document could be fetched.",
-        )
-
-    monkeypatch.setattr(deep_researcher, "evaluate_tool_results", fake_evaluate)
-    exhausted_iteration = {
-        "gap_analysis": {
-            "budget": {
-                "fetch_attempts": 0,
-                "fetched_documents": 0,
-                "reserved_fetches": 0,
-                "exhaustion_scope": "task",
-            },
-        }
-    }
-    state = {
-        "research_topic": "topic",
-        "tool_call_iterations": 3,
-        "pending_tool_results": [{
-            "name": "web_research",
-            "content": "{}",
-            "error": False,
-        }],
-        "web_research_iterations": [
-            exhausted_iteration,
-            exhausted_iteration,
-            exhausted_iteration,
-        ],
-    }
-
-    command = await deep_researcher.assess_research_results(
-        state,
-        {"configurable": {"max_react_tool_calls": 20}},
-    )
-
-    assert command.goto == "compress_research"
-    assert command.update["completion_decision"]["reason"] == "fetch_budget_exhausted"
-    assert command.update["completion_decision"]["scope"] == "task"
 
 
-def test_fetch_budget_streak_ignores_malformed_worker_telemetry() -> None:
-    assert deep_researcher.fetch_budget_exhausted_iteration_streak([{
-        "gap_analysis": {
-            "decision": "budget_exhausted",
-            "budget": {
-                "fetch_attempts": "not-an-integer",
-                "fetched_documents": 0,
-                "reserved_fetches": 0,
-            },
-        }
-    }]) == 0
 
 
-@pytest.mark.asyncio
-async def test_assessment_feedback_is_bounded_and_remains_json(monkeypatch) -> None:
-    async def fake_evaluate(*_args, **_kwargs):
-        return ToolResultAssessment(
-            decision="retry",
-            relevance=4,
-            source_quality=4,
-            evidence_coverage=2,
-            corroboration=2,
-            missing_information=["missing " + ("x" * 10_000)],
-            suggested_queries=["query " + ("y" * 10_000)],
-            reason="reason " + ("z" * 10_000),
-        )
-
-    monkeypatch.setattr(deep_researcher, "evaluate_tool_results", fake_evaluate)
-    state = {
-        "research_topic": "topic",
-        "tool_call_iterations": 1,
-        "pending_tool_results": [{
-            "name": "web_search",
-            "content": "Evidence https://a.example and https://b.example",
-            "error": False,
-        }],
-    }
-
-    command = await deep_researcher.assess_research_results(
-        state,
-        {
-            "configurable": {
-                "max_react_tool_calls": 10,
-                "quality_evaluation_max_input_chars": 3_000,
-            }
-        },
-    )
-
-    feedback = command.update["researcher_messages"][0].content
-    assert len(feedback) <= 1_500
-    payload = json.loads(feedback.split("\n", 1)[1])
-    assert payload["truncated"] is True
 
 
 def _protocol_config(*, fail_open: bool) -> dict:
@@ -1053,14 +713,7 @@ async def test_contradictory_retry_is_repaired_once(monkeypatch) -> None:
         calls.append(messages)
         return SimpleNamespace(content=json.dumps(responses.pop(0)))
 
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_native_evaluator(monkeypatch, fake_invoke)
 
     result = await evaluate_tool_results(
         "Synthetic topic",
@@ -1254,14 +907,7 @@ async def test_second_protocol_contradiction_uses_fail_open(monkeypatch) -> None
     async def fake_invoke(*_args, **_kwargs):
         return SimpleNamespace(content=json.dumps(_contradictory_retry()))
 
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_native_evaluator(monkeypatch, fake_invoke)
 
     result = await evaluate_tool_results(
         "Synthetic topic",
@@ -1283,14 +929,7 @@ async def test_second_protocol_contradiction_fail_closed_stops_spending(
     async def fake_invoke(*_args, **_kwargs):
         return SimpleNamespace(content=json.dumps(_contradictory_retry()))
 
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_native_evaluator(monkeypatch, fake_invoke)
 
     result = await evaluate_tool_results(
         "Synthetic topic",
@@ -1310,14 +949,7 @@ async def test_handoff_timeout_fail_closed_returns_structured_rejection(
     async def fake_invoke(*_args, **_kwargs):
         raise TimeoutError("judge timed out")
 
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_native_evaluator(monkeypatch, fake_invoke)
     handoff = {
         "compressed_research": (
             "Detailed evidence from https://a.example/source and "
@@ -1342,46 +974,6 @@ async def test_handoff_timeout_fail_closed_returns_structured_rejection(
     assert result.evaluator_model == "openai:qwen3.7-max"
 
 
-def test_fetch_budget_streak_treats_cache_only_iterations_as_neutral() -> None:
-    exhausted = {
-        "gap_analysis": {
-            "budget": {
-                "fetch_attempts": 0,
-                "fetched_documents": 0,
-                "reserved_fetches": 0,
-                "exhaustion_scope": "run",
-            },
-        }
-    }
-    cache_only = {
-        "gap_analysis": {
-            "budget": {
-                "fetch_attempts": 0,
-                "fetched_documents": 2,
-                "reserved_fetches": 1,
-                "exhaustion_scope": "none",
-            },
-        }
-    }
-    productive = {
-        "gap_analysis": {
-            "budget": {
-                "fetch_attempts": 2,
-                "fetched_documents": 2,
-                "reserved_fetches": 2,
-                "exhaustion_scope": "none",
-            },
-        }
-    }
-
-    # Cache hits release their reservation; they must not reset the wall
-    # detection (E2E round 9 run/0 → cache → run/0 interleave).
-    assert deep_researcher.fetch_budget_exhausted_iteration_streak(
-        [exhausted, cache_only, exhausted]
-    ) == 2
-    assert deep_researcher.fetch_budget_exhausted_iteration_streak(
-        [exhausted, cache_only, exhausted, productive]
-    ) == 0
 
 
 def test_evidence_source_identity_separates_web_documents_from_local() -> None:

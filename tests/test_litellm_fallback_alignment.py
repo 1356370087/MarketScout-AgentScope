@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from open_deep_research.agents.query_engine import QueryEngine
+from open_deep_research.agentscope_runtime.production_resources import allowed_models
 from open_deep_research.configuration import Configuration
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +57,7 @@ def test_router_fallback_targets_are_whitelisted_on_run_keys() -> None:
         for entry in payload.get("model_list", [])
         if isinstance(entry, dict) and entry.get("model_name")
     }
-    allowlist = set(QueryEngine._litellm_allowed_models(_alias_configuration()))
+    allowlist = set(allowed_models(_alias_configuration()))
 
     fallback_targets = _fallback_targets(payload)
     assert fallback_targets, "litellm.yaml must declare cross-group fallbacks"
@@ -74,4 +74,4 @@ def test_fallback_alias_constant_matches_yaml() -> None:
     payload = _litellm_yaml()
     fallback_targets = _fallback_targets(payload)
     # Keep the dedicated fallback alias in sync with the Router policy.
-    assert QueryEngine._LITELLM_FALLBACK_MODEL_ALIAS in fallback_targets
+    assert "if-fallback-v1" in fallback_targets

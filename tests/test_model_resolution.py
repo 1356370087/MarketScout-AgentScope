@@ -9,10 +9,7 @@ import pytest
 from open_deep_research.models import limits as model_limits
 from open_deep_research.models.resolution import (
     build_model_config,
-    clear_pooled_chat_models,
-    get_configurable_model_template,
     parse_model_spec,
-    pooled_chat_model,
     resolve_api_key,
     resolve_base_url,
     resolve_compatibility_kwargs,
@@ -195,8 +192,6 @@ def test_build_model_config_temperature_is_optional(
     assert applied["temperature"] == 0.1
 
 
-def test_configurable_model_template_is_lazy_singleton() -> None:
-    assert get_configurable_model_template() is get_configurable_model_template()
 
 
 def test_token_limit_prefers_exact_then_longest_match(
@@ -212,45 +207,3 @@ def test_token_limit_prefers_exact_then_longest_match(
     assert model_limits.get_model_token_limit("openai:example") == 100
     assert model_limits.get_model_token_limit("openai:example[large]") == 1_000
     assert model_limits.get_model_token_limit("proxy/openai:example[large]-v2") == 1_000
-
-
-class _FakeClient:
-    def __init__(self, **_kwargs):
-        pass
-
-
-class _OtherFakeClient:
-    def __init__(self, **_kwargs):
-        pass
-
-
-def test_pooled_chat_model_reuses_one_client_per_config() -> None:
-    clear_pooled_chat_models()
-    try:
-        first = pooled_chat_model(
-            {"model": "openai:gpt-test", "temperature": 0}, builder=_FakeClient
-        )
-        second = pooled_chat_model(
-            {"model": "openai:gpt-test", "temperature": 0}, builder=_FakeClient
-        )
-        other = pooled_chat_model(
-            {"model": "openai:gpt-other", "temperature": 0}, builder=_FakeClient
-        )
-        assert first is second
-        assert first is not other
-    finally:
-        clear_pooled_chat_models()
-
-
-def test_pooled_chat_model_builder_swap_busts_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    clear_pooled_chat_models()
-    try:
-        pooled = pooled_chat_model({"model": "openai:gpt-test"}, builder=_FakeClient)
-        swapped = pooled_chat_model({"model": "openai:gpt-test"}, builder=_OtherFakeClient)
-        assert pooled is not swapped
-        # A replaced module-level init_chat_model (test monkeypatch) never
-        # observes a stale pooled client.
-        again = pooled_chat_model({"model": "openai:gpt-test"}, builder=_OtherFakeClient)
-        assert again is swapped
-    finally:
-        clear_pooled_chat_models()

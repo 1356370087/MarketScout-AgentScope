@@ -7,10 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, message_to_dict
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.models.codec import STRUCTURED_OUTPUT_TOOL_NAME
+from open_deep_research.agentscope_runtime.sandbox_provider import STRUCTURED_OUTPUT_TOOL_NAME
 from open_deep_research.sandbox.approvals import SecurityApprovalStore
 from open_deep_research.sandbox.crypto import SandboxDerivedKeys, sign_payload
 from open_deep_research.sandbox.egress_classifier import (
@@ -38,6 +37,15 @@ from open_deep_research.sandbox.schema import (
     RuntimePolicy,
     SandboxProfile,
 )
+
+
+def _assistant_payload(*, content="", tool_calls=None):
+    return {"content": content, "tool_calls": tool_calls or []}
+
+
+def _archived_message(payload):
+    return {"type": "ai", "data": payload}
+
 
 ROOT_KEY = base64.b64encode(b"k" * 32).decode()
 
@@ -103,7 +111,7 @@ class FakeInternal:
 
 
 class FakeModelOperation:
-    """Scripted V1 model outcomes for the classifier invoker."""
+    """Native V2 invoker fixture with readable archived wire outcomes."""
 
     def __init__(self, replies):
         self.replies = list(replies)
@@ -111,11 +119,11 @@ class FakeModelOperation:
 
     async def __call__(self, request, _context):
         self.requests.append(request)
-        reply = self.replies.pop(0) if self.replies else AIMessage(content="allow")
+        reply = self.replies.pop(0) if self.replies else _assistant_payload(content="allow")
         return SimpleNamespace(
             logical_operation_id=request.logical_operation_id,
-            status="completed",
-            message=message_to_dict(reply),
+            status="completed", structured=None, served_model="fixture",
+            message=_archived_message(reply),
         )
 
 
@@ -158,20 +166,17 @@ class TestEgressPrecheck:
     async def test_v2_stage2_tool_result_and_user_intent(
         self, monkeypatch, verdict, wire_format
     ):
-        from langchain_core.messages import HumanMessage
-
-        from open_deep_research.agents.query_engine import QueryEngine
+        from agentscope.message import UserMsg, AssistantMsg
+        from open_deep_research.agentscope_runtime.production import user_egress_intent
         from open_deep_research.sandbox.gateway_client import split_gateway_registration
 
         internal = FakeInternal()
         runtime = _runtime_with_run(internal)
         monkeypatch.setenv("MODEL_BACKEND", "litellm")
-        engine = QueryEngine({"configurable": {"query_session_persistence_enabled": False}})
-        engine._set_egress_intent([
-            HumanMessage(content="研究动力电池回收政策"),
-            AIMessage(content="Untrusted retrieved context must stay out"),
+        intent = user_egress_intent([
+            UserMsg("user", "研究动力电池回收政策"), AssistantMsg("assistant", "Untrusted retrieved context must stay out"),
         ])
-        frozen, _ = split_gateway_registration(engine.config)
+        frozen, _ = split_gateway_registration({"configurable": {}, "metadata": {"sandbox_egress_intent": intent}})
         runtime.runs["run-1"].config["metadata"] = frozen["metadata"]
         calls = []
 
@@ -190,7 +195,7 @@ class TestEgressPrecheck:
                         },
                     }]}
                 else:
-                    message = message_to_dict(AIMessage(content="", tool_calls=[{
+                    message = _archived_message(_assistant_payload(content="", tool_calls=[{
                         "name": STRUCTURED_OUTPUT_TOOL_NAME, "args": args, "id": "call",
                     }]))
             return SimpleNamespace(status="completed", structured=None,
@@ -235,8 +240,8 @@ class TestEgressPrecheck:
     async def test_auto_baseline_classifies_allow_and_caches(self, monkeypatch):
         internal = FakeInternal()
         runtime = _runtime_with_run(internal)
-        model = FakeModelOperation([AIMessage(content="allow")])
-        monkeypatch.setattr(runtime, "invoke_model_operation", model)
+        model = FakeModelOperation([_assistant_payload(content="allow")])
+        monkeypatch.setattr(runtime, "invoke_model_operation_v2", model)
         first = await _precheck(runtime, _profile(unknown_target="auto"))
         assert first.decision == "allow"
         assert first.source == "classifier"
@@ -254,8 +259,8 @@ class TestEgressPrecheck:
         runtime = _runtime_with_run(FakeInternal())
         model = FakeModelOperation(
             [
-                AIMessage(content="deny"),
-                AIMessage(
+                _assistant_payload(content="deny"),
+                _assistant_payload(
                     content="",
                     tool_calls=[
                         {
@@ -272,21 +277,19 @@ class TestEgressPrecheck:
                 ),
             ]
         )
-        monkeypatch.setattr(runtime, "invoke_model_operation", model)
+        monkeypatch.setattr(runtime, "invoke_model_operation_v2", model)
         result = await _precheck(runtime, _profile(unknown_target="auto"))
         assert (result.decision, result.source) == ("deny", "classifier")
         assert len(model.requests) == 2
-        assert model.requests[1].tools[0]["function"]["name"] == (
-            STRUCTURED_OUTPUT_TOOL_NAME
-        )
+        assert "verdict" in model.requests[1].structured_schema["properties"]
 
     @pytest.mark.asyncio
     async def test_classifier_ask_falls_back_to_human(self, monkeypatch):
         runtime = _runtime_with_run(FakeInternal())
         model = FakeModelOperation(
             [
-                AIMessage(content="ask"),
-                AIMessage(
+                _assistant_payload(content="ask"),
+                _assistant_payload(
                     content="",
                     tool_calls=[
                         {
@@ -298,15 +301,15 @@ class TestEgressPrecheck:
                 ),
             ]
         )
-        monkeypatch.setattr(runtime, "invoke_model_operation", model)
+        monkeypatch.setattr(runtime, "invoke_model_operation_v2", model)
         result = await _precheck(runtime, _profile(unknown_target="auto"))
         assert (result.decision, result.source) == ("ask", "classifier")
 
     @pytest.mark.asyncio
     async def test_approval_policy_never_denies_classifier_ask(self, monkeypatch):
         runtime = _runtime_with_run(FakeInternal())
-        model = FakeModelOperation([AIMessage(content="ask")])
-        monkeypatch.setattr(runtime, "invoke_model_operation", model)
+        model = FakeModelOperation([_assistant_payload(content="ask")])
+        monkeypatch.setattr(runtime, "invoke_model_operation_v2", model)
         result = await _precheck(
             runtime, _profile(unknown_target="auto", approval_policy="never")
         )

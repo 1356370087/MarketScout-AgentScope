@@ -11,7 +11,7 @@ from open_deep_research.report.coverage import (
     derive_state_coverage_checklist,
 )
 from open_deep_research.sandbox.policy import allowed_domains
-from open_deep_research.tools.legacy_shims import get_model_connection_kwargs
+from open_deep_research.models.resolution import resolve_api_key, resolve_base_url
 from tests import run_local_evaluate
 from tests.run_local_evaluate import (
     aggregate_score,
@@ -91,18 +91,14 @@ def test_deepseek_research_models_use_deepseek_credentials_and_endpoint(
         "web_evidence_model",
     ):
         model_name = config["configurable"][key]
-        connection = get_model_connection_kwargs(model_name, config)
-        assert connection == {
-            "api_key": "deepseek-test-key",
-            "base_url": "https://api.deepseek.test",
-        }
+        assert resolve_api_key(model_name, config) == "deepseek-test-key"
+        assert resolve_base_url(model_name) == "https://api.deepseek.test"
 
     assert "api.deepseek.com" in allowed_domains(
         Configuration.from_runnable_config(config)
     )
-    assert get_model_connection_kwargs("openai:gpt-4.1", config) == {
-        "api_key": None
-    }
+    assert resolve_api_key("openai:gpt-4.1", config) is None
+    assert resolve_base_url("openai:gpt-4.1") is None
 
 
 def test_aggregate_score_ignores_unscored_and_duplicate_factual_accuracy() -> None:

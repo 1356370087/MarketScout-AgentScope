@@ -158,8 +158,8 @@ async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monke
 
     monkeypatch.setattr(gateway, "resolve_profile", lambda config: (None, "p", _profile("allow")))
     monkeypatch.setattr(gateway, "tool_policy_decision", lambda *a, **k: "allow")
-    monkeypatch.setattr("open_deep_research.tools.registry.assemble_toolset", assemble)
-    monkeypatch.setattr("open_deep_research.tools.governance.execute_governed_tool_call", dispatch)
+    monkeypatch.setattr("open_deep_research.agentscope_runtime.sandbox_catalog.assembled_tools", assemble)
+    monkeypatch.setattr("open_deep_research.tools.governance.execute_governed_tool_call_native", dispatch)
     monkeypatch.setattr("open_deep_research.security.network.validate_public_http_url", public)
     monkeypatch.setattr(runtime, "_egress_model_invoker", lambda *a, **k: model)
     request = GatewayToolRequestV1(run_id="run-1", task_id="task-1", role="researcher",
@@ -224,7 +224,6 @@ async def test_http_connector_rejects_rebinding_before_socket_connect(monkeypatc
 
 
 def test_classifier_ledger_failure_keeps_manual_state_available(tmp_path, monkeypatch):
-    from open_deep_research import server
     from tests.test_egress_mode_api import (
         _POLICY_AUTO,
         _bypass_client,
@@ -246,15 +245,14 @@ def test_classifier_ledger_failure_keeps_manual_state_available(tmp_path, monkey
         assert response.json()["health"]["reason"] == "state_unavailable"
         assert "remaining_calls" not in response.json()["health"]
     finally:
-        server._runs.clear()
+        from tests.test_egress_mode_api import _clear_native_runs
+        _clear_native_runs()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["legacy", "litellm"])
 async def test_model_backends_preserve_budget_temperature_and_served_model(monkeypatch, backend):
     from types import SimpleNamespace
-
-    from langchain_core.messages import AIMessage, message_to_dict, messages_from_dict
 
     from open_deep_research.sandbox.egress_classifier import EgressModelCall
 
@@ -264,15 +262,11 @@ async def test_model_backends_preserve_budget_temperature_and_served_model(monke
 
     async def invoke(request, context):
         requests.append(request)
-        if backend == "legacy":
-            assert messages_from_dict(request.messages)[0].content == "Research request"
-            return SimpleNamespace(status="completed", model="actual-model",
-                message=message_to_dict(AIMessage(content="allow")))
+        assert request.messages[0]["content"] == "Research request"
         return SimpleNamespace(status="completed", served_model="actual-model", structured=None,
                                message={"role": "assistant", "content": "allow"})
 
-    monkeypatch.setattr(runtime, "invoke_model_operation" if backend == "legacy"
-                        else "invoke_model_operation_v2", invoke)
+    monkeypatch.setattr(runtime, "invoke_model_operation_v2", invoke)
     call = EgressModelCall(messages=[{"role": "user", "content": "Research request"}],
         logical_operation_id="classify", max_output_tokens=48, temperature=0)
     result = await runtime._egress_model_invoker(runtime.runs["run-1"], run_id="run-1",
@@ -287,7 +281,9 @@ async def test_redirect_reapproval_prevents_destination_request(monkeypatch, tar
     from types import SimpleNamespace
 
     from open_deep_research.web import pipeline
-    from tests.test_web_pipeline import candidate
+    from open_deep_research.agentscope_runtime.web_tools import _candidate
+    def candidate(url):
+        return _candidate("test", url, "Source", "", 1, "test")
 
     emitted = []
 
@@ -334,10 +330,11 @@ async def test_redirect_reapproval_prevents_destination_request(monkeypatch, tar
 
 @pytest.mark.asyncio
 async def test_external_extraction_does_not_inherit_readonly_allow(monkeypatch):
-    from open_deep_research.tools.web_research import pipeline
+    from open_deep_research.agentscope_runtime import web_tools as pipeline
 
     checks = []
-    monkeypatch.setattr(pipeline, "get_tavily_api_key", lambda config: "test-only")
+    def forbidden(_config):
+        pytest.fail("external extraction must be authorized before constructing its client")
 
     async def allowed(url, capability, consume):
         checks.append((capability, consume))
@@ -345,7 +342,7 @@ async def test_external_extraction_does_not_inherit_readonly_allow(monkeypatch):
 
     token = egress_authorizer.set(allowed)
     try:
-        result = await pipeline._tavily_extract("https://docs.example/page", {})
+        result = await pipeline._tavily_extract("https://docs.example/page", forbidden)
     finally:
         egress_authorizer.reset(token)
     assert result is None
@@ -385,7 +382,7 @@ def test_ledger_update_and_legacy_cache_migration(tmp_path):
 
 @pytest.mark.asyncio
 async def test_nested_candidate_approval_is_not_bypassed_by_gateway_metadata():
-    from open_deep_research.tools.web_research.pipeline import (
+    from open_deep_research.agentscope_runtime.web_tools import (
         _approve_candidate_batch,
         _candidate,
     )
@@ -399,7 +396,7 @@ async def test_nested_candidate_approval_is_not_bypassed_by_gateway_metadata():
     token = egress_authorizer.set(deny)
     try:
         result = await _approve_candidate_batch([candidate], 1,
-            {"configurable": {"sandbox_enabled": False}, "metadata": {"sandbox_gateway_physical": True}})
+            {"configurable": {"sandbox_enabled": False}, "metadata": {"sandbox_gateway_physical": True}}, "run")
     finally:
         egress_authorizer.reset(token)
     assert result.denied_domains == ["blocked.example"]
@@ -408,7 +405,7 @@ async def test_nested_candidate_approval_is_not_bypassed_by_gateway_metadata():
 
 @pytest.mark.asyncio
 async def test_denied_fetch_emits_no_http_request(monkeypatch):
-    from open_deep_research.tools.web_research.pipeline import _candidate
+    from open_deep_research.agentscope_runtime.web_tools import _candidate
     from open_deep_research.web.pipeline import WebPipelineSettings, fetch_local
 
     def fail_get(*args, **kwargs):
@@ -430,7 +427,6 @@ async def test_denied_fetch_emits_no_http_request(monkeypatch):
 
 
 def test_target_management_api_and_stale_version(tmp_path, monkeypatch):
-    from open_deep_research import server
     from tests.test_egress_mode_api import (
         _POLICY_AUTO,
         _bypass_client,
@@ -455,7 +451,8 @@ def test_target_management_api_and_stale_version(tmp_path, monkeypatch):
         assert client.post(url, json={"decision": "revoke", "expected_version": 1}).status_code == 200
         assert client.get("/runs/run-target/egress-state").json()["targets"][0]["decision"] == "revoke"
     finally:
-        server._runs.clear()
+        from tests.test_egress_mode_api import _clear_native_runs
+        _clear_native_runs()
 
 
 @pytest.mark.asyncio

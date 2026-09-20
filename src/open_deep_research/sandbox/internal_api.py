@@ -73,14 +73,6 @@ class BudgetReserveRequest(ServiceRequest):
     agent_role: str | None = None
 
 
-class TeamBridgeRequest(ServiceRequest):
-    """Gateway-authenticated task collaboration and checkpoint request."""
-
-    run_id: str
-    task_id: str
-    fence_token: int
-    action: Literal["catalog", "tool", "input", "checkpoint"]
-    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class BudgetSettleRequest(ServiceRequest):
@@ -542,23 +534,6 @@ def build_internal_sandbox_router(
                 task.pending_domain_tool = None
                 registry.update_status(task.task_id, TaskStatus.RUNNING)
 
-    @router.post("/team")
-    async def team_bridge(request: TeamBridgeRequest) -> dict[str, Any]:
-        ledger = await native_ledger_for(request)
-        if ledger is not None:
-            # Native TeamWorkers installs TeamSay/control locally against SQL.
-            # Do not expose the old file-backed collaboration adapter in its catalog.
-            if request.action == "catalog":
-                return {"tools": []}
-            raise HTTPException(409, "native_team_uses_sql_worker_transport")
-        context = await authority(request, request.run_id, request.fence_token)
-        from open_deep_research.tasks.team_bridge import host_request
-        try:
-            return await host_request(context, request.task_id, request.action, request.payload)
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except (ValueError, RuntimeError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @router.post("/budgets/reserve")
     async def reserve_budget(request: BudgetReserveRequest) -> dict[str, Any]:

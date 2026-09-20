@@ -1,34 +1,18 @@
 import asyncio
+import os
 import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
-from langsmith import Client
+from open_deep_research.evaluation.local_runtime import run_native_question
+from open_deep_research.evaluation.metrics import MetricStatus, langsmith_metric
+from open_deep_research.evaluation.session import native_judge_session
+from tests.run_local_evaluate import evaluation_runtime_environment
 
-from open_deep_research.agents.query_engine import QueryEngine
-from tests.evaluators import (
-    eval_completeness,
-    eval_correctness,
-    eval_evidence_integrity,
-    eval_overall_quality,
-    eval_relevance,
-    eval_structure,
-    eval_tool_efficiency,
-)
+ROOT = Path(__file__).resolve().parents[1]
 
 # NOTE: Configure the right dataset and evaluators
 dataset_name = "Deep Research Bench"
-evaluators = [
-    eval_overall_quality,
-    eval_relevance,
-    eval_structure,
-    eval_correctness,
-    # One canonical claim inventory emits groundedness, factual accuracy,
-    # citation accuracy, and source authority without duplicate Judge calls.
-    eval_evidence_integrity,
-    eval_completeness,
-    eval_tool_efficiency,
-]
 # NOTE: Configure the right parameters for the experiment, these will be logged in the metadata
 max_structured_output_retries = 3
 allow_clarification = False
@@ -56,6 +40,7 @@ async def target(
     # NOTE: Configure the right dataset and evaluators
     config["configurable"]["max_structured_output_retries"] = max_structured_output_retries
     config["configurable"]["allow_clarification"] = allow_clarification
+    config["configurable"]["enable_human_in_loop"] = False
     config["configurable"]["max_concurrent_research_units"] = max_concurrent_research_units
     config["configurable"]["search_api"] = search_api
     config["configurable"]["max_researcher_iterations"] = max_researcher_iterations
@@ -69,11 +54,12 @@ async def target(
     config["configurable"]["final_report_model"] = final_report_model
     config["configurable"]["final_report_model_max_tokens"] = final_report_model_max_tokens
     # NOTE: We do not use MCP tools to stay consistent
-    engine = QueryEngine(config)
-    final_state = await engine.submit_message(
-        [{"role": "user", "content": inputs["messages"][0]["content"]}],
-        config,
+    run_id, final_state = await run_native_question(
+        inputs["messages"], config,
+        runs_dir=ROOT / ".runs" / "langsmith" / "research",
+        timeout=float(os.getenv("EVALUATION_RESEARCH_TIMEOUT_SECONDS", "1800")),
     )
+    final_state["run_id"] = run_id
     final_state["evaluation_metadata"] = {
         "search_api": search_api,
         "max_concurrent_research_units": max_concurrent_research_units,
@@ -82,34 +68,54 @@ async def target(
     }
     return final_state
 
+
+async def evaluate_native(inputs: dict, outputs: dict, reference_outputs: dict):
+    """Run the ten existing rubrics using an independent native Judge ledger."""
+    directory = ROOT / ".runs" / "langsmith" / "judges" / uuid.uuid4().hex
+    async with native_judge_session(directory) as judge:
+        metrics = await judge.score(
+            case_id=outputs["run_id"], sample_id="langsmith:0", inputs=inputs,
+            outputs=outputs, reference_outputs=reference_outputs,
+        )
+    return {"results": [
+        langsmith_metric(
+            metric["key"], status=MetricStatus(metric["status"]),
+            score=metric["score"], comment=metric["comment"],
+        )
+        for metric in metrics
+    ]}
+
+
 async def main():
+    from langsmith import Client
+
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
     client = Client()
-    return await client.aevaluate(
-        target,
-        data=dataset_name,
-        evaluators=evaluators,
-        experiment_prefix="ODR GPT-5, Tavily Search",
-        max_concurrency=10,
-        metadata={
-            "max_structured_output_retries": max_structured_output_retries,
-            "allow_clarification": allow_clarification,
-            "max_concurrent_research_units": max_concurrent_research_units,
-            "search_api": search_api,
-            "max_researcher_iterations": max_researcher_iterations,
-            "max_react_tool_calls": max_react_tool_calls,
-            "summarization_model": summarization_model,
-            "summarization_model_max_tokens": summarization_model_max_tokens,
-            "research_model": research_model,
-            "research_model_max_tokens": research_model_max_tokens,
-            "compression_model": compression_model,
-            "compression_model_max_tokens": compression_model_max_tokens,
-            "final_report_model": final_report_model,
-            "final_report_model_max_tokens": final_report_model_max_tokens,
-        }
-    )
+    with evaluation_runtime_environment():
+        return await client.aevaluate(
+            target,
+            data=dataset_name,
+            evaluators=[evaluate_native],
+            experiment_prefix="ODR GPT-5, Tavily Search",
+            max_concurrency=10,
+            metadata={
+                "max_structured_output_retries": max_structured_output_retries,
+                "allow_clarification": allow_clarification,
+                "max_concurrent_research_units": max_concurrent_research_units,
+                "search_api": search_api,
+                "max_researcher_iterations": max_researcher_iterations,
+                "max_react_tool_calls": max_react_tool_calls,
+                "summarization_model": summarization_model,
+                "summarization_model_max_tokens": summarization_model_max_tokens,
+                "research_model": research_model,
+                "research_model_max_tokens": research_model_max_tokens,
+                "compression_model": compression_model,
+                "compression_model_max_tokens": compression_model_max_tokens,
+                "final_report_model": final_report_model,
+                "final_report_model_max_tokens": final_report_model_max_tokens,
+            }
+        )
 
 if __name__ == "__main__":
     results = asyncio.run(main())
     print(results)  # noqa: T201
-

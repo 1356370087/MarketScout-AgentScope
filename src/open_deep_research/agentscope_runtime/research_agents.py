@@ -403,6 +403,8 @@ class Researcher:
         toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
         native_context = NativeResearchContext(self.models, "researcher", model)
+        from open_deep_research.skills import get_skill_researcher_context
+        skill_guidance = get_skill_researcher_context(cfg.skills)
         agent = Agent(
             name="researcher",
             model=native_context.model,
@@ -411,7 +413,7 @@ class Researcher:
                 date=datetime.now(UTC).date().isoformat(),
                 mcp_prompt=cfg.mcp_prompt or "",
                 tool_guidance="{tool_guidance}",
-            ),
+            ) + ("\n\n" + skill_guidance if skill_guidance else ""),
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=cfg.max_react_tool_calls),
             context_config=native_context.config,
@@ -586,13 +588,9 @@ class Supervisor:
         def assign(input):
             if coverage.single_research_task and assignments:
                 raise ValueError("the user requested a single research task")
-            ids = list(dict.fromkeys(input.requirement_ids))
-            if set(ids) - set(available_ids):
-                raise ValueError(
-                    "unknown or non-delegable requirement IDs; select factual IDs from "
-                    + json.dumps(available_ids)
-                    + "; aggregation tasks reuse upstream factual IDs, not process/deliverable IDs"
-                )
+            from open_deep_research.quality.contract import canonicalize_requirement_ids, validate_requirement_ids
+            ids = validate_requirement_ids(canonicalize_requirement_ids(input.requirement_ids, coverage),
+                                           coverage, required=bool(input.requirement_ids))
             if coverage.single_research_task:
                 ids = available_ids
             elif not ids:
@@ -816,10 +814,11 @@ class Supervisor:
             return ToolResult(output=input.reflection)
 
         from open_deep_research.agentscope_runtime.teams_tools import TaskCreateInput
+        from open_deep_research.quality.contract import coverage_bound_input_schema
         tools = [
             _control_tool(
                 "TaskCreate" if cfg.enable_async_research else "ConductResearch",
-                TaskCreateInput if teams_mode else _Topic,
+                coverage_bound_input_schema(TaskCreateInput if teams_mode else _Topic, coverage),
                 conduct,
                 idempotent=teams_mode,
             ),

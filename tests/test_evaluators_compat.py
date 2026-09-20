@@ -4,12 +4,19 @@ import json
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from agentscope.message import AssistantMsg, TextBlock, ToolCallBlock
 from pydantic import create_model
 
 from open_deep_research.evaluation import build_evaluation_snapshot
 from tests import evaluators
 from tests.supervisor_parallel_evaluation import right_parallelism_evaluator
+
+
+def native_message(*, content="", tool_calls=None):
+    blocks = [TextBlock(text=content)] if content else []
+    blocks.extend(ToolCallBlock(id=call["id"], name=call["name"], input=json.dumps(call["args"]))
+                  for call in tool_calls or [])
+    return AssistantMsg("judge", blocks)
 
 
 class _StructuredRunner:
@@ -70,7 +77,7 @@ class _StructuredRunner:
 
 
 class _FakeJudge:
-    def with_structured_output(self, schema: type, **_kwargs: Any) -> _StructuredRunner:
+    def structured(self, schema: type, **_kwargs: Any) -> _StructuredRunner:
         return _StructuredRunner(schema)
 
 
@@ -80,7 +87,7 @@ def _outputs() -> dict[str, Any]:
         "raw_notes": ["Claim A. URL: https://primary.example/paper"],
         "research_brief": "Research claim A.",
         "supervisor_messages": [
-            AIMessage(
+            native_message(
                 content="",
                 tool_calls=[
                     {
@@ -90,7 +97,7 @@ def _outputs() -> dict[str, Any]:
                     }
                 ],
             ),
-            ToolMessage(content="research returned", name="ConductResearch", tool_call_id="call-1"),
+            {"type": "tool", "content": "research returned", "name": "ConductResearch", "tool_call_id": "call-1"},
         ],
         "result": {
             "status": "success",
@@ -636,7 +643,7 @@ def test_empty_claim_and_citation_lists_do_not_divide_by_zero(monkeypatch) -> No
             return self.schema(citations=[], reasoning="no citations")
 
     class EmptyJudge:
-        def with_structured_output(self, schema: type, **_kwargs: Any) -> EmptyRunner:
+        def structured(self, schema: type, **_kwargs: Any) -> EmptyRunner:
             return EmptyRunner(schema)
 
     monkeypatch.setattr(evaluators, "_get_eval_model", lambda: EmptyJudge())
@@ -859,7 +866,7 @@ def test_structured_judge_repairs_wrapper_from_include_raw_envelope(
         "source_authority": "primary",
         "reasoning": "The cited documentation states this.",
     }
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -910,7 +917,7 @@ def test_structured_judge_repairs_json_string_wrapper_from_include_raw_envelope(
         "source_authority": "primary",
         "reasoning": "The cited documentation states this.",
     }
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -962,7 +969,7 @@ def test_structured_judge_repairs_json_string_for_schema_list_field(
         "source_authority": "primary",
         "reasoning": "The cited documentation states this.",
     }
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -1014,7 +1021,7 @@ def test_structured_judge_rejects_invalid_json_for_schema_list_field(
     caplog,
     encoded_claims: str,
 ) -> None:
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -1056,7 +1063,7 @@ def test_structured_judge_rejects_invalid_json_for_schema_list_field(
 def test_structured_judge_does_not_decode_json_string_for_scalar_schema_field(
     monkeypatch,
 ) -> None:
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -1110,7 +1117,7 @@ def test_structured_judge_rejects_ambiguous_json_string_wrappers(
     caplog,
     arguments: dict[str, Any],
 ) -> None:
-    raw = AIMessage(
+    raw = native_message(
         content="",
         tool_calls=[{
             "name": "EvidenceIntegrityScore",
@@ -1153,7 +1160,7 @@ def test_structured_judge_prefers_parsed_include_raw_result(
         claims=[],
         reasoning="Already parsed.",
     )
-    ambiguous_raw = AIMessage(
+    ambiguous_raw = native_message(
         content="",
         tool_calls=[
             {
@@ -1200,7 +1207,7 @@ def test_structured_judge_rejects_ambiguous_include_raw_payload(
     raw_shape: str,
 ) -> None:
     if raw_shape == "multiple_calls":
-        raw = AIMessage(
+        raw = native_message(
             content="",
             tool_calls=[
                 {
@@ -1218,13 +1225,10 @@ def test_structured_judge_rejects_ambiguous_include_raw_payload(
             ],
         )
     else:
-        raw = AIMessage(content="")
-        raw.tool_calls = [{
-            "name": "EvidenceIntegrityScore",
-            "args": "sensitive raw arguments",
-            "id": "call-invalid",
-            "type": "tool_call",
-        }]
+        raw = native_message(content="")
+        raw.content = [ToolCallBlock(
+            name="EvidenceIntegrityScore", id="call-invalid", input=json.dumps("sensitive raw arguments")
+        )]
 
     class AmbiguousRawRunner:
         def invoke(self, _messages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1293,8 +1297,8 @@ def test_parallelism_evaluator_reads_current_top_level_state() -> None:
 
 
 def test_langsmith_default_registration_uses_canonical_evidence_judge() -> None:
-    from tests import run_evaluate
-
-    assert evaluators.eval_evidence_integrity in run_evaluate.evaluators
-    assert evaluators.eval_groundedness not in run_evaluate.evaluators
-    assert evaluators.eval_citation_accuracy not in run_evaluate.evaluators
+    from open_deep_research.evaluation.native import METRICS
+    assert "evidence_integrity" in METRICS
+    # The native integration test verifies one evidence inventory and no
+    # separate GroundednessScore/CitationAccuracyScore provider calls.
+    assert {"groundedness", "citation_accuracy"} <= set(METRICS)

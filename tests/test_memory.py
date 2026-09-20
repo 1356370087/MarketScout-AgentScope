@@ -351,7 +351,7 @@ class TestFilterCandidates:
 
 class TestFormatMemoryContext:
     def test_basic_format(self):
-        from open_deep_research.agents.deep_researcher import _format_memory_context
+        from open_deep_research.memory.policy import format_memory_context as _format_memory_context
 
         results = [
             {
@@ -373,14 +373,14 @@ class TestFormatMemoryContext:
         assert "</Memory Context>" in formatted
 
     def test_falls_back_to_memory_key(self):
-        from open_deep_research.agents.deep_researcher import _format_memory_context
+        from open_deep_research.memory.policy import format_memory_context as _format_memory_context
 
         results = [{"memory": "Legacy format memory", "metadata": {}}]
         formatted = _format_memory_context(results)
         assert "[general] Legacy format memory" in formatted
 
     def test_non_dict_metadata_handled(self):
-        from open_deep_research.agents.deep_researcher import _format_memory_context
+        from open_deep_research.memory.policy import format_memory_context as _format_memory_context
 
         results = [{"content": "Test", "memory": "Test", "metadata": "not-a-dict"}]
         formatted = _format_memory_context(results)

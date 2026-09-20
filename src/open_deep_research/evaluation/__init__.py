@@ -14,7 +14,6 @@ __all__ = [
     "JUDGE_SECURITY_PROTOCOL",
     "JudgeConfig",
     "MetricStatus",
-    "build_judge_model",
     "invoke_judge_structured",
     "invoke_judge_structured_sync",
     "build_evaluation_snapshot",
@@ -24,7 +23,7 @@ __all__ = [
 
 
 def __getattr__(name):
-    if name not in {"JUDGE_SECURITY_PROTOCOL", "JudgeConfig", "build_judge_model", "invoke_judge_structured", "invoke_judge_structured_sync"}:
+    if name not in {"JUDGE_SECURITY_PROTOCOL", "JudgeConfig", "invoke_judge_structured", "invoke_judge_structured_sync"}:
         raise AttributeError(name)
     from . import judge
     value = getattr(judge, name)

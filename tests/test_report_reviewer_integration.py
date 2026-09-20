@@ -12,8 +12,7 @@ import inspect
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
 from pydantic import ValidationError
 
 from open_deep_research.configuration import Configuration
@@ -468,7 +467,8 @@ async def test_revisor_prompt_and_output_are_scoped_and_sanitized(monkeypatch) -
     captured: dict[str, str] = {}
 
     async def fake_reviser(prompt, *_args, **_kwargs):
-        captured["prompt"] = prompt
+        captured["messages"] = prompt
+        captured["prompt"] = "\n".join(message.content for message in prompt)
         return (
             "# Revised\n\nOption A remains supported [1]. "
             "[Unsafe](https://outside.example/secret)\n"
@@ -543,12 +543,13 @@ async def test_revisor_canonicalizes_sources_before_the_next_review(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_revisor_prompt_respects_total_input_budget(monkeypatch) -> None:
-    """The configured character budget covers the complete Revisor user prompt."""
+async def test_revisor_keeps_complete_input_for_native_window_budgeting(monkeypatch) -> None:
+    """The native model window budgets whole records without clipping the draft."""
     captured: dict[str, str] = {}
 
     async def fake_reviser(prompt, *_args, **_kwargs):
-        captured["prompt"] = prompt
+        captured["messages"] = prompt
+        captured["prompt"] = "\n".join(message.content for message in prompt)
         return "# Revised\n\nOption A remains supported [1]."
 
     monkeypatch.setattr(reviewer_module, "_invoke_reviser", fake_reviser)
@@ -569,7 +570,9 @@ async def test_revisor_prompt_respects_total_input_budget(monkeypatch) -> None:
         _config(report_review_max_input_chars=1_000),
     )
 
-    assert len(captured["prompt"]) <= 1_000
+    assert "word " * 10_000 in captured["prompt"]
+    assert "E" * 20_000 in captured["prompt"]
+    assert issue.revision_instruction in captured["prompt"]
     assert "EV-01" in captured["prompt"]
 
 
@@ -585,57 +588,51 @@ async def test_revisor_rejects_empty_model_output(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_reviewer_uses_legacy_model_adapter_when_litellm_is_disabled(monkeypatch) -> None:
-    """The default legacy backend must not be forced through ModelGateway."""
-    class FakeModel:
-        def with_config(self, _config):
-            return self
-
-        def with_structured_output(self, _schema, **_kwargs):
-            return self
-
-    captured: dict[str, Any] = {}
-
-    async def fake_invoke(_model, _messages, _config, **kwargs):
-        captured.update(kwargs)
-        return _review("pass")
-
-    monkeypatch.setattr(reviewer_module, "get_configurable_model_template", lambda: FakeModel())
-    monkeypatch.setattr(reviewer_module, "invoke_model_with_retry_observability", fake_invoke)
-    config = _config(model_backend="legacy", max_run_model_calls=5)
-    result = await reviewer_module.review_report(_draft(), _state(), config)
-    assert result.decision == "pass"
-    assert captured["budget_gate"].enabled is True
+async def test_reviewer_requires_native_port_for_every_backend():
+    from open_deep_research.report.runtime import NativeReportRuntimeMissing, native_report
+    token = native_report.set(None)
+    try:
+        for backend in ("legacy", "litellm"):
+            with pytest.raises(NativeReportRuntimeMissing):
+                await reviewer_module.review_report(_draft(), _state(), _config(model_backend=backend))
+    finally:
+        native_report.reset(token)
 
 
 @pytest.mark.asyncio
-async def test_litellm_reviewer_and_revisor_share_the_run_budget_contract(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Both new model roles pass a durable run gate to ModelGateway calls."""
-    captured: dict[str, Any] = {}
+async def test_reviewer_and_revisor_share_native_sql_budget(tmp_path):
+    from agentscope.model import StructuredResponse
+    from open_deep_research.agentscope_runtime.recovery import ApprovalPending, RecoverySession
+    from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+    from open_deep_research.agentscope_runtime.report import _ReportRun
+    from open_deep_research.agentscope_runtime.research_models import ResearchModels
+    from open_deep_research.report.runtime import native_report
+    from tests.as_runtime.test_report_native import Factory, state
 
-    async def fake_complete(_messages, _config, **kwargs):
-        captured[str(kwargs["role"])] = kwargs["budget_gate"]
-        if kwargs.get("output_schema") is ReportReview:
-            return _review("pass")
-        return AIMessage(content="# Revised\n\nSupported claim [1].")
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "budget.db").as_posix())
+    await store.create_tables()
+    snapshot = state()
+    await store.create_run("owner", snapshot, limits={"model_calls": 1})
+    recovery = await RecoverySession.open(store, snapshot.run_id, "owner")
+    factory = Factory()
 
-    monkeypatch.setattr(reviewer_module, "complete_model", fake_complete)
-    config = _config(
-        model_backend="litellm",
-        max_run_model_calls=5,
-        runs_dir=str(tmp_path),
-    )
-    cfg = Configuration.from_runnable_config(config)
+    async def review(messages, schema):
+        return StructuredResponse(content=_review("pass").model_dump(mode="json"))
 
-    await reviewer_module._invoke_reviewer({}, config, cfg, attempt=1)
-    await reviewer_module._invoke_reviser("bounded prompt", config, cfg)
-
-    assert captured["report_review"].enabled is True
-    assert captured["final_report"].enabled is True
-    assert captured["report_review"].ledger.path == captured["final_report"].ledger.path
+    factory.generate_structured_output = review
+    token = native_report.set(_ReportRun(ResearchModels(factory, recovery=recovery), snapshot))
+    try:
+        cfg = Configuration()
+        await reviewer_module._invoke_reviewer({}, {}, cfg, attempt=1)
+        prompt = reviewer_module._revision_prompt(_draft(), _review("revise"), _state(), {})
+        with pytest.raises(ApprovalPending):
+            await reviewer_module._invoke_reviser(prompt, {}, cfg)
+        assert (await store.budget(snapshot.run_id, "owner"))["used"]["model_calls"] == 1
+        assert (await store.budget(snapshot.run_id, "owner"))["reserved"].get("model_calls", 0) == 0
+    finally:
+        native_report.reset(token)
+        await recovery.close()
+        await store.aclose()
 
 
 @pytest.mark.asyncio
@@ -1112,18 +1109,15 @@ def test_report_review_configuration_defaults_are_compatible() -> None:
     assert 0 <= cfg.report_review_max_revisions <= 3
 
 
-def test_report_review_state_is_separate_from_research_quality_gate() -> None:
-    """Graph state exposes report-review fields without replacing quality_gate."""
-    from open_deep_research.state import AgentState
-
-    annotations = AgentState.__annotations__
-    assert {
-        "final_report_draft",
-        "report_review",
-        "report_review_history",
-        "report_revision_count",
-        "quality_gate",
-    } <= set(annotations)
+def test_report_review_state_is_separate_from_research_quality_gate():
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
+    snapshot = ResearchSnapshot(run_id="run", config_fingerprint="fixture",
+        findings=[{"assessment": {"handoff": {"accepted": True}}}],
+        report_product={"report_review": {"status": "degraded"}, "report_revision_count": 2})
+    restored = ResearchSnapshot.model_validate_json(snapshot.model_dump_json())
+    assert restored.findings[0]["assessment"]["handoff"]["accepted"] is True
+    assert restored.report_product["report_review"]["status"] == "degraded"
+    assert restored.report_product["report_revision_count"] == 2
     # Both values remain JSON-compatible mappings; the dedicated keys keep the
     # product-review result from overwriting research-material gate metadata.
 

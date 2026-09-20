@@ -1,4 +1,4 @@
-"""File-backed Query session journal and authoritative run artifacts."""
+"""Versioned historical journal data and shared report/publication artifacts."""
 
 from __future__ import annotations
 
@@ -12,10 +12,7 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional, TypeAlias
-
-if TYPE_CHECKING:
-    from langchain_core.messages import BaseMessage
+from typing import Any, Literal, Optional, TypeAlias
 
 import portalocker
 from pydantic import BaseModel, Field
@@ -118,16 +115,6 @@ class RunManifest(BaseModel):
     litellm_key_cleanup_pending: bool = False
     litellm_spend_micro_usd: Optional[int] = Field(default=None, ge=0)
     litellm_spend_updated_at: Optional[float] = None
-
-
-class ReplayResult(BaseModel):
-    """Reconstructed Query and Supervisor state."""
-
-    state: dict[str, Any] = Field(default_factory=dict)
-    supervisor_state: dict[str, Any] = Field(default_factory=dict)
-    query_states: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    manifest: RunManifest
-    records: list[SessionJournalRecord] = Field(default_factory=list)
 
 
 def _sha256_text(content: str) -> str:
@@ -547,23 +534,6 @@ class RunContextStore:
             return manifest
 
     async def _encode(self, value: Any, artifact_refs: list[str]) -> Any:
-        from langchain_core.messages import BaseMessage, message_to_dict
-        if isinstance(value, BaseMessage):
-            serialized = message_to_dict(value)
-            content = serialized.get("data", {}).get("content", "")
-            content_text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
-            if len(content_text) > self.inline_content_max_chars:
-                artifact_id = uuid.uuid4().hex
-                relative = f"artifacts/messages/{artifact_id}.json"
-                self.write_json_atomic(relative, {"kind": "message", "message": serialized})
-                artifact_refs.append(relative)
-                return {
-                    "__message_artifact__": relative,
-                    "sha256": _sha256_text(json.dumps(serialized, ensure_ascii=False, default=str)),
-                    "length": len(content_text),
-                    "preview": _redact_text(content_text[:512]),
-                }
-            return {"__message__": _sanitize(serialized)}
         if isinstance(value, dict):
             encoded: dict[str, Any] = {}
             for key, item in value.items():
@@ -574,22 +544,6 @@ class RunContextStore:
             return [await self._encode(item, artifact_refs) for item in value]
         return _sanitize(value)
 
-    def _decode(self, value: Any) -> Any:
-        from langchain_core.messages import messages_from_dict
-        if isinstance(value, dict):
-            if "__message__" in value:
-                return messages_from_dict([value["__message__"]])[0]
-            if "__message_artifact__" in value:
-                artifact = self._resolve_artifact(value["__message_artifact__"])
-                try:
-                    payload = json.loads(artifact.read_text(encoding="utf-8"))
-                    return messages_from_dict([payload["message"]])[0]
-                except Exception as exc:
-                    raise JournalCorruptedError("message_artifact_corrupted") from exc
-            return {key: self._decode(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._decode(item) for item in value]
-        return value
 
     def _read_records_unlocked(self, *, repair_tail: bool = True) -> list[SessionJournalRecord]:
         if not self.journal_path.exists():
@@ -709,35 +663,6 @@ class RunContextStore:
         )
         return record
 
-    async def save_query_state(
-        self,
-        state: Any,
-        *,
-        channel: Literal["lead", "supervisor"] = "supervisor",
-    ) -> SessionJournalRecord:
-        """Append one durable inner-loop state checkpoint."""
-        snapshot = state.to_snapshot()
-        # Preserve BaseMessage objects until the journal encoder so oversized
-        # content continues to use the existing artifact spillover path.
-        snapshot["messages"] = list(state.messages)
-        if (
-            state.pending_tool_batch is not None
-            and snapshot.get("pending_tool_batch") is not None
-        ):
-            snapshot["pending_tool_batch"]["committed_results"] = list(
-                state.pending_tool_batch.committed_results
-            )
-        return await self.append(
-            channel=channel,
-            record_type="query_state",
-            stage=f"query.{state.phase.value}",
-            payload={
-                "state_key": state.state_key,
-                "revision": state.revision,
-                "transition_reason": state.transition_reason,
-                "state": snapshot,
-            },
-        )
 
     def mark_persistence_degraded(self, error: Exception | str) -> None:
         """Best-effort mark that recovery is only guaranteed to the last fsync."""
@@ -806,94 +731,3 @@ class RunContextStore:
         if not isinstance(payload, dict):
             raise ValueError(f"Research artifact must contain an object: {task_id}")
         return payload
-
-    def replay(self) -> ReplayResult:
-        """Replay state deltas and stable checkpoints from the journal."""
-        from open_deep_research.runtime import apply_update_to_state
-
-        manifest = self.load_manifest()
-        records = self._read_records()
-        state: dict[str, Any] = {}
-        supervisor_state: dict[str, Any] = {}
-        query_states: dict[str, dict[str, Any]] = {}
-        last_stage = manifest.last_stable_stage
-        next_stage = manifest.next_stage
-        for record in records:
-            payload = self._decode(record.payload)
-            if record.record_type in {"state_delta", "message_delta", "context_compacted"}:
-                update = payload.get("update", {})
-                scope = payload.get("scope", "main")
-                target = supervisor_state if scope == "supervisor" else state
-                apply_update_to_state(target, update)
-            elif record.record_type == "stage_checkpoint":
-                last_stage = record.stage
-                next_stage = str(payload.get("next_stage", next_stage))
-                apply_update_to_state(state, payload.get("update", {}))
-                manifest.pending_human_action = payload.get("pending_human_action")
-            elif record.record_type == "query_state":
-                state_key = str(payload.get("state_key", ""))
-                query_state = payload.get("state")
-                if state_key and isinstance(query_state, dict):
-                    previous = query_states.get(state_key)
-                    if previous is None or int(
-                        query_state.get("revision", 0)
-                    ) >= int(previous.get("revision", 0)):
-                        query_states[state_key] = query_state
-        manifest.last_stable_stage = last_stage
-        manifest.next_stage = next_stage
-        manifest.last_journal_seq = records[-1].seq if records else 0
-        if manifest.research_brief_sha256:
-            state["research_brief"] = self.load_research_brief()
-        return ReplayResult(
-            state=state,
-            supervisor_state=supervisor_state,
-            query_states=query_states,
-            manifest=manifest,
-            records=records,
-        )
-
-    def build_projection(self, channel: Literal["lead", "supervisor"], token_budget: int) -> dict[str, Any]:
-        """Return the latest durable summary and recent messages for a channel."""
-        from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-        from langchain_core.messages.utils import count_tokens_approximately
-        records = [record for record in self._read_records() if record.channel == channel]
-        latest_summary: Optional[str] = None
-        summary_seq = 0
-        messages: list[BaseMessage] = []
-        for record in records:
-            payload = self._decode(record.payload)
-            if record.record_type == "context_compacted":
-                latest_summary = payload.get("summary")
-                summary_seq = record.seq
-                messages = list(payload.get("recent_messages", []))
-            elif record.seq > summary_seq and record.record_type in {"state_delta", "message_delta"}:
-                update = payload.get("update", {})
-                key = "supervisor_messages" if channel == "supervisor" else "messages"
-                value = update.get(key, [])
-                if isinstance(value, dict):
-                    value = value.get("value", [])
-                if isinstance(value, list):
-                    messages.extend(item for item in value if isinstance(item, BaseMessage))
-        used = 0
-        boundary = len(messages)
-        for index in range(len(messages) - 1, -1, -1):
-            size = count_tokens_approximately([messages[index]])
-            if used and used + size > token_budget:
-                break
-            used += size
-            boundary = index
-        if boundary < len(messages) and isinstance(messages[boundary], ToolMessage):
-            tool_call_id = messages[boundary].tool_call_id
-            for index in range(boundary - 1, -1, -1):
-                candidate = messages[index]
-                if isinstance(candidate, AIMessage) and any(
-                    str(call.get("id", "")) == tool_call_id for call in candidate.tool_calls
-                ):
-                    boundary = index
-                    break
-        messages = messages[boundary:]
-        return {
-            "summary": latest_summary,
-            "recent_messages": messages,
-            "token_budget": token_budget,
-        }

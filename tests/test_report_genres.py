@@ -5,10 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
+from tests.report_helpers import patch_report_model
+from open_deep_research.report.runtime import AIMessage
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
 
-from open_deep_research.report import assembly as assembly_module
 from open_deep_research.report import build_report
 from open_deep_research.report.models import StructuredReport
 from open_deep_research.report.profiles import get_profile
@@ -31,9 +31,7 @@ async def test_faq_genre_produces_structured_json_artifact(monkeypatch):
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
         return AIMessage(content=body)
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -74,9 +72,7 @@ async def test_each_genre_resolves_a_distinct_prompt(monkeypatch):
                 seen[key] = prompt
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {"messages": [], "research_brief": "b", "notes": ["n"], "completed_task_outputs": []}
     for genre in ("executive_summary", "decision_brief", "faq"):
@@ -95,9 +91,7 @@ async def test_markdown_genre_does_not_emit_artifacts(monkeypatch):
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
         return AIMessage(content="# Summary\n\nbody")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {"messages": [], "research_brief": "b", "notes": ["n"], "completed_task_outputs": []}
     update = await build_report(state, _config(report_type="executive_summary"))

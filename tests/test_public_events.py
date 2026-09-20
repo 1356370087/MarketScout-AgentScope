@@ -1,10 +1,10 @@
+# ruff: noqa: F811 -- imported pytest fixtures
 import asyncio
 import json
 
 import pytest
-from fastapi.testclient import TestClient
+from tests.as_runtime.test_native_http import host  # noqa: F401
 
-from open_deep_research.agents.query_engine import QueryEngine
 from open_deep_research.events.public import (
     PublicEventLogCorrupted,
     RunEventStore,
@@ -18,25 +18,6 @@ from open_deep_research.run_context import RunContextStore
 from open_deep_research.run_control import RunControlStore
 
 
-@pytest.mark.asyncio
-async def test_cancelled_public_event_preserves_lease_lost_reason(tmp_path):
-    engine = QueryEngine({
-        "configurable": {"runs_dir": str(tmp_path)},
-        "metadata": {"run_id": "lease-lost-public-event"},
-    })
-    captured: dict = {}
-
-    async def capture(event_type, *, payload, **_kwargs):
-        captured["event_type"] = event_type
-        captured["payload"] = payload
-
-    engine._publish_public = capture
-    engine.cancellation_scope.request("lease_lost")
-
-    await engine._publish_public_cancelled()
-
-    assert captured["event_type"] == "run.cancelled"
-    assert captured["payload"]["termination_reason"] == "lease_lost"
 
 
 @pytest.mark.asyncio
@@ -361,29 +342,16 @@ async def test_projection_reduces_plan_tasks_waves_and_findings(tmp_path):
     assert projection.latest_findings[0]["summary"] == "Finding"
 
 
-def test_sse_replays_after_last_event_id(monkeypatch, tmp_path):
-    from open_deep_research import server
-    from security.auth import get_current_user
-
-    monkeypatch.setenv("RUNS_DIR", str(tmp_path))
+@pytest.mark.asyncio
+async def test_sse_replays_after_last_event_id(host):
+    service, client, _, _ = host
     run_id = "run-sse"
-    context = RunContextStore(run_id, runs_dir=str(tmp_path))
-    context.initialize("user-1", {"configurable": {"runs_dir": str(tmp_path)}, "metadata": {"run_id": run_id}})
-    store = RunEventStore(run_id, runs_dir=str(tmp_path))
-    asyncio.run(store.append("run.created", payload={"status": "pending"}, dedupe_key="run:created"))
-    asyncio.run(store.append("run.completed", payload={"status": "completed", "result_ref": f"/runs/{run_id}"}, dedupe_key="run:completed"))
-    from tests.auth_helpers import research_principal
-
-    server.app.dependency_overrides[get_current_user] = lambda: research_principal("user-1")
-    try:
-        client = TestClient(server.app)
-        response = client.get(
-            f"/runs/{run_id}/events?after=0",
-            headers={"Last-Event-ID": "1"},
-        )
-    finally:
-        server.app.dependency_overrides.pop(get_current_user, None)
-
+    context = RunContextStore(run_id, runs_dir=service.runs_dir)
+    context.initialize("alice", {"configurable": {"runs_dir": str(service.runs_dir)}, "metadata": {"run_id": run_id}})
+    store = RunEventStore(run_id, runs_dir=service.runs_dir)
+    await store.append("run.created", payload={"status": "pending"}, dedupe_key="run:created")
+    await store.append("run.completed", payload={"status": "completed", "result_ref": f"/runs/{run_id}"}, dedupe_key="run:completed")
+    response = await client.get(f"/runs/{run_id}/events?after=0", headers={"Last-Event-ID": "1"})
     assert response.status_code == 200
     assert "id: 1" not in response.text
     assert "id: 2" in response.text

@@ -11,10 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
+from tests.report_helpers import patch_report_model
+from open_deep_research.report.runtime import AIMessage
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
 
-from open_deep_research.report import assembly as assembly_module
 from open_deep_research.report import build_report
 from open_deep_research.run_context import RunContextStore
 
@@ -37,9 +37,7 @@ async def test_legacy_report_is_byte_identical_to_model_output(monkeypatch):
         captured["model_name"] = model_name
         return AIMessage(content=fake_content)
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -73,9 +71,7 @@ async def test_default_report_aggregates_completed_task_outputs(monkeypatch):
         captured["prompt"] = "\n".join(str(m.content) for m in messages[1:])
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -109,9 +105,7 @@ async def test_report_persists_evaluation_snapshot_before_clearing_runtime_state
     ):
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
     state = {
         "messages": [],
         "research_brief": "compare A and B",
@@ -223,11 +217,7 @@ async def test_report_snapshot_recovers_researcher_trace_from_artifact_refs(
     ):
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_report_model(monkeypatch, fake_invoke)
     run_id = "report-artifact-trace"
     store = RunContextStore(run_id, runs_dir=str(tmp_path))
     task_id = "research-task-1"
@@ -295,9 +285,7 @@ async def test_unknown_report_type_falls_back_to_default(monkeypatch):
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
         return AIMessage(content="fallback body")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -320,9 +308,7 @@ async def test_bibtex_reference_style_replaces_sources_section(monkeypatch):
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
         return AIMessage(content=body)
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {
         "messages": [],
@@ -355,9 +341,7 @@ async def test_artifact_markdown_matches_reference_rewritten_final_report(monkey
     ):
         return AIMessage(content=body)
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
     state = {
         "messages": [],
         "research_brief": "b",

@@ -20,8 +20,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_native_source_has_no_legacy_imports():
-    result = audit(ROOT, "native")
+    result = audit(ROOT, "retirement")
     assert result["passed"], result["findings"]
+
+
+def test_retired_query_engine_and_file_task_executors_are_absent():
+    for name in (
+        "agents/query_engine.py", "agents/query.py", "agents/deep_researcher.py",
+        "tasks/executor.py", "tasks/teammate_pool.py", "tasks/team_bridge.py",
+        "tools/supervisor/__init__.py",
+    ):
+        assert not (ROOT / "src/open_deep_research" / name).exists()
+    assert not [item for item in audit(ROOT, "retirement")["findings"] if item["kind"] == "legacy_engine_import"]
 
 
 def test_application_images_match_interpreter_and_dependency_groups():
@@ -141,11 +151,16 @@ def test_native_entry_imports_do_not_load_langchain_or_legacy_engine():
     # Separate interpreter catches transitive imports even when another test loaded legacy modules.
     code = """
 import importlib, sys
+from pathlib import Path
+for package in ("agentscope_runtime", "api"):
+    for path in Path("src/open_deep_research", package).glob("*.py"):
+        if path.stem != "__init__":
+            importlib.import_module("open_deep_research." + package + "." + path.stem)
 for name in (
     "agentscope_runtime.app", "agentscope_runtime.research", "agentscope_runtime.report",
     "agentscope_runtime.knowledge", "agentscope_runtime.memory", "agentscope_runtime.team_worker",
     "api.contracts", "api.history", "api.streams",
-    "api.native_runs", "api.research_router",
+    "api.native_runs", "api.research_router", "server",
 ):
     importlib.import_module("open_deep_research." + name)
 assert not any(name.startswith("langchain") for name in sys.modules)

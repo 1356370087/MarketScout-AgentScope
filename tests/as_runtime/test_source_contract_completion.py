@@ -146,8 +146,8 @@ async def test_real_document_or_exact_url_reaches_handoff_and_completion(mode):
                            execution_zone=ToolExecutionZone.HOST_CONTROL)]
 
     class Model(Models):
-        async def structured(self, role, prompt, schema, state):
-            result = await Judge().structured(role, prompt, schema, state)
+        async def structured(self, role, prompt, schema, state, *, messages=None):
+            result = await Judge().structured(role, prompt, schema, state, messages=messages)
             if schema is HandoffAssessment:
                 result.requirement_coverage = [RequirementCoverage(
                     **{**item.model_dump(), "evidence_ids": [record["evidence_id"]]}

@@ -61,7 +61,8 @@ class Judge:
         self.score = score
         self.calls = []
 
-    async def structured(self, role, prompt, schema, state):
+    async def structured(self, role, prompt, schema, state, *, messages=None):
+        prompt = messages[1].get_text_content() if messages is not None else prompt
         self.calls.append(prompt)
         fields = {
             "relevance": self.score,
@@ -327,8 +328,8 @@ async def test_full_gated_supervisor_admits_evidence_and_merges_coverage():
     from open_deep_research.agentscope_runtime.research_agents import Researcher
 
     class AllModels(Models):
-        async def structured(self, role, prompt, schema, state):
-            return await Judge().structured(role, prompt, schema, state)
+        async def structured(self, role, prompt, schema, state, *, messages=None):
+            return await Judge().structured(role, prompt, schema, state, messages=messages)
 
     models = AllModels(
         {
@@ -457,6 +458,23 @@ async def test_native_coalesced_context_can_offload_older_complete_round():
     }
     assert ids == {"new"}
     assert len(offloader.saved) == 2
+
+
+@pytest.mark.parametrize("skill", ["medical", "legal", "finance"])
+async def test_native_researcher_receives_selected_domain_skill(skill):
+    from open_deep_research.agentscope_runtime.research_agents import Researcher
+    from open_deep_research.skills import get_skill_researcher_context
+
+    async def tools_for(assignment):
+        return []
+
+    models = Models({"researcher": [[TextBlock(text="Domain findings")]]})
+    config = cfg(skills=[skill])
+    await Researcher(models, lambda: config, tools_for, run_id="run").run(
+        ResearchAssignment(research_topic="q"), contract()
+    )
+    prompt = str(models.created[0][2].calls[0]["messages"])
+    assert get_skill_researcher_context([skill]) in prompt
 
 
 async def test_terminal_no_evidence_is_durable_and_never_reenters_research():

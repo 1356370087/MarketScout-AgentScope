@@ -2,10 +2,7 @@
 import json
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
 
-from open_deep_research.agents import deep_researcher
-from open_deep_research.agents.query_engine import ResearcherQueryEngine
 from open_deep_research.quality.gate import (
     HANDOFF_EVALUATION_PROMPT_V4,
     ToolResultAssessment,
@@ -13,11 +10,8 @@ from open_deep_research.quality.gate import (
     deterministic_tool_checks,
     evaluate_tool_results,
 )
-from tests.test_researcher_query_runtime import (
-    FakeResearchModel,
-    _config,
-    research_echo,
-)
+from tests.quality_helpers import config as _config
+
 
 
 def _evidence(count):
@@ -85,38 +79,3 @@ async def test_cumulative_evidence_does_not_override_judge_coverage(monkeypatch,
         _config(), evidence_registry=_evidence(2))
     assert result.decision == judge_decision
     assert result.deterministic_checks["batch_failures"] == ["all_tools_failed"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("evaluator_error", [None, "judge unavailable"])
-async def test_research_loop_honors_quality_stop(monkeypatch, evaluator_error):
-    model = FakeResearchModel([
-        AIMessage(content="", tool_calls=[{"name": "research_echo", "args": {"text": "fact"}, "id": "tool-1"}]),
-        AIMessage(content="", tool_calls=[{"name": "ResearchComplete", "args": {}, "id": "done-1"}]),
-    ])
-
-    async def tools(_config):
-        return [research_echo, *deep_researcher.build_supervisor_tools({})[-2:-1]]
-
-    async def judge(*args, **kwargs):
-        return ToolResultAssessment(decision="complete", relevance=3, source_quality=3,
-            evidence_coverage=3, corroboration=3, reason="stop", evaluator_error=evaluator_error)
-
-    async def compress(state, _config):
-        return {"compressed_research": "compressed", "raw_notes": []}
-
-    monkeypatch.setattr(deep_researcher, "configurable_model", model)
-    monkeypatch.setattr(deep_researcher, "get_all_tools", tools)
-    monkeypatch.setattr(deep_researcher, "evaluate_tool_results", judge)
-    monkeypatch.setattr(deep_researcher, "compress_research", compress)
-    result = await ResearcherQueryEngine(_config(quality_evaluation_enabled=True,
-        quality_evaluation_fail_open=False, event_log_enabled=False,
-        query_session_persistence_enabled=False)).ainvoke({
-            "researcher_messages": [HumanMessage(content="topic")], "research_topic": "topic",
-            "evidence_registry": _evidence(2),
-        })
-    assert len(model.calls) == 1
-    assert result["completion_decision"]["action"] == ("terminate" if evaluator_error else "complete")
-    assert result["completion_decision"]["reason"] == (
-        "quality_evaluator_unavailable" if evaluator_error else "quality_complete"
-    )

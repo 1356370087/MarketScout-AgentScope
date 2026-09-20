@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Protocol, cast
+from typing import Any, List, Optional, Protocol
 
 from open_deep_research import prompts as _prompts
 from open_deep_research.configuration import Configuration
@@ -12,7 +12,6 @@ from open_deep_research.evidence import (
     contract_has_source_constraints,
     source_scoped_evidence_records,
 )
-from open_deep_research.models.errors import is_token_limit_exceeded
 from open_deep_research.prompts import (
     final_section_writer_prompt,
     report_outline_planner_prompt,
@@ -23,31 +22,12 @@ from open_deep_research.skills import get_skill_report_context
 from .coverage import render_state_coverage_checklist
 from .models import ReportOutline, SectionSpec, SourceRef, WrittenSection
 from .profiles import AssemblyMode, ReportProfile
-from .runtime import (
-    BaseMessage,
-    LazyWriterTemplate,
-    RunnableConfig,
-    apply_helicone_config,
-    build_model_config,
-    complete_model,
-    complete_model_stream,
-    get_buffer_string,
-    get_today_str,
-    get_trace_recorder,
-    invoke_model_with_retry_observability,
-    invoke_with_model_fallback,
-    invoke_with_output_recovery,
-    native_report,
-    resolve_model_max_output_tokens,
-)
+from .runtime import BaseMessage, RunnableConfig, get_buffer_string, get_today_str, require_report_runtime
 from .writing import (
-    fit_writing_messages,
     order_evidence,
     project_evidence,
     writing_messages,
 )
-
-_writer_model_template = LazyWriterTemplate()
 
 
 def _build_findings(state: dict) -> str:
@@ -135,7 +115,8 @@ class ReportContext:
         """Build a stage from trusted template instructions and separate data."""
         payload = {
             **payload,
-            **({"approved_outline": self.state.get("report_outline", ""), "completion_outcome": self.state.get("completion_outcome", {})} if native_report.get() is not None else {}),
+            "approved_outline": self.state.get("report_outline", ""),
+            "completion_outcome": self.state.get("completion_outcome", {}),
             "coverage": render_state_coverage_checklist(self.state),
             "requirement_to_evidence": self.requirement_to_evidence,
             "evidence_mode": "accepted_records" if self.strict_evidence else "historical_notes_compatibility",
@@ -239,227 +220,14 @@ class ReportContext:
         """Resolve the profile's prompt-constant name to the actual template."""
         return getattr(_prompts, self.profile.prompt_template)
 
-    def build_writer_model(
-        self,
-        max_tokens: int | None = None,
-        *,
-        model_name: str | None = None,
-    ):
-        """Construct the writer model, configured for the lead.final_report span."""
-        resolved_model = model_name or self.configurable.final_report_model
-        writer_model_config = build_model_config(
-            resolved_model,
-            (
-                max_tokens
-                if max_tokens is not None
-                else self.configurable.final_report_model_max_tokens
-            ),
-            self.config,
-            role="final_report",
-        )
-        return _writer_model_template.with_config(
-            cast(RunnableConfig, apply_helicone_config(
-                writer_model_config,
-                self.config,
-                span_name="lead.final_report",
-                agent_role="lead",
-            ))
-        )
 
-    def build_structured_model(self, schema, *, model_name: str | None = None):
-        """Construct a writer model bound to a Pydantic schema for structured output.
+    async def invoke_writer_with_output_recovery(self, messages: list[BaseMessage], *, span_name: str) -> BaseMessage:
+        """Write through the native model policy, budget and recovery ledger."""
+        return await require_report_runtime().invoke("final_report", messages, self.configurable, span_name=span_name)
 
-        Reuse the process model template, then bind structured output.
-        """
-        resolved_model = model_name or self.configurable.final_report_model
-        model = _writer_model_template.with_config(
-            build_model_config(
-                resolved_model,
-                self.configurable.final_report_model_max_tokens,
-                self.config,
-                role="final_report",
-            )
-        )
-        return model.with_structured_output(schema, method="function_calling")
-
-    async def invoke_writer_with_output_recovery(
-        self,
-        messages: list[BaseMessage],
-        *,
-        span_name: str,
-    ) -> BaseMessage:
-        """Invoke a report writer without accepting truncated output."""
-        if native_report.get() is not None:
-            return await native_report.get().invoke("final_report", messages, self.configurable, span_name=span_name)
-
-        async def invoke_writer_candidate(
-            candidate_model: str,
-            candidate_messages: list[BaseMessage],
-        ) -> BaseMessage:
-            async def call_raw_model(
-                request_messages: list[BaseMessage],
-                max_tokens_override: int | None,
-            ) -> BaseMessage:
-                if self.configurable.model_backend == "litellm":
-                    if self.configurable.final_report_stream_enabled:
-                        # Long-form writing benefits from first-packet and
-                        # idle timeouts; the stream downgrades itself to the
-                        # non-streaming path whenever the deployment refuses.
-                        return await complete_model_stream(
-                            request_messages,
-                            self.config,
-                            role="final_report",
-                            stage="writing",
-                            model=candidate_model,
-                            max_output_tokens=(
-                                max_tokens_override
-                                or self.configurable.final_report_model_max_tokens
-                            ),
-                            span_name=span_name,
-                        )
-                    return await complete_model(
-                        request_messages,
-                        self.config,
-                        role="final_report",
-                        stage="writing",
-                        model=candidate_model,
-                        max_output_tokens=(
-                            max_tokens_override
-                            or self.configurable.final_report_model_max_tokens
-                        ),
-                        span_name=span_name,
-                    )
-                return await invoke_model_with_retry_observability(
-                    self.build_writer_model(
-                        max_tokens_override,
-                        model_name=candidate_model,
-                    ),
-                    request_messages,
-                    self.config,
-                    span_name=span_name,
-                    agent_role="lead",
-                    model_name=candidate_model,
-                    stage="writing",
-                )
-
-            async def call_model(request_messages, max_tokens_override):
-                for attempt in range(4):
-                    fitted, selected = fit_writing_messages(
-                        request_messages, candidate_model, self.configurable,
-                        output_tokens=max_tokens_override or self.configurable.final_report_model_max_tokens,
-                        fraction=0.75 ** attempt,
-                    )
-                    span = get_trace_recorder(self.config).active_span()
-                    span.score(f"{span_name}.selected_evidence_count", selected)
-                    try:
-                        return await call_raw_model(fitted, max_tokens_override)
-                    except Exception as exc:
-                        if attempt == 3 or not is_token_limit_exceeded(exc, candidate_model):
-                            raise
-                        span.record_retry(attempt=attempt + 1, error_type="context_length_exceeded", retryable=True, message=str(exc))
-
-            return await invoke_with_output_recovery(
-                call_model,
-                candidate_messages,
-                requested_output_tokens=(
-                    self.configurable.final_report_model_max_tokens
-                ),
-                maximum_output_tokens=resolve_model_max_output_tokens(
-                    candidate_model,
-                    requested=self.configurable.final_report_model_max_tokens,
-                    overrides=(
-                        self.configurable.model_max_output_tokens_overrides
-                    ),
-                ),
-                escalation_enabled=(
-                    self.configurable.output_token_escalation_enabled
-                ),
-                continuation_max_attempts=(
-                    self.configurable.output_continuation_max_attempts
-                ),
-            )
-
-        return await invoke_with_model_fallback(
-            invoke_writer_candidate,
-            messages,
-            primary_model=self.configurable.final_report_model,
-            model_fallbacks=(
-                {}
-                if self.configurable.model_backend == "litellm"
-                else self.configurable.model_fallbacks
-            ),
-            role="final_report",
-            config=self.config,
-        )
-
-    async def invoke_structured_with_fallback(
-        self,
-        schema,
-        messages: list[BaseMessage],
-        *,
-        span_name: str,
-    ):
-        """Invoke a structured report stage through the final-report chain."""
-        if native_report.get() is not None:
-            return await native_report.get().invoke("final_report", messages, self.configurable, span_name=span_name, schema=schema)
-        async def invoke_raw_candidate(
-            candidate_model: str,
-            request_messages: list[BaseMessage],
-        ):
-            if self.configurable.model_backend == "litellm":
-                return await complete_model(
-                    request_messages,
-                    self.config,
-                    role="final_report",
-                    stage="writing",
-                    model=candidate_model,
-                    max_output_tokens=(
-                        self.configurable.final_report_model_max_tokens
-                    ),
-                    span_name=span_name,
-                    output_schema=schema,
-                )
-            return await invoke_model_with_retry_observability(
-                self.build_structured_model(
-                    schema,
-                    model_name=candidate_model,
-                ),
-                request_messages,
-                self.config,
-                span_name=span_name,
-                agent_role="lead",
-                model_name=candidate_model,
-                stage="writing",
-            )
-
-        async def invoke_candidate(candidate_model, request_messages):
-            for attempt in range(4):
-                fitted, selected = fit_writing_messages(
-                    request_messages, candidate_model, self.configurable,
-                    output_tokens=self.configurable.final_report_model_max_tokens,
-                    fraction=0.75 ** attempt,
-                )
-                span = get_trace_recorder(self.config).active_span()
-                span.score(f"{span_name}.selected_evidence_count", selected)
-                try:
-                    return await invoke_raw_candidate(candidate_model, fitted)
-                except Exception as exc:
-                    if attempt == 3 or not is_token_limit_exceeded(exc, candidate_model):
-                        raise
-                    span.record_retry(attempt=attempt + 1, error_type="context_length_exceeded", retryable=True, message=str(exc))
-
-        return await invoke_with_model_fallback(
-            invoke_candidate,
-            messages,
-            primary_model=self.configurable.final_report_model,
-            model_fallbacks=(
-                {}
-                if self.configurable.model_backend == "litellm"
-                else self.configurable.model_fallbacks
-            ),
-            role="final_report",
-            config=self.config,
-        )
+    async def invoke_structured_with_fallback(self, schema, messages: list[BaseMessage], *, span_name: str):
+        """Use the same native candidate policy for structured report stages."""
+        return await require_report_runtime().invoke("final_report", messages, self.configurable, span_name=span_name, schema=schema)
 
 
 class OneShotStrategy:

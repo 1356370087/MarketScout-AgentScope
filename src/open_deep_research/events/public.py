@@ -23,8 +23,13 @@ import portalocker
 if TYPE_CHECKING:
     from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
-
 from open_deep_research.configuration import Configuration
+
+
+class PublicFindingsSummary(BaseModel):
+    """Shared domain result used by the native public-findings model call."""
+
+    findings: list[str] = Field(default_factory=list, max_length=3)
 
 PUBLIC_EVENT_SCHEMA_VERSION = 2
 PUBLIC_STAGES = (
@@ -231,10 +236,6 @@ class PublicRunProjection(BaseModel):
     last_event_id: int = 0
 
 
-class PublicFindingsSummary(BaseModel):
-    """Structured, user-visible summary produced from compressed findings."""
-
-    findings: list[str] = Field(default_factory=list, max_length=3)
 
 
 def utc_timestamp() -> str:
@@ -400,77 +401,6 @@ def extract_public_sources(result: dict[str, Any], *, limit: int = 10) -> list[d
     return list(found.values())[:limit]
 
 
-async def summarize_public_findings(
-    result: dict[str, Any],
-    config: RuntimeConfig,
-) -> Optional[str]:
-    """Create a bounded public summary; failure never exposes raw findings."""
-    compressed = str(result.get("compressed_research") or "").strip()
-    if not compressed:
-        return None
-    configurable = Configuration.from_runnable_config(config)
-    try:
-        from langchain_core.messages import HumanMessage
-
-        prompt_messages = [
-            HumanMessage(
-                content=(
-                    "Summarize the completed research into at most three concise "
-                    "user-visible findings. Do not mention prompts, hidden reasoning, "
-                    "tool internals, credentials, or implementation details. Preserve "
-                    "uncertainty and do not add claims.\n\nCompressed research:\n"
-                    + compressed[:50_000]
-                )
-            )
-        ]
-        if configurable.model_backend == "litellm":
-            from open_deep_research.models.invocation import complete_model
-
-            response = await complete_model(
-                prompt_messages,
-                config,
-                role="summarization",
-                stage="finalizing",
-                model=configurable.summarization_model,
-                max_output_tokens=min(
-                    configurable.summarization_model_max_tokens, 800
-                ),
-                span_name="public_findings_summary",
-                output_schema=PublicFindingsSummary,
-            )
-            return "\n".join(f"- {item}" for item in response.findings)
-
-        from open_deep_research.models.resolution import (
-            build_model_config,
-            get_configurable_model_template,
-        )
-        from open_deep_research.observability.core import (
-            invoke_model_with_retry_observability,
-        )
-
-        model = get_configurable_model_template().with_config(
-            build_model_config(
-                configurable.summarization_model,
-                min(configurable.summarization_model_max_tokens, 800),
-                config,
-                role="summarization",
-            )
-        ).with_structured_output(PublicFindingsSummary, method="function_calling")
-        response = await invoke_model_with_retry_observability(
-            model,
-            prompt_messages,
-            config,
-            span_name="public_findings_summary",
-            agent_role="summarization",
-            model_name=configurable.summarization_model,
-            stage="finalizing",
-        )
-        findings = [str(item).strip() for item in response.findings if str(item).strip()][:3]
-        if not findings:
-            return None
-        return "\n".join(f"- {item}" for item in findings)[: configurable.public_event_summary_max_chars]
-    except Exception:
-        return None
 
 
 def _sanitize_scalar(value: Any) -> Any:

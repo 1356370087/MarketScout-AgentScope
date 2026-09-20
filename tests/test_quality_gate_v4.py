@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
+from open_deep_research.report.runtime import HumanMessage
 
-from open_deep_research.agents import deep_researcher
 from open_deep_research.quality.contract import (
     AdmissionStatus,
+    canonicalize_requirement_ids,
     CoverageStatus,
     HandoffPolicyInput,
     RequirementCoverage,
@@ -30,8 +30,6 @@ from open_deep_research.quality.gate import (
     evaluate_subagent_handoff,
     evaluate_tool_results,
 )
-from open_deep_research.state import ResearchQuestion
-from open_deep_research.tools.base import ToolContext
 
 
 def test_contract_splits_final_chinese_conjunction_in_explicit_list() -> None:
@@ -108,18 +106,6 @@ def test_payload_budget_fails_closed_instead_of_truncating_reason_codes() -> Non
         _bounded_quality_payload(payload, max_chars=encoded_chars - 1)
 
 
-def test_supervisor_contract_explains_aggregate_requirement_ownership() -> None:
-    contract = build_research_coverage_contract([
-        HumanMessage(content=(
-            "分别比较能力 A、能力 B；至少提供 6 个官方链接。"
-        ))
-    ])
-
-    rendered = deep_researcher._render_supervisor_coverage_contract(contract)
-
-    assert "exactly one primary owner" in rendered
-    assert "Aggregate final-output requirements" in rendered
-    assert "must not be assigned to every parallel task" in rendered
 
 
 def test_unique_coverage_ordinal_repairs_only_hash_suffix() -> None:
@@ -131,7 +117,7 @@ def test_unique_coverage_ordinal_repairs_only_hash_suffix() -> None:
     ordinal, _separator, suffix = target.rpartition("-")
     typo = f"{ordinal}-{'0' if suffix[-1] != '0' else '1'}{suffix[:-1]}"
 
-    normalized = deep_researcher._canonicalize_coverage_requirement_ids(
+    normalized = canonicalize_requirement_ids(
         [typo, "COV-99-deadbeef"],
         contract,
     )
@@ -140,64 +126,8 @@ def test_unique_coverage_ordinal_repairs_only_hash_suffix() -> None:
     assert normalized[1] == "COV-99-deadbeef"
 
 
-def test_supervisor_fills_missing_requirement_ownership_without_duplication() -> None:
-    contract = build_research_coverage_contract([
-        HumanMessage(content="分别研究能力 A、能力 B、能力 C。")
-    ])
-    first, *remaining = contract.requirement_ids()
-    tool_calls = [
-        {
-            "id": "task-explicit",
-            "name": "ConductResearch",
-            "args": {
-                "research_topic": "能力 A",
-                "requirement_ids": [first],
-            },
-        },
-        {
-            "id": "task-fallback",
-            "name": "ConductResearch",
-            "args": {"research_topic": "其余能力"},
-        },
-    ]
-
-    normalized = deep_researcher._canonicalize_supervisor_tool_call_requirements(
-        tool_calls,
-        contract,
-    )
-
-    assert normalized[0]["args"]["requirement_ids"] == [first]
-    assert normalized[1]["args"]["requirement_ids"] == remaining
 
 
-def test_supervisor_fallback_assigns_only_delegable_requirements() -> None:
-    contract = build_research_coverage_contract([
-        HumanMessage(content=(
-            "研究电池回收政策与市场趋势，并在最终报告中给出风险矩阵。"
-        ))
-    ])
-    delegable = list(contract.delegable_requirement_ids())
-    non_delegable = {
-        item.requirement_id
-        for item in contract.requirements
-        if item.kind != "factual"
-    }
-    assert delegable and non_delegable
-
-    normalized = deep_researcher._canonicalize_supervisor_tool_call_requirements(
-        [
-            {
-                "id": "task-fallback",
-                "name": "ConductResearch",
-                "args": {"research_topic": "政策与市场趋势"},
-            }
-        ],
-        contract,
-    )
-
-    assigned = normalized[0]["args"]["requirement_ids"]
-    assert assigned == delegable
-    assert non_delegable.isdisjoint(assigned)
 
 
 def test_accepted_empty_coverage_records_partial_ledger_entry() -> None:
@@ -571,77 +501,6 @@ def test_coverage_contract_preserves_explicit_chinese_time_constraint() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_research_brief_exposes_contract_ids_to_supervisor(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    original_query = (
-        "截至2026年7月，说明 LangGraph checkpoint 恢复机制，"
-        "并给出工程可靠性清单。"
-    )
-    advisory_brief = (
-        "调查 checkpoint 恢复机制；额外查找一个精确版本号作为建议维度。"
-    )
-
-    class _FakeResearchModel:
-        def with_config(self, _config):
-            return self
-
-        def with_structured_output(self, *_args, **_kwargs):
-            return self
-
-    async def _fake_invoke(*_args, **_kwargs):
-        return ResearchQuestion(research_brief=advisory_brief)
-
-    monkeypatch.setattr(
-        deep_researcher,
-        "get_model_connection_kwargs",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        deep_researcher,
-        "apply_helicone_config",
-        lambda model_config, *_args, **_kwargs: model_config,
-    )
-    monkeypatch.setattr(
-        deep_researcher,
-        "configurable_model",
-        _FakeResearchModel(),
-    )
-    monkeypatch.setattr(
-        deep_researcher,
-        "invoke_model_with_retry_observability",
-        _fake_invoke,
-    )
-
-    command = await deep_researcher.write_research_brief(
-        {"messages": [HumanMessage(content=original_query)]},
-        {
-            "configurable": {
-                "research_model": "openai:gpt-4.1",
-                "enable_async_research": False,
-            },
-            "metadata": {"run_id": "coverage-contract-visible"},
-        },
-    )
-
-    contract = build_research_coverage_contract(
-        [HumanMessage(content=original_query)],
-        advisory_dimensions=[advisory_brief],
-    )
-    supervisor_messages = command.update["supervisor_messages"]["value"]
-    visible_context = "\n".join(
-        str(message.content) for message in supervisor_messages
-    )
-
-    for requirement in contract.requirements:
-        assert (
-            f"{requirement.requirement_id}: {requirement.text}"
-            in visible_context
-        )
-    assert "精确版本号" not in "\n".join(
-        requirement.text for requirement in contract.requirements
-    )
 
 
 def test_supervisor_advisory_requirement_cannot_hard_reject_handoff() -> None:
@@ -955,11 +814,7 @@ async def test_v4_fail_open_evaluator_error_does_not_admit_empty_coverage(
         raise TimeoutError("quality judge unavailable")
 
     monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
+        "open_deep_research.quality.gate._evaluate_json",
         fail_judge,
     )
     handoff = {
@@ -1029,11 +884,7 @@ async def test_v4_fail_open_does_not_bypass_required_coverage(
         raise TimeoutError("quality judge unavailable")
 
     monkeypatch.setattr(
-        "open_deep_research.quality.gate._build_quality_model",
-        lambda *_args, **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        "open_deep_research.quality.gate.invoke_model_with_retry_observability",
+        "open_deep_research.quality.gate._evaluate_json",
         fail_judge,
     )
     handoff = {
@@ -1700,70 +1551,8 @@ async def test_v4_official_only_judge_can_evaluate_candidate_structure(
     assert captured["deterministic_checks"]["out_of_scope_source_count"] == 0
 
 
-@pytest.mark.asyncio
-async def test_conduct_research_rejects_unknown_requirement_id() -> None:
-    contract = build_research_coverage_contract(
-        [HumanMessage(content="说明检查点恢复机制。")]
-    )
-    tool = next(
-        tool
-        for tool in deep_researcher.build_supervisor_tools({
-            "coverage_contract": contract.model_dump(mode="json"),
-            "research_risk_profile": {"level": "standard"},
-        })
-        if tool.name == "ConductResearch"
-    )
-    tool_input = tool.input_schema(
-        research_topic="advisory task",
-        requirement_ids=["COV-UNKNOWN"],
-    )
-
-    with pytest.raises(ValueError, match="unknown_coverage_requirement_ids"):
-        await tool.call(
-            tool_input,
-            ToolContext(
-                config={
-                    "configurable": {},
-                    "metadata": {
-                        "run_id": "coverage-v4",
-                        "quality_policy_version": "quality-gate-v4",
-                    },
-                },
-                role="supervisor",
-                tool_call_id="task-1",
-            ),
-        )
 
 
-def test_research_tool_schemas_enumerate_contract_requirement_ids() -> None:
-    contract = build_research_coverage_contract(
-        [HumanMessage(content="说明检查点恢复机制，并比较失败恢复策略。")]
-    )
-    expected_ids = list(contract.requirement_ids())
-
-    sync_tool = next(
-        tool
-        for tool in deep_researcher.build_supervisor_tools({
-            "coverage_contract": contract.model_dump(mode="json"),
-            "research_risk_profile": {"level": "standard"},
-        })
-        if tool.name == "ConductResearch"
-    )
-    async_tool = next(
-        tool
-        for tool in deep_researcher.build_supervisor_tools({
-            "coverage_contract": contract.model_dump(mode="json"),
-            "research_risk_profile": {"level": "standard"},
-            "enable_async_research": True,
-        })
-        if tool.name == "StartResearchTask"
-    )
-
-    for tool in (sync_tool, async_tool):
-        requirement_schema = tool.input_schema.model_json_schema()["properties"][
-            "requirement_ids"
-        ]
-        assert requirement_schema["items"]["enum"] == expected_ids
 
 
 _E2E_DELIVERABLE_QUERY = (
@@ -2293,43 +2082,6 @@ def test_v1_contract_payload_loads_without_parent_dimensions() -> None:
     assert contract.model_dump(mode="json")["schema_version"] == 1
 
 
-def test_v1_fallback_assignment_preserves_legacy_round_robin_order() -> None:
-    from open_deep_research.quality.contract import ResearchCoverageContract
-
-    contract = ResearchCoverageContract.model_validate({
-        "schema_version": 1,
-        "original_query_sha256": "legacy",
-        "requirements": [
-            {
-                "requirement_id": f"COV-{index:02d}-legacy",
-                "text": f"旧版需求 {index}",
-                "source_message_index": 0,
-                "source_start": index,
-                "source_end": index + 1,
-            }
-            for index in range(1, 5)
-        ],
-    })
-    normalized = deep_researcher._canonicalize_supervisor_tool_call_requirements(
-        [
-            {
-                "id": f"task-{index}",
-                "name": "ConductResearch",
-                "args": {"research_topic": f"legacy {index}"},
-            }
-            for index in range(2)
-        ],
-        contract,
-    )
-
-    assert normalized[0]["args"]["requirement_ids"] == [
-        "COV-01-legacy",
-        "COV-03-legacy",
-    ]
-    assert normalized[1]["args"]["requirement_ids"] == [
-        "COV-02-legacy",
-        "COV-04-legacy",
-    ]
 
 
 def test_dimension_cap_falls_back_per_parent_without_dropping_dimensions() -> None:
@@ -2417,16 +2169,12 @@ def test_deliverable_and_process_requirements_are_evidence_optional() -> None:
 
 
 def test_non_factual_requirements_are_not_delegable() -> None:
-    from open_deep_research.tools.supervisor.common import (
+    from open_deep_research.quality.contract import (
         coverage_bound_input_schema,
         validate_requirement_ids,
     )
-    from open_deep_research.tools.supervisor.conduct_research import (
-        ConductResearch,
-    )
-    from open_deep_research.tools.supervisor.start_research_task import (
-        StartResearchTask,
-    )
+    from open_deep_research.agentscope_runtime.research_agents import _Topic as ConductResearch
+    from open_deep_research.agentscope_runtime.teams_tools import TaskCreateInput as StartResearchTask
 
     contract = build_research_coverage_contract(
         [HumanMessage(content=_E2E_DELIVERABLE_QUERY)]
@@ -2462,7 +2210,7 @@ def test_non_factual_requirements_are_not_delegable() -> None:
 
 
 def test_research_task_rejects_more_than_three_atomic_requirements() -> None:
-    from open_deep_research.tools.supervisor.common import validate_requirement_ids
+    from open_deep_research.quality.contract import validate_requirement_ids
 
     contract = build_research_coverage_contract(
         [HumanMessage(content=_FD1AAEC3_COMPACT_QUERY)]
@@ -2478,7 +2226,7 @@ def test_research_task_rejects_more_than_three_atomic_requirements() -> None:
 
 def test_research_task_rejects_ids_spanning_parent_dimensions() -> None:
     """Atomic children from two parent dimensions must not re-form one task."""
-    from open_deep_research.tools.supervisor.common import validate_requirement_ids
+    from open_deep_research.quality.contract import validate_requirement_ids
 
     contract = build_research_coverage_contract(
         [HumanMessage(content=_FD1AAEC3_COMPACT_QUERY)]
@@ -2531,57 +2279,12 @@ def test_owned_projection_keeps_company_dimension_attributes() -> None:
     }
 
 
-def test_supervisor_fallback_assigns_at_most_one_dimension_per_task() -> None:
-    contract = build_research_coverage_contract(
-        [HumanMessage(content=_FD1AAEC3_COMPACT_QUERY)]
-    )
-    normalized = deep_researcher._canonicalize_supervisor_tool_call_requirements(
-        [
-            {
-                "id": "task-fallback",
-                "name": "ConductResearch",
-                "args": {"research_topic": "first atomic batch"},
-            }
-        ],
-        contract,
-    )
-
-    assigned = normalized[0]["args"]["requirement_ids"]
-    requirement_by_id = {
-        requirement.requirement_id: requirement
-        for requirement in contract.requirements
-    }
-    assert 1 <= len(assigned) <= 3
-    assert len({requirement_by_id[item].dimension_id for item in assigned}) == 1
 
 
-def test_compression_owned_requirement_includes_parent_dimension_context() -> None:
-    contract = build_research_coverage_contract(
-        [HumanMessage(content=_FD1AAEC3_COMPACT_QUERY)]
-    )
-    market_requirement = next(
-        requirement
-        for requirement in contract.requirements
-        if requirement.text == "市场规模"
-        and contract.dimension_for_requirement(requirement.requirement_id).label
-        == "中国政策与市场"
-    )
-
-    owned = deep_researcher._owned_compression_requirements({
-        "coverage_contract": contract.model_dump(mode="json"),
-        "requirement_ids": [market_requirement.requirement_id],
-    })
-
-    assert owned == [
-        {
-            "requirement_id": market_requirement.requirement_id,
-            "text": "中国政策与市场：市场规模",
-        }
-    ]
 
 
 def test_contract_without_delegable_requirements_allows_empty_assignment() -> None:
-    from open_deep_research.tools.supervisor.common import (
+    from open_deep_research.quality.contract import (
         validate_requirement_ids,
     )
 

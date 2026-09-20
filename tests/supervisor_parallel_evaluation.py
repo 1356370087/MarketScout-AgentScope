@@ -1,11 +1,9 @@
 import asyncio
 import uuid
 
-from langsmith import Client
-
-from open_deep_research.agents.query_engine import QueryEngine
-
-client = Client()
+from pathlib import Path
+from open_deep_research.evaluation.local_runtime import run_native_question
+from tests.run_local_evaluate import evaluation_runtime_environment
 
 dataset_name = "ODR: First Supervisor Parallelism"
 def right_parallelism_evaluator(
@@ -15,18 +13,22 @@ def right_parallelism_evaluator(
     state = outputs.get("output", outputs)
     actual_parallelism = 0
     for message in state.get("supervisor_messages", []):
-        tool_calls = (
-            message.get("tool_calls", [])
-            if isinstance(message, dict)
-            else getattr(message, "tool_calls", [])
-        )
-        research_calls = [
-            call
-            for call in tool_calls or []
-            if call.get("name") in {"ConductResearch", "StartResearchTask"}
-        ]
-        if research_calls:
-            actual_parallelism = len(research_calls)
+        value = message.model_dump(mode="json") if hasattr(message, "model_dump") else message
+        if not isinstance(value, dict):
+            continue
+        blocks = value.get("content")
+        if isinstance(blocks, list) and any(block.get("type") == "tool_call" for block in blocks if isinstance(block, dict)):
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_result" and actual_parallelism:
+                    break
+                if block.get("type") == "tool_call" and block.get("name") in {"ConductResearch", "StartResearchTask"}:
+                    actual_parallelism += 1
+        else:
+            actual_parallelism = sum(call.get("name") in {"ConductResearch", "StartResearchTask"}
+                                     for call in value.get("tool_calls", []) if isinstance(call, dict))
+        if actual_parallelism:
             break
     return {
         "key": "right_parallelism",
@@ -59,23 +61,25 @@ async def target(inputs: dict):
     config["configurable"]["final_report_model"] = "openai:gpt-4.1"
     config["configurable"]["final_report_model_max_tokens"] = 10000
     # NOTE: We do not use MCP tools to stay consistent
-    engine = QueryEngine(config)
-    final_state = await engine.submit_message(
-        [{"role": "user", "content": inputs["messages"][0]["content"]}],
-        config,
+    _run_id, final_state = await run_native_question(
+        inputs["messages"], config,
+        runs_dir=Path(__file__).resolve().parents[1] / ".runs" / "parallel-evaluation",
     )
     return final_state
 
 
 
 async def main():
-    return await client.aevaluate(
-        target,
-        data=dataset_name,
-        evaluators=[right_parallelism_evaluator],
-        experiment_prefix="v1 #",
-        max_concurrency=1,
-    )
+    from langsmith import Client
+
+    with evaluation_runtime_environment():
+        return await Client().aevaluate(
+            target,
+            data=dataset_name,
+            evaluators=[right_parallelism_evaluator],
+            experiment_prefix="v1 #",
+            max_concurrency=1,
+        )
 
 if __name__ == "__main__":
     results = asyncio.run(main())

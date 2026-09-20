@@ -1,1 +1,0 @@
-"""Send message tool."""
