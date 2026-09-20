@@ -13,28 +13,28 @@ from open_deep_research.agents.query_engine import QueryEngine
 from open_deep_research.api.projections import _stable_output, _stable_report_review  # noqa: F401
 from open_deep_research.api.stream_host import ApplicationStreams, _reauthorize_stream  # noqa: F401
 from open_deep_research.api.lifecycle import ApplicationLifecycle
-from open_deep_research.api.run_access import (
+from open_deep_research.api_host.run_access import (
     RunAccess, _config_from_request, _validate_run_sources,
     _find_idempotent_run, _require_record_owner, _augment_run_projection,
 )
 from open_deep_research.api.middleware import request_id_middleware, request_body_limit_middleware
-from open_deep_research.api.operations import (
+from open_deep_research.api_host.operations import (
     OperationalRoutes, healthz, _refresh_operational_metrics,
     _probe_runs_directory, _search_readiness,  # noqa: F401 - compatibility exports
 )
-from open_deep_research.api.run_admission import RunAdmission, _user_identity
-from open_deep_research.api.run_recovery import (
+from open_deep_research.api_host.run_admission import RunAdmission, _user_identity
+from open_deep_research.api_host.run_recovery import (
     _runs_root, _load_manifests, _run_recovery_sweep,
     _fenced_recovery_config, _renew_sweep_lease,  # noqa: F401 - compatibility exports
 )
-from open_deep_research.api.run_execution import (
+from open_deep_research.api_host.run_execution import (
     RunExecution,
     _release_gateway_run,  # noqa: F401 - compatibility export
     _run_control_listener,  # noqa: F401 - compatibility export
 )
-from open_deep_research.api.run_registry import RunRegistry, RunRecord, _new_run_record, _interrupt_inflight_record  # noqa: F401
-from open_deep_research.api.run_start import RunStartRoutes, _request_query_preview, _run_title  # noqa: F401
-from open_deep_research.api.run_retention import (
+from open_deep_research.api_host.run_registry import RunRegistry, RunRecord, _new_run_record, _interrupt_inflight_record  # noqa: F401
+from open_deep_research.api_host.run_start import RunStartRoutes, _request_query_preview, _run_title  # noqa: F401
+from open_deep_research.api_host.run_retention import (
     RunRetention,
     _TERMINAL_RUN_STATUSES,
     _cancel_before_forced_purge,  # noqa: F401 - compatibility export
@@ -45,7 +45,7 @@ from open_deep_research.api.run_retention import (
     _run_finished_at,  # noqa: F401 - compatibility export
     _runs_dir_size_bytes,  # noqa: F401 - compatibility export
 )
-from open_deep_research.api.run_interactions import RunInteractionRoutes
+from open_deep_research.api_host.run_interactions import RunInteractionRoutes
 from open_deep_research.api.run_reads import RunReadRoutes, _encode_cursor, _decode_cursor  # noqa: F401
 from open_deep_research.api.run_usage import (
     RunUsageRoutes,
@@ -58,7 +58,7 @@ from open_deep_research.api.run_usage import (
 )
 from open_deep_research.api.configuration_routes import router as configuration_router
 from open_deep_research.api.activity_routes import ActivityRoutes
-from open_deep_research.api.security_routes import SecurityRoutes
+from open_deep_research.api_host.security_routes import SecurityRoutes
 from open_deep_research.api.publication_routes import (
     PublicationRoutes,
     _run_publications,

@@ -9,8 +9,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from open_deep_research.api.run_registry import RunRecord
-from open_deep_research.api.run_retention import _TERMINAL_RUN_STATUSES
+from open_deep_research.api_host.run_registry import RunRecord
+from open_deep_research.api_host.run_retention import _TERMINAL_RUN_STATUSES
 from open_deep_research.api_governance import ConnectionLimiter, FixedWindowRateLimiter
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import get_prometheus_metrics

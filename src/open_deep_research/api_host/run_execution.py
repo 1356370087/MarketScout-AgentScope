@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from open_deep_research.api.contracts import RunRequest
-from open_deep_research.api.run_registry import RunRecord
+from open_deep_research.api_host.run_registry import RunRecord
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import event_publisher_from_config
 from open_deep_research.run_control import RunControlStore

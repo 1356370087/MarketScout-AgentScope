@@ -63,6 +63,9 @@ def test_guard_rejects_legacy_write_event_lock_and_approval_surfaces(tmp_path):
         "api": [
             "from open_deep_research.events.public import RunEventPublisher",
             "from open_deep_research.run_context import save_query_state",
+            "from open_deep_research.api_host.run_start import RunStartRoutes",
+            "from open_deep_research import api_host",
+            "from open_deep_research import server",
         ],
     }
     for scope, samples in sources.items():
@@ -142,6 +145,7 @@ for name in (
     "agentscope_runtime.app", "agentscope_runtime.research", "agentscope_runtime.report",
     "agentscope_runtime.knowledge", "agentscope_runtime.memory", "agentscope_runtime.team_worker",
     "api.contracts", "api.history", "api.streams",
+    "api.native_runs", "api.research_router",
 ):
     importlib.import_module("open_deep_research." + name)
 assert not any(name.startswith("langchain") for name in sys.modules)

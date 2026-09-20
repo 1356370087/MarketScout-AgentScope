@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from open_deep_research import server
-from open_deep_research.api import operations
+from open_deep_research.api_host import operations
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import RunEventStore
 from open_deep_research.run_context import RunContextStore
@@ -205,7 +205,7 @@ async def test_shutdown_drain_persists_trace_and_cancels_run(tmp_path, monkeypat
     )
     record.task = asyncio.create_task(live_task())
     server._remember_run(record, config)
-    from open_deep_research.api import run_registry
+    from open_deep_research.api_host import run_registry
     monkeypatch.setattr(run_registry, "get_trace_recorder", lambda _config: FakeRecorder())
     monkeypatch.setattr(
         run_registry,

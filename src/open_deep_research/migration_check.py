@@ -93,7 +93,12 @@ def import_findings(
                 else "legacy_engine_import"
                 if module in LEGACY_ENGINES
                 else "legacy_path_import"
-                if native_scope and module in forbidden
+                if native_scope and (
+                    module in forbidden
+                    or module == "open_deep_research.api_host"
+                    or module.startswith("open_deep_research.api_host.")
+                    or module == "open_deep_research.server"
+                )
                 else None
             )
             if kind and not any(
