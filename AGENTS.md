@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-InsightForge（仓库名与 Python 导入命名空间仍为 `open_deep_research`）是一个可配置的、完全开源的深度研究（Deep Research）多 Agent 平台，使用手写 QueryEngine/query 双层 Agent Loop 构建。它支持多模型提供商、多种搜索工具和 MCP（Model Context Protocol）服务器，实现自动化研究并生成带来源的结构化研究报告。在 [Deep Research Bench](https://huggingface.co/spaces/Ayanami0730/DeepResearch-Leaderboard) 排行榜上曾获得 #6 排名。
+InsightForge（仓库名与 Python 导入命名空间仍为 `open_deep_research`）是一个可配置的、完全开源的深度研究（Deep Research）多 Agent 平台，默认执行入口已切换为 AgentScope 原生 Agent、研究 Pipeline 与 SQL 恢复账本；旧 QueryEngine、文件任务池及 LangChain 模型/工具桥接已删除，旧测试迁移和完整部署验收仍按台账收口。它支持多模型提供商、多种搜索工具和 MCP（Model Context Protocol）服务器，实现自动化研究并生成带来源的结构化研究报告。在 [Deep Research Bench](https://huggingface.co/spaces/Ayanami0730/DeepResearch-Leaderboard) 排行榜上曾获得 #6 排名。
 
 仓库包含三个主要部分：
 
@@ -31,8 +31,8 @@ uv run pytest
 # 本地评估（AgentScope 原生 NativeRuns，不依赖旧 QueryEngine；默认一条内置问题）
 uv run python tests/run_local_evaluate.py
 
-# LangSmith 评估（需要在 tests/run_evaluate.py 中配置模型和参数）
-uv run python tests/run_evaluate.py
+# LangSmith 评估（原生研究与 Judge；需配置模型、参数及 LangSmith 凭据）
+uv run --extra evaluation-langsmith python tests/run_evaluate.py
 
 # 从 LangSmith 提取评估结果用于提交 Deep Research Bench
 uv run python tests/extract_langsmith_data.py --project-name "实验名称" --model-name "模型名称" --dataset-name "deep_research_bench"
@@ -61,56 +61,29 @@ uv run python -m security.cli bootstrap-admin --email admin@example.com --passwo
 
 ## 核心架构
 
-整个系统使用手写运行时，入口为 `src/open_deep_research/agents/query_engine.py` 中的 `QueryEngine` 和 `src/open_deep_research/agents/deep_researcher.py` 中导出的 `deep_researcher`。工作流分为四个阶段：
+正式入口为 `server:app`，研究运行由 `api/native_runs.py` 的 `NativeRuns` 管理。`RESEARCH_ENGINE` 默认且仅支持 `native`；旧检查点由 `api/history.py` 提供只读历史，不能跨引擎恢复。`api_host` 旧 HTTP 执行宿主已经删除；`agents/` 旧循环及文件任务池已经删除，业务源码及基础依赖已无 LangChain/LangGraph，测试迁移和完整部署退出条件仍由 T081 跟踪。
 
-### 1. 外层 QueryEngine 流程
+### 1. 运行与阶段流程
 
-```
-QueryEngine.submit_message → summarize_messages → memory_recall → clarify_with_user → write_research_brief → plan_approval（可选）→ supervisor loop → outline_approval（可选）→ final_report_generation → memory_extract_and_write
-```
+`NativeRuns.create → RunConfig.compile → RecoveryStore.create_from_config → RecoverySession → ProductionRunFactory → ResearchPipeline`。
 
-- **clarify_with_user**：判断用户问题是否需要澄清。如果 `allow_clarification=false` 则跳过。澄清采用暂停-回答-继续式 HITL，暂停点会持久化到检查点。
-- **write_research_brief**：将用户消息转化为结构化的研究摘要（`research_brief`），并编译覆盖契约（Coverage Contract，含稳定需求 ID）。
-- **plan_approval / outline_approval**：`enable_human_in_loop=true` 时分别挂起等待研究计划和报告大纲审批，支持 approve/revise/cancel。
-- **research_supervisor**：一个手写 supervisor loop，负责将研究任务分解并委派给子研究员并行执行。
-- **final_report_generation**：委托给 report 产品系统（`open_deep_research.report.build_report`），`default` 类型复现原单次综合；单次综合仍有 3 次重试，token 超限时渐进截断输入；终态写作失败会让整个运行记录为失败而不是写入错误字符串。
+Pipeline 依次执行消息摘要、记忆召回、澄清、研究简报、计划审批、Supervisor 研究、大纲审批、报告生成以及记忆提取。`NativeResearchStages` 负责领域阶段，`PendingDecision` 在 SQL 中持久暂停并在用户决定后继续。报告接入 `NativeReportWriter`，保留各产品策略、完整证据预算、评审修订及 CanonicalReport 发布。
 
-### 2. Supervisor 手写循环（研究调度器）
+### 2. 研究 Agent
 
-```
-supervisor → supervisor_tools → supervisor (循环) 或 → END
-```
+`agentscope_runtime/research_agents.py` 中的 Supervisor 和 Researcher 使用 AgentScope `Agent`、`Toolkit` 与公开 Middleware 扩展。工具仍通过项目协议、权限、出网审批和来源约束。同步委派及异步团队共用领域覆盖契约与完成判断；SQL/框架会话承载恢复状态，不能回退旧 QueryEngine。
 
-- **supervisor**：LLM 节点，绑定的工具：
-  - `ConductResearch`：将研究主题委派给 Researcher runtime（同步并行路径）
-  - `StartResearchTask`、`CheckResearchTask`、`WaitForResearchUpdates`、`ReadResearchArtifact`：异步任务路径，由 `enable_async_research=true` 开启，Teammate Pool 独立执行，状态与工件写入文件系统
-  - `ResearchComplete`：研究完成信号
-  - `think_tool`：用于战略规划和反思
-- **supervisor_tools**：执行工具调用。`ConductResearch` 调用会**并行**执行多个 Researcher runtime（并发数由 `max_concurrent_research_units` 控制，默认 5）。退出条件：调用 ResearchComplete、超过 `max_researcher_iterations`（默认 6）或无工具调用。委派调用会携带 `requirement_ids`（该任务硬性负责的覆盖需求子集），未认领的需求会兜底轮询分配。
+`NativeResearchContext` 委托框架自动/主动压缩，将摘要模型调用与卸载工件接到同一恢复账本。保留任务约束、证据 ID 和反馈；回读工具绑定所属会话。预算、取消、失租及未知调用结果不能被普通内容摘要降级吞掉。
 
-### 3. Researcher runtime（单主题研究员）
+### 3. 资源与服务边界
 
-```
-START → researcher → researcher_tools → researcher (循环) 或 → assess_research_results → compress_research → END
-```
+`AS_NATIVE_RESOURCES=host` 用于宿主模型及本地工具；Web 与 Gateway 工具需要 `gateway` 模式、PostgreSQL、LiteLLM 和 Sandbox 控制面。`ProductionRunFactory` 重验身份、冻结配置和资料版本，`production_resources` 管理 Run Key、Gateway 登记、团队与沙箱生命周期。前端继续通过 Next.js BFF 访问正式 HTTP/SSE 路由。
 
-- **researcher**：LLM 节点，绑定了搜索工具 + MCP 工具 + `think_tool`。`web_pipeline_mode=enforced`（默认）时搜索工具为 `web_research` 与 `fetch_url`（Search → Top-K Fetch → Extract → Evidence 流水线）。
-- **researcher_tools**：并行执行所有工具调用，返回搜索结果。退出条件：超过 `max_react_tool_calls`（默认 10）、调用 ResearchComplete、或无工具调用。
-- **assess_research_results**：`quality_evaluation_enabled=true` 时评估工具结果批次。
-- **compress_research**：将所有研究发现压缩为结构化摘要，保留关键信息和引用来源，并执行证据登记与来源契约校验；遇到 token 超限会移除较早的消息。
+### 4. 持久状态与运行管理
 
-### 4. 状态管理（state.py）
+`ResearchSnapshot` 保存阶段完成、研究发现、证据、覆盖、审批及报告产物；`RecoveryStore` 的 SQL 租约和 fence 是业务写入权威。模型/工具操作回执及公共事件同账本持久化，未知外部执行结果隔离而非自动重试。
 
-状态定义使用 TypedDict + 自定义 reducer：
-
-| 状态类 | 用途 | 关键字段 |
-|--------|------|---------|
-| `AgentInputState` | 主图输入 | `messages` |
-| `AgentState` | 主图状态 | `messages`、`supervisor_messages`、`research_brief`、`raw_notes`、`notes`、`final_report`，以及 `human_feedback`、`coverage_contract`、`coverage_ledger`、`evidence_registry`、`handoff_assessments`、`report_artifacts` 等 |
-| `SupervisorState` | Supervisor 子图 | `supervisor_messages`、`research_brief`、`coverage_contract`、`coverage_ledger`、`research_iterations`、`raw_notes`、`handoff_assessments` 等 |
-| `ResearcherState` | Researcher runtime | `researcher_messages`、`tool_call_iterations`、`research_topic`、`requirement_ids`、`compressed_research`、`evidence_registry`、`raw_notes` 等 |
-
-`override_reducer`：当值包含 `{"type": "override", "value": ...}` 时替换整个字段，否则使用 `operator.add` 追加。
+创建频率和 SSE 限流由 `api/admission.py` 统一管理，非终态并发数读取 SQL；当前支持单 Uvicorn Worker。启动扫描无有效租约的中断运行及已持久化审批。`api/retention.py` 在租约保护下清理原生终态运行、团队会话、资料引用、追踪及工件；正在发布的任务拒绝删除，历史归档保持只读。E2E 启动的进程和专用容器必须在验证后关闭。
 
 ### 5. 配置系统（configuration.py）
 
@@ -131,19 +104,17 @@ START → researcher → researcher_tools → researcher (循环) 或 → assess
 
 ### 6. 工具系统（tools/）
 
-工具代码位于 `src/open_deep_research/tools/`，每个用户可见工具使用独立目录，目录内以 `definition.py` 声明协议对象、以 `prompt.py` 提供模型指导；`tools/utils.py` 只保留弃用兼容导出，不再承担工具装配职责：
+通用工具协议、治理和本地工具位于 `src/open_deep_research/tools/`。旧 LangChain 工具包装、Supervisor 工具目录及 `tools/utils.py` 已删除；模型不得调用旧任务池或旧团队 RPC。
 
-- **统一协议**：`base.py` 的 Tool 协议覆盖 `name`、`input_schema`、`origin`、`retryable`、`description`、`prompt`、`is_enabled`、`egress_urls`、`max_output_chars`、`effect`、`concurrency_safe` 与 `call`；`adapters.py` 负责 LangChain/结构化工具适配
-- **统一装配**：`registry.py` 是 Researcher、Supervisor、MCP 与内置浏览器工具的唯一装配入口，统一执行启用条件、名称唯一性、权限过滤、描述预算投影和动态工具提示词生成
-- **搜索与 Web 工具**：`tavily_search/`、`openai_web_search/`、`anthropic_web_search/`、`web_research/`、`fetch_url/`、`fetch_webpage/` 等目录分别声明工具；`get_search_tool()` 由 registry 按 `SearchAPI` 和 `web_pipeline_mode` 选择
-- **MCP 子包**：`mcp/client.py` 提供基于 mcp 2.x SDK 的进程内 `MultiServerMCPClient`（替代已不兼容的 langchain-mcp-adapters，stdio/streamable_http/sse 传输，每次工具调用新建会话），`mcp/loader.py` 负责装载与信任校验，`mcp/oauth.py` 负责 OAuth Token Exchange（RFC 8693，同时翻译 v2 `URL_ELICITATION_REQUIRED` 与旧版 `-32003` 交互错误码），`mcp/browser.py` 负责内置浏览器工具；外部网络目标通过工具的 `egress_urls` 声明进入治理管线
-- **Supervisor 工具**：`supervisor/` 下按工具分目录；`SupervisorToolDeps` 是冻结依赖对象，`deep_researcher.py` 只负责注入当前状态并请求装配，不再内嵌工具调用闭包
-- **动态提示词**：Researcher 与 Supervisor 的系统提示词从最终可用工具集动态渲染 `<Available Tools>`，因此禁用、权限裁剪或配置切换后的工具不会残留在提示词中
-- **tavily_search**：包含并行搜索、去重、LLM 摘要三个步骤。摘要预算 120 秒（含重试），失败时隔离外部内容
+- **统一协议与投影**：`tools/base.py` 定义 Tool、ToolContext、ToolResult、执行区、副作用及出网目标；`tools/registry.py:prepare_existing_toolset` 统一检查重名、启用状态、权限和模型描述预算。
+- **原生执行**：`agentscope_runtime/tools.py` 将项目 Tool 装配到 AgentScope Toolkit，保留公开工具调用 ID、受治理派发、重试、证据观察及回执。
+- **搜索与 Web**：`agentscope_runtime/search.py`、`web_tools.py` 负责提供商搜索、Search→Fetch→Extract→Evidence 流水线和来源边界；物理 Gateway 通过 `sandbox_catalog.py` 装配授权工具及嵌套模型。共享 `web/` 领域算法继续保留。
+- **MCP 与浏览器**：`agentscope_runtime/mcp.py` 使用 AgentScope MCPClient，保留工具信任校验、stdio/HTTP/SSE、OAuth 和交互错误协议。领域技能提示词已接入 Researcher，报告技能上下文继续沿用领域组件。
+- **Supervisor 与团队**：原生 `research_agents.py`、`teams_tools.py`、`team_worker.py` 管理委派、协作和完成判断；不再回到文件任务池。动态工具指导来自最终可用工具集。
 - **token 限制检测**：`is_token_limit_exceeded()`（`models/errors.py`）根据模型提供商（OpenAI/Anthropic/Google）检测不同的 token 超限错误模式
-- **模型族子包**：`models/` 统一收纳解析（`resolution.py`）、错误检测（`errors.py`）、候选链回退（`fallback.py`）、三态熔断器（`circuit.py`）、能力元数据（`capabilities.py`）与 token 上限表（`limits.py`）；该包位于 `agents`/`tools` 之下，禁止从包内顶层反向导入 `agents` 或 `tools`，根目录同名旧模块仅保留弃用兼容 shim
-- **模型解析层**：`models/resolution.py` 统一 provider 推断、API key/base URL、兼容参数、模型配置和惰性模板；`configuration.py` 与 `tools/legacy_shims.py` 中的旧入口仅保留兼容 shim
-- **模型回退与熔断**：`models/fallback.py` 统一负责候选链、错误分类、跨 provider 消息清洗和 `query.model_fallback` 公共事件；`models/circuit.py` 提供进程级 CLOSED/OPEN/HALF_OPEN 熔断与流式首包探测（off/shadow/enforced，默认 shadow）
+- **模型族子包**：`models/` 保留 provider/凭据解析、错误检测、能力元数据、价格目录和 token 上限等公共契约；旧 codec、ModelGateway、invocation、fallback 实现已删除。模型执行由 `agentscope_runtime/models.py`、`model_policy.py`、`model_accounting.py` 管理。
+- **模型解析层**：`models/resolution.py` 只负责 provider、API Key/base URL 和兼容参数，不创建 LangChain 模型。Native ModelFactory 从冻结目录和绑定凭据构建 AgentScope 模型。
+- **模型回退与熔断**：`agentscope_runtime/model_policy.py` 统一候选链、有限重试、输出恢复和原生事件；共享 `models/circuit.py` 负责进程级 CLOSED/OPEN/HALF_OPEN 状态。
 - **MODEL_TOKEN_LIMITS**：位于 `models/limits.py`，用于计算截断阈值；查找采用精确键优先、再按键长度降序的最长子串匹配。注意：此表需要手动维护
 
 ### 7. 质量与证据（quality/ 子包：gate/contract/policy / evidence.py）
@@ -158,6 +129,7 @@ START → researcher → researcher_tools → researcher (循环) 或 → assess
 LangSmith 评估使用 `tests/run_evaluate.py`，本地评估使用 `tests/run_local_evaluate.py`，两者共用 `tests/evaluators.py` 的核心评估器：
 - 本地研究入口通过 `evaluation/local_runtime.py` 调用原生 `NativeRuns`，读取 SQL 恢复状态并关闭运行资源；Web 评估默认使用 `AS_NATIVE_RESOURCES=gateway`，需要既有 PostgreSQL、Gateway、Controller 等依赖。不会回退到旧引擎。身份沿用合法开发旁路或本地 `EVALUATION_ACCESS_TOKEN`，默认单题等待 1800 秒；遇到审批不自动放行。`--resume` 仅复用结果文件，不恢复旧检查点。
 - 本地 Judge 通过 `evaluation/session.py` 使用 AgentScope 原生模型与独立 SQL 评分账本，Service Key 的调用、费用与截止时间在本地受限；`--pair-dataset` 配合 `--pair-repeats` 对冻结历史产物进行重复评分。未知调用结果拒绝自动重试；历史产物配对不能代替新研究生成质量验收。
+- LangSmith 入口复用同一 NativeRuns 生命周期及原生 Judge；`evaluation-langsmith` 是独立可选依赖，不要求安装旧引擎桥接包。它保留完整输入消息、参考答案和未评分状态；远程实验仅在显式运行入口时提交。
 - 10 个评估器：`eval_overall_quality`、`eval_relevance`、`eval_structure`、`eval_correctness`、`eval_evidence_integrity`、`eval_groundedness`、`eval_completeness`、`eval_citation_accuracy`、`eval_tool_efficiency`、`eval_execution_compliance`
 - 评估结果通过 `tests/extract_langsmith_data.py` 导出为 JSONL，提交至 Deep Research Bench
 - 评估固定使用 Tavily 搜索以保持一致性
@@ -202,12 +174,12 @@ FastAPI 部署时的认证与授权（Supabase 已完全移除；`src/security/a
 
 - 每次执行完E2E验证后，需要关闭验证时启动的前端与后端工作进程，否则可能导致端口占用或资源泄漏
 - 使用 docker 执行端到端（E2E）验证时，只启动与本次项目 E2E 运行相关的容器，避免一并启动原 docker 已经停止运行的容器
-- `configurable_model` 由 `models/resolution.get_configurable_model_template()` 提供进程级惰性单例，每次调用时通过 `.with_config()` 传入具体模型配置
-- Researcher 由 `ResearcherQueryEngine` 以干净上下文窗口运行，在 supervisor_tools 中通过 `asyncio.gather` 并行调用
-- API 密钥获取：统一由 `models/resolution.resolve_api_key()` 处理；`tools/legacy_shims.py:get_api_key_for_model()` 是兼容 shim，`tools/utils.py` 仅作弃用转发。`GET_API_KEYS_FROM_CONFIG` 决定从环境变量还是 `RunnableConfig` 读取（OAP 部署时需要设为 `true`）
+- 模型必须通过原生 ModelFactory 和执行策略调用；质量门禁必须提供 NativeResearchQuality，报告必须绑定原生报告端口，缺失运行时不能通过 fail_open 掩盖。
+- Researcher 由 AgentScope Agent 在独立会话内运行；Supervisor 与异步团队共用原生研究和证据门禁，不调用 `ResearcherQueryEngine`
+- API 密钥获取由 `models/resolution.resolve_api_key()` 和原生 CredentialBinding 管理；凭据不进入 SQL 检查点，模型和 Gateway 资源由所属运行统一关闭。
 - 七个模型角色支持同名角色级 API Key 覆盖：`SUPERVISOR_API_KEY`、`RESEARCHER_API_KEY`、`SUMMARIZATION_API_KEY`、`MESSAGE_SUMMARY_API_KEY`、`COMPRESSION_API_KEY`、`FINAL_REPORT_API_KEY`、`QUALITY_EVALUATION_API_KEY`
 - 模型 fallback：`model_fallbacks` 支持 `supervisor`、`researcher`、`summarization`、`message_summary`、`compression`、`final_report`、`quality_evaluation` 七个角色，仅对限流、瞬态错误和模型不可用切换
-- Token 超限处理：压缩阶段通过 `remove_up_to_last_ai_message()` 移除最近的消息；最终报告阶段（`report/assembly.py`）通过渐进截断重试（最多 3 次）
+- Token 超限处理：研究上下文委托 AgentScope 压缩与卸载；报告保留完整固定输入并按整条证据预算，原生报告端口最多重试三次，真实固定输入超限时拒绝执行。
 - 添加新模型时，需要在 `MODEL_TOKEN_LIMITS` 字典（`models/limits.py`）中注册其 token 限制
 - Tavily 搜索的摘要模型独立于研究模型，由 `summarization_model` 配置
 - 评估脚本 `run_evaluate.py` 中的模型和参数是硬编码的，每次运行前需要手动调整

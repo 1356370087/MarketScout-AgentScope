@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "check": "retirement",
+  "passed": false,
+  "findings": [
+    {
+      "path": "src/open_deep_research/events/public.py",
+      "line": 413,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/memory/policy.py",
+      "line": 35,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/models/codec.py",
+      "line": 9,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/models/fallback.py",
+      "line": 16,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/models/gateway.py",
+      "line": 12,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/models/invocation.py",
+      "line": 13,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/models/invocation.py",
+      "line": 14,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages.utils"
+    },
+    {
+      "path": "src/open_deep_research/models/resolution.py",
+      "line": 19,
+      "kind": "langchain_import",
+      "module": "langchain.chat_models"
+    },
+    {
+      "path": "src/open_deep_research/observability/core.py",
+      "line": 20,
+      "kind": "langchain_import",
+      "module": "langchain_core.callbacks"
+    },
+    {
+      "path": "src/open_deep_research/observability/core.py",
+      "line": 21,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/observability/core.py",
+      "line": 27,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages.utils"
+    },
+    {
+      "path": "src/open_deep_research/quality/contract.py",
+      "line": 14,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/quality/gate.py",
+      "line": 644,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/run_context.py",
+      "line": 18,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/run_context.py",
+      "line": 550,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/run_context.py",
+      "line": 578,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/run_context.py",
+      "line": 857,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/run_context.py",
+      "line": 858,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages.utils"
+    },
+    {
+      "path": "src/open_deep_research/runtime.py",
+      "line": 9,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/fake_provider.py",
+      "line": 9,
+      "kind": "langchain_import",
+      "module": "langchain_core.language_models.chat_models"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/fake_provider.py",
+      "line": 10,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/fake_provider.py",
+      "line": 11,
+      "kind": "langchain_import",
+      "module": "langchain_core.outputs"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/gateway_model.py",
+      "line": 13,
+      "kind": "langchain_import",
+      "module": "langchain_core.language_models.chat_models"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/gateway_model.py",
+      "line": 14,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/gateway_model.py",
+      "line": 21,
+      "kind": "langchain_import",
+      "module": "langchain_core.outputs"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/gateway_model.py",
+      "line": 22,
+      "kind": "langchain_import",
+      "module": "langchain_core.utils.function_calling"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/manager.py",
+      "line": 17,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/sandbox/model_gateway.py",
+      "line": 109,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/state.py",
+      "line": 7,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/tools/governance.py",
+      "line": 33,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/tools/governance.py",
+      "line": 1253,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/tools/governance.py",
+      "line": 1263,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    },
+    {
+      "path": "src/open_deep_research/tools/governance.py",
+      "line": 185,
+      "kind": "langchain_import",
+      "module": "langchain_core.messages"
+    }
+  ],
+  "scope": "static_only_not_cutover_acceptance"
+}

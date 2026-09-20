@@ -1,0 +1,8 @@
+{
+  "environment": ".venv-native-verify",
+  "package_count": 171,
+  "legacy_packages": [],
+  "agentscope": "2.0.8",
+  "mcp": "1.30.0",
+  "aiosmtplib": "5.1.3"
+}

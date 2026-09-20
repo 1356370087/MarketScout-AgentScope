@@ -1,0 +1,28 @@
+{
+  "baseline_count": 170,
+  "current_count": 175,
+  "missing": [],
+  "added": [
+    [
+      "GET",
+      "/runs/{run_id}/budget"
+    ],
+    [
+      "GET",
+      "/runs/{run_id}/team/messages"
+    ],
+    [
+      "GET",
+      "/runs/{run_id}/team/tasks/{task_id}"
+    ],
+    [
+      "POST",
+      "/runs/{run_id}/team/tasks/{task_id}"
+    ],
+    [
+      "POST",
+      "/runs/{run_id}/team/tasks/{task_id}/plan-revision"
+    ]
+  ],
+  "scope": "HTTP method/path inventory; not full schema or runtime acceptance"
+}

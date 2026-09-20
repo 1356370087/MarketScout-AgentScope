@@ -1,0 +1,525 @@
+{
+  "files": [
+    {
+      "retired_file": "tests/test_async_research.py",
+      "old_test_functions": [
+        "test_teammate_pool_propagates_inherited_fence_to_lease_manager",
+        "test_count_active_includes_waiting",
+        "test_count_active_includes_running",
+        "test_waiting_is_not_terminal",
+        "test_pending_domain_fields_serialize_in_snapshot",
+        "test_default_factory_fields_are_populated",
+        "test_all_event_type_values_are_constructable",
+        "test_model_dump_json_produces_valid_json",
+        "test_write_single_event",
+        "test_write_multiple_events_appends",
+        "test_context_manager_closes_file",
+        "test_run_directory_is_created_if_missing",
+        "test_file_path_property",
+        "test_defaults_are_sensible",
+        "test_elapsed_seconds_running",
+        "test_elapsed_seconds_completed",
+        "test_custom_task_id",
+        "test_create_and_get",
+        "test_get_missing_returns_none",
+        "test_list_all",
+        "test_list_filter_by_status",
+        "test_update_status_modifies_record",
+        "test_update_status_unknown_id_is_noop",
+        "test_all_completed_true_when_all_terminal",
+        "test_all_completed_false_when_any_running",
+        "test_count_running",
+        "test_len",
+        "test_returns_same_instance",
+        "test_registry_is_functional",
+        "test_from_record_round_trip",
+        "test_create_update_get_and_list",
+        "test_collect_completed",
+        "test_rejects_stale_fence_epoch",
+        "test_start_research_task_minimal",
+        "test_check_research_task",
+        "test_list_research_tasks_no_filter",
+        "test_list_research_tasks_with_filter",
+        "test_update_research_task",
+        "test_cancel_research_task",
+        "test_creates_task_and_returns_tool_message",
+        "test_respects_max_in_flight",
+        "test_pending_task_holds_an_admission_slot",
+        "test_launch_failure_persists_terminal_state",
+        "test_unknown_task",
+        "test_rejects_task_from_another_run",
+        "test_completed_task_returns_results",
+        "test_running_task_shows_status",
+        "test_empty_registry",
+        "test_with_tasks",
+        "test_queues_instruction_for_running_task",
+        "test_rejects_non_running_task",
+        "test_cancels_running_task",
+        "test_skips_already_cancelled",
+        "test_cancel_waiting_task_preserves_sibling_approvals",
+        "test_format_snapshot_waiting_branch",
+        "test_collects_only_completed",
+        "test_preserves_public_source_registries",
+        "test_to_dict_and_from_dict_round_trip",
+        "test_round_trip_preserves_coverage_and_domain_state",
+        "test_v3_checkpoint_defaults_new_domain_state_fields",
+        "test_defaults_are_sensible",
+        "test_save_and_load",
+        "test_load_missing_returns_none",
+        "test_delete_removes_file",
+        "test_delete_missing_is_noop",
+        "test_rejects_path_traversal_identifiers",
+        "test_checkpoint_resume_restores_coverage_and_domain_state",
+        "test_controlled_executor_persists_current_fence_token",
+        "test_update_interrupts_and_restarts_research",
+        "test_mailbox_publish_failure_does_not_fail_research",
+        "test_rejects_empty_tool_turn_while_task_is_active",
+        "test_empty_tool_turn_finalizes_terminal_tasks_and_wave",
+        "test_step_rebuild_keeps_mailbox_coverage_merges"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_agent_teams.py",
+        "tests/as_runtime/test_team_worker.py",
+        "tests/as_runtime/test_research_migration.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_query_compaction.py",
+      "old_test_functions": [
+        "test_deepseek_v4_models_use_one_million_token_context",
+        "test_supervisor_compaction_preserves_brief_and_tool_pair",
+        "test_compaction_disabled_keeps_context_untouched"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_native_context.py",
+        "tests/as_runtime/test_context_offload.py",
+        "tests/as_runtime/test_provider_acceptance.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_query_persistence.py",
+      "old_test_functions": [
+        "test_v3_frozen_run_is_rejected_at_the_v7_security_boundary",
+        "test_query_run_persists_authoritative_context",
+        "test_resume_skips_completed_outer_nodes",
+        "test_resume_uses_frozen_models_after_environment_switch",
+        "test_resume_rejects_explicit_frozen_model_conflict",
+        "test_unfrozen_legacy_run_is_never_migrated_across_v7_boundary",
+        "test_safe_rejected_evidence_finishes_once_as_nonempty_partial",
+        "test_research_brief_write_failure_stops_run",
+        "test_resume_api_launches_explicit_recovery",
+        "test_resume_api_maps_frozen_config_conflict_to_409",
+        "test_resume_api_maps_legacy_schema_to_specific_409",
+        "test_legacy_stale_report_cannot_cross_v7_security_boundary",
+        "test_resume_api_rejects_completed_run"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_recovery.py",
+        "tests/as_runtime/test_native_startup_recovery.py",
+        "tests/as_runtime/test_engine_seam.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_query_report_review_runtime.py",
+      "old_test_functions": [
+        "test_query_gate_keeps_aggregate_only_failure_nonblocking",
+        "test_report_recovery_artifacts_are_bound_to_source_draft_and_review",
+        "test_resume_reuses_review_state_without_duplicate_reviewer_call",
+        "test_resume_reuses_revision_artifact_without_duplicate_revisor_call",
+        "test_enabled_query_runtime_publishes_only_reviewed_final_report",
+        "test_enabled_query_runtime_revises_then_rechecks_before_finalize",
+        "test_query_runtime_rechecks_evidence_limited_recovery_before_publish",
+        "test_query_runtime_recovers_after_revision_without_reusing_revision_hash"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_report_native.py",
+        "tests/as_runtime/test_report_context_budget.py",
+        "tests/as_runtime/test_source_report_delivery.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_query_runtime.py",
+      "old_test_functions": [
+        "test_query_repairs_malformed_tool_arguments_before_terminating",
+        "test_query_repairs_gateway_tool_argument_codec_error",
+        "test_query_repairs_gateway_codec_error_on_default_litellm_path",
+        "test_query_bounds_malformed_tool_argument_repair_attempts",
+        "test_query_does_not_protocol_retry_unrelated_model_errors",
+        "test_query_cancels_an_inflight_model_call_without_waiting_for_timeout",
+        "test_query_persists_terminal_before_propagating_model_cancellation",
+        "test_query_continues_after_tool_results_then_completes",
+        "test_messages_for_query_is_trimmed_view_not_full_transcript",
+        "test_messages_for_query_preserves_tool_call_boundary",
+        "test_tool_results_hook_can_transform_results_and_complete",
+        "test_tool_batch_hook_can_own_execution_and_complete",
+        "test_tool_batch_hook_can_use_a_longer_timeout_than_control_hooks",
+        "test_stop_hook_can_complete_with_updates",
+        "test_before_turn_hook_can_replace_context",
+        "test_stop_hook_can_block_stop_and_continue",
+        "test_query_closes_missing_batch_hook_results_before_termination",
+        "test_query_rejects_duplicate_and_unknown_hook_results",
+        "test_query_closes_batch_when_hook_raises",
+        "test_query_closes_batch_before_propagating_cancellation",
+        "test_query_canonicalizes_missing_and_duplicate_tool_call_ids",
+        "test_terminal_tool_updates_are_emitted_once",
+        "test_query_rejects_tool_messages_in_additional_messages",
+        "test_query_bounds_tool_concurrency",
+        "test_query_stops_when_model_call_budget_is_exhausted",
+        "test_model_budget_keys_are_scoped_by_researcher_task",
+        "test_tool_timeout_preserves_successful_sibling_result",
+        "test_query_stops_on_run_deadline",
+        "test_query_retries_a_model_call_timeout_without_claiming_run_deadline",
+        "test_query_reports_model_timeout_after_bounded_attempts",
+        "test_query_rejects_non_positive_tool_limits",
+        "test_validate_tool_transcript_allows_only_explicit_pending_tail",
+        "test_validate_tool_transcript_rejects_orphan_and_out_of_order_results"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_tools.py",
+        "tests/as_runtime/test_research_migration.py",
+        "tests/as_runtime/test_model_execution.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_query_v2_recovery.py",
+      "old_test_functions": [
+        "test_query_state_is_immutable_and_serializes_pending_tool_results",
+        "test_query_state_v3_persists_recovery_state_and_reads_legacy",
+        "test_query_state_rejects_illegal_terminal_transition",
+        "test_context_compiler_accounts_for_full_envelope_and_keeps_tool_pair",
+        "test_unknown_model_uses_conservative_context_default",
+        "test_prompt_too_long_reprojects_then_reactive_compacts",
+        "test_prompt_too_long_exhaustion_skips_stop_hooks",
+        "test_output_escalation_then_continuation_merges_canonical_message",
+        "test_output_recovery_exhaustion_is_not_completed",
+        "test_tool_hook_checkpoints_approval_pending_turns",
+        "test_resume_after_model_checkpoint_does_not_repeat_model_call",
+        "test_resume_after_tool_commit_does_not_repeat_committed_tool",
+        "test_supervisor_batch_resume_reuses_child_result_persisted_before_crash",
+        "test_durable_supervisor_batch_resumes_after_each_committed_result",
+        "test_resume_replays_checkpointed_tool_domain_update_before_model",
+        "test_resume_replays_checkpointed_terminal_stop_hook_update",
+        "test_model_fallback_only_for_allowed_error_and_sanitizes_metadata",
+        "test_query_starts_with_first_non_open_model_candidate",
+        "test_model_fallback_is_forbidden_for_authentication_error",
+        "test_non_concurrency_safe_tools_execute_in_model_order",
+        "test_unsafe_uncommitted_tool_is_not_replayed_automatically",
+        "test_journal_v2_replays_latest_query_state",
+        "test_journal_v1_is_readable_but_not_resumable"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_recovery.py",
+        "tests/as_runtime/test_model_execution.py",
+        "tests/as_runtime/test_model_accounting.py",
+        "tests/as_runtime/test_native_context.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_supervisor_query_runtime.py",
+      "old_test_functions": [
+        "test_sync_research_timeout_is_unchanged_without_quality_gate",
+        "test_fetch_grant_uses_a_new_query_journal_namespace",
+        "test_sync_research_timeout_reserves_bounded_quality_grace",
+        "test_sync_research_timeout_keeps_public_ceiling",
+        "test_supervisor_uses_unified_query_loop",
+        "test_supervisor_preserves_research_complete_on_last_allowed_turn",
+        "test_supervisor_research_batch_uses_task_timeout_not_hook_timeout",
+        "test_supervisor_model_call_is_cancelled_by_outer_engine",
+        "test_supervisor_resume_from_tool_boundary_does_not_repeat_model",
+        "test_supervisor_no_tool_response_uses_domain_exit_policy",
+        "test_supervisor_rejects_explicit_completion_without_evidence",
+        "test_fetch_budget_exhaustion_finalizes_completed_async_outputs",
+        "test_no_tool_stop_finalizes_outputs_before_fetch_budget_exit",
+        "test_supervisor_can_readmit_rejected_artifact_after_verified_read",
+        "test_legacy_supervisor_uses_compatibility_completion_policy"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_research_quality.py",
+        "tests/as_runtime/test_source_contract_completion.py",
+        "tests/as_runtime/test_research_migration.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_researcher_context_recovery.py",
+      "old_test_functions": [
+        "test_context_envelope_reserves_output_tools_and_margin",
+        "test_large_tool_result_is_offloaded_with_hash_verified_reference",
+        "test_response_was_truncated_checks_provider_metadata"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_native_context.py",
+        "tests/as_runtime/test_context_offload.py",
+        "tests/as_runtime/test_report_sandbox_budget.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_supervisor_tool_deps.py",
+      "old_test_functions": [
+        "test_supervisor_deps_are_frozen_and_drive_sync_tool_assembly",
+        "test_supervisor_tool_guidance_is_attached_by_tool_folder"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_research_migration.py",
+        "tests/as_runtime/test_tools.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_supervisor_budget_drain.py",
+      "old_test_functions": [
+        "test_compression_metrics_record_zero_does_not_clobber_computed_counts",
+        "test_all_passive_calls_with_unfinished_tasks_do_not_advance",
+        "test_passive_calls_without_unfinished_tasks_still_advance",
+        "test_active_delegation_turns_always_advance",
+        "test_plain_answer_turn_advances",
+        "test_waits_until_terminal_then_finalizes",
+        "test_timeout_still_finalizes_partial_results",
+        "test_finalizes_completed_outputs_when_nothing_unfinished",
+        "test_running_snapshots_become_cancelled_and_publish",
+        "test_noop_without_async_research",
+        "test_default_and_bounds_relaxed",
+        "test_unavailable_response_carries_manifest_duration",
+        "test_query_params_exposes_optional_policy",
+        "test_query_loop_does_not_advance_turn_on_passive_batch",
+        "test_rejected_handoff_reads_source_count_from_metrics",
+        "test_single_output_failure_does_not_abort_remaining",
+        "test_stuck_running_tasks_render_cancelled_on_failed_run",
+        "test_live_run_keeps_running_tasks",
+        "test_stale_memory_record_yields_to_terminal_manifest",
+        "test_trace_row_running_yields_to_terminal_run_status",
+        "test_claim_admits_accepted_handoff_and_renders_verdict",
+        "test_claim_rejected_handoff_keeps_evidence_out_of_state",
+        "test_claim_skips_already_admitted_task"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_research_quality.py",
+        "tests/as_runtime/test_team_worker.py",
+        "tests/as_runtime/test_source_contract_completion.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_model_fallback_integrations.py",
+      "old_test_functions": [
+        "test_quality_evaluation_entrypoint_uses_fallback",
+        "test_compression_entrypoint_uses_fallback",
+        "test_final_report_entrypoint_uses_fallback",
+        "test_web_rerank_entrypoint_uses_fallback",
+        "test_message_summary_entrypoint_uses_fallback"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_model_execution.py",
+        "tests/as_runtime/test_search.py",
+        "tests/as_runtime/test_web_tools.py",
+        "tests/as_runtime/test_report_native.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_model_fallback_roles.py",
+      "old_test_functions": [
+        "test_shared_fallback_switches_and_sanitizes_provider_metadata",
+        "test_shared_fallback_does_not_cross_on_auth_errors",
+        "test_invalid_request_authentication_error_is_not_prompt_too_long",
+        "test_invalid_request_requires_context_evidence_for_prompt_too_long",
+        "test_candidate_chain_is_deduplicated_and_uses_role_config",
+        "test_model_fallbacks_env_json_configures_role_chains",
+        "test_model_fallbacks_env_empty_string_disables_fallback",
+        "test_model_fallbacks_env_rejects_unknown_roles",
+        "test_gateway_budget_rejections_classify_as_budget_exceeded"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_model_execution.py",
+        "tests/as_runtime/test_provider_acceptance.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_model_gateway_codec.py",
+      "old_test_functions": [
+        "test_codec_covers_all_roles_and_tool_calls",
+        "test_codec_preserves_multimodal_content",
+        "test_codec_rejects_invalid_tool_json",
+        "test_structured_output_uses_forced_synthetic_tool",
+        "test_parse_structured_output_applies_payload_transform"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_messages.py",
+        "tests/as_runtime/test_sandbox_provider.py",
+        "tests/as_runtime/test_run_models.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_litellm_gateway.py",
+      "old_test_functions": [
+        "test_gateway_output_budget_uses_portable_litellm_parameter",
+        "test_gateway_normalizes_usage_route_cost_and_traceparent",
+        "test_gateway_sends_spend_tags_for_filterable_analytics",
+        "test_gateway_forwards_static_provider_options",
+        "test_request_client_applies_injected_run_key",
+        "test_request_client_applies_context_run_key",
+        "test_openai_sdk_retries_are_disabled",
+        "test_gateway_error_does_not_copy_upstream_body",
+        "test_traceparent_is_stable_per_run_and_valid",
+        "test_logical_operation_id_includes_output_recovery_parameters",
+        "test_quality_schema_has_no_propertyless_objects",
+        "test_quality_schema_is_strict_at_every_object",
+        "test_litellm_structured_tool_can_disable_provider_strict_mode",
+        "test_structured_schema_failure_uses_bounded_application_repair",
+        "test_complete_stream_merges_deltas_and_usage",
+        "test_complete_stream_rejects_tools_and_schema",
+        "test_complete_stream_marks_unsupported_deployments",
+        "test_complete_model_stream_downgrades_once",
+        "test_complete_model_stream_returns_streamed_result",
+        "test_complete_model_stream_passes_through_without_stream_support"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_sandbox_provider.py",
+        "tests/as_runtime/test_model_execution.py",
+        "tests/as_runtime/test_model_accounting.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_mcp2_client.py",
+      "old_test_functions": [
+        "test_stdio_discovery_and_per_call_invocation",
+        "test_http_transport_propagates_headers_and_invokes",
+        "test_unsupported_transport_is_rejected",
+        "test_build_args_schema_maps_common_json_schema_types",
+        "test_build_args_schema_handles_empty_and_untyped_properties",
+        "test_mcp_schema_preserves_nested_and_scalar_constraints_before_call",
+        "test_mcp_model_definition_keeps_original_json_schema",
+        "test_convert_call_tool_result_joins_text_blocks",
+        "test_convert_call_tool_result_serializes_mixed_content",
+        "test_convert_call_tool_result_empty_content_returns_empty_string",
+        "test_convert_call_tool_result_error_raises_tool_exception",
+        "test_auth_wrapper_translates_url_elicitation_required",
+        "test_auth_wrapper_keeps_legacy_interaction_code",
+        "test_auth_wrapper_propagates_unrelated_mcp_errors"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_mcp.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_hitl.py",
+      "old_test_functions": [
+        "test_hitl_plan_approval_pauses_before_supervisor",
+        "test_clarification_pauses_and_continues_the_same_run",
+        "test_hitl_plan_revision_regenerates_plan_before_approval",
+        "test_hitl_cancellation_finalizes_observability_run",
+        "test_interrupt_wakes_hitl_without_human_action",
+        "test_success_terminal_claim_rejects_late_cancellation",
+        "test_hitl_outline_approval_pauses_before_final_report",
+        "test_run_level_feedback_is_injected_into_supervisor_context",
+        "test_hitl_configuration_defaults_are_disabled",
+        "test_hitl_api_accepts_human_action",
+        "test_cancel_api_requests_cancellation_without_terminal_event",
+        "test_background_run_preserves_engine_failed_status",
+        "test_hitl_api_records_feedback"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_native_http.py",
+        "tests/as_runtime/test_research_migration.py",
+        "tests/as_runtime/test_native_sse_lifecycle.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_hitl_recovery.py",
+      "old_test_functions": [
+        "test_revision_survives_replay",
+        "test_pending_approval_id_survives_restart",
+        "test_decision_is_durable_before_wait_returns",
+        "test_shutdown_retains_pending_clarification",
+        "test_failed_decision_write_does_not_acknowledge_or_wake",
+        "test_redelivered_decision_does_not_affect_next_approval",
+        "test_plan_revision_limit_survives_restart",
+        "test_loaded_run_consumes_pre_restart_approval",
+        "test_process_cancellation_preserves_resumable_query"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_recovery.py",
+        "tests/as_runtime/test_event_decision_acceptance.py",
+        "tests/as_runtime/test_native_startup_recovery.py"
+      ],
+      "scope": "Old execution/adapter-specific assertions retired; native behavior is validated through the listed public runtime boundaries."
+    },
+    {
+      "retired_file": "tests/test_researcher_query_runtime.py",
+      "old_test_functions": [
+        "test_researcher_engine_uses_unified_query_loop",
+        "test_researcher_resumes_inside_pending_tool_round",
+        "test_researcher_tools_use_dedicated_long_timeout",
+        "test_quality_gap_recovery_adds_only_one_checkpointed_turn",
+        "test_quality_gap_recovery_uses_previous_assessment_after_control_only_turn",
+        "test_quality_gap_recovery_requires_actionable_gap_and_query",
+        "test_quality_gap_recovery_resume_does_not_consume_second_attempt",
+        "test_researcher_observes_cancellation_at_terminal_boundary",
+        "test_failed_research_complete_is_not_a_successful_completion",
+        "test_structured_evidence_is_extracted_before_large_result_offload",
+        "test_no_tool_response_without_evidence_does_not_complete",
+        "test_legacy_researcher_uses_compatibility_completion_policy",
+        "test_researcher_collects_permission_denials",
+        "test_mixed_approval_batch_does_not_refund_successful_turn",
+        "test_researcher_tools_stop_on_zero_allocation_batch"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_research_migration.py",
+        "tests/as_runtime/test_research_quality.py",
+        "tests/as_runtime/test_native_context.py"
+      ],
+      "scope": "Removed query or LangChain tool wrappers; native policy, protocol and runtime tests cover the replacement boundaries."
+    },
+    {
+      "retired_file": "tests/test_browser_mcp.py",
+      "old_test_functions": [
+        "test_browser_mcp_config_defaults_to_playwright_stdio",
+        "test_load_browser_mcp_tools_uses_stdio_connection_and_tags_origin",
+        "test_effectful_browser_mcp_tool_is_not_marked_retryable",
+        "test_effectful_general_mcp_tool_is_not_marked_retryable",
+        "test_browser_mcp_without_explicit_allowlist_does_not_discover",
+        "test_http_surface_blocks_browser_stdio_before_discovery",
+        "test_instruction_shaped_mcp_description_is_not_bound",
+        "test_get_all_tools_adds_browser_mcp_without_replacing_existing_mcp",
+        "test_allowed_domains_includes_browser_mcp_http_host",
+        "test_research_prompt_describes_browser_exploration_fallback"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_mcp.py",
+        "tests/as_runtime/test_tools.py"
+      ],
+      "scope": "Removed query or LangChain tool wrappers; native policy, protocol and runtime tests cover the replacement boundaries."
+    },
+    {
+      "retired_file": "tests/test_search_tools.py",
+      "old_test_functions": [
+        "test_gateway_physical_tavily_uses_run_vault_without_global_config_mode",
+        "test_non_gateway_tavily_keeps_environment_only_mode",
+        "test_get_search_tool_returns_structured_tools",
+        "test_openai_web_search_formats_sources_and_records_span",
+        "test_anthropic_web_search_formats_sources_and_records_span",
+        "test_openai_web_search_retries_on_429",
+        "test_get_all_tools_tags_sdk_search_as_search"
+      ],
+      "native_coverage_files": [
+        "tests/as_runtime/test_search.py",
+        "tests/as_runtime/test_web_tools.py",
+        "tests/as_runtime/test_production_resources.py"
+      ],
+      "scope": "Removed query or LangChain tool wrappers; native policy, protocol and runtime tests cover the replacement boundaries."
+    }
+  ],
+  "note": "Coverage mapping is by behavior area, not a claim of one-to-one framework-internal assertions."
+}

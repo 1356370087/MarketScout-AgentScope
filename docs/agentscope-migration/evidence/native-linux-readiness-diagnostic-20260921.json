@@ -1,0 +1,33 @@
+{
+  "health_status": 200,
+  "readiness_status": 503,
+  "readiness": {
+    "status": "failed",
+    "components": {
+      "server": {
+        "status": "ok"
+      },
+      "runs_dir": {
+        "status": "ok"
+      },
+      "trace_store": {
+        "status": "failed",
+        "error_type": "PermissionError"
+      },
+      "iam_database": {
+        "status": "disabled"
+      },
+      "sandbox": {
+        "status": "disabled"
+      },
+      "litellm": {
+        "status": "disabled"
+      },
+      "search": {
+        "status": "disabled",
+        "provider": "none"
+      }
+    }
+  },
+  "container_removed": true
+}
