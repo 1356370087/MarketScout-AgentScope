@@ -8,6 +8,8 @@ from enum import Enum
 from typing import Any, Iterable, cast
 from urllib.parse import urlsplit
 
+from open_deep_research.documents.contracts import SourceMode, SourceSelection, source_url_identity
+
 SOURCE_SCOPE_POLICY_VERSION = "evidence-source-scope-v2"
 
 _EXCLUSIVE_OFFICIAL_SOURCE_RE = re.compile(
@@ -76,6 +78,7 @@ class SourceKind(str, Enum):
     OFFICIAL_REPO_SOURCE = "official_repo_source"
     COMMUNITY_ISSUE = "community_issue"
     EXPLICIT_URL = "explicit_url"
+    LOCAL_DOCUMENT = "local_document"
     OUT_OF_SCOPE = "out_of_scope"
 
 
@@ -106,6 +109,7 @@ class SourceScope:
     explicit_url_only: bool
     allowed_urls: frozenset[str]
     denied_urls: frozenset[str]
+    selection: SourceSelection | None = None
 
     @property
     def constrained(self) -> bool:
@@ -114,6 +118,7 @@ class SourceScope:
             self.official_only
             or self.explicit_url_only
             or self.denied_urls
+            or self.selection is not None
         )
 
 
@@ -262,6 +267,11 @@ def compile_source_scope(coverage_contract: object) -> SourceScope:
     explicit_url_only = bool(
         _EXCLUSIVE_EXPLICIT_URL_RE.search(requirement_text)
     ) and bool(allowed_urls)
+    selection = (
+        coverage_contract.get("source_selection")
+        if isinstance(coverage_contract, dict)
+        else getattr(coverage_contract, "source_selection", None)
+    )
     return SourceScope(
         official_only=contract_requires_official_sources(coverage_contract),
         explicit_url_only=explicit_url_only,
@@ -269,7 +279,28 @@ def compile_source_scope(coverage_contract: object) -> SourceScope:
             frozenset(allowed_urls) if explicit_url_only else frozenset()
         ),
         denied_urls=frozenset(denied_urls),
+        selection=SourceSelection.model_validate(selection) if selection is not None else None,
     )
+
+
+def required_source_count(min_sources: int, coverage_contract: object, *, leaf: bool = False) -> int:
+    """Apply diversity within the user's finite corpus, never beyond its boundary.
+
+    A leaf can own one source from the corpus; the merged run must meet the
+    configured diversity goal up to the number of user-authorized sources.
+    Open Web, hybrid and domain selections retain the configured requirement.
+    """
+    scope = compile_source_scope(coverage_contract)
+    selection = scope.selection
+    capacity = None
+    if selection is not None and selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}:
+        if not (selection.domains or selection.knowledge_base_ids or selection.collection_ids):
+            capacity = len(selection.document_ids) + len({source_url_identity(url) for url in selection.urls})
+    if scope.explicit_url_only:
+        url_capacity = len(scope.allowed_urls)
+        capacity = min(capacity, url_capacity) if capacity is not None else url_capacity
+    configured = max(1, int(min_sources))
+    return min(configured, 1 if leaf else capacity) if capacity else configured
 
 
 def contract_has_source_constraints(coverage_contract: object) -> bool:
@@ -349,6 +380,29 @@ def classify_evidence_source(
     scope = compile_source_scope(coverage_contract)
     canonical_url = _canonical_scope_url(url)
 
+    selection = scope.selection
+    if selection is not None:
+        local = str(record.get("source_type") or "") == "local_document" or (
+            not parsed.scheme and parsed.path.startswith("/documents/")
+        )
+        if local:
+            document_id = str(record.get("document_id") or parsed.path.removeprefix("/documents/").split("/")[0])
+            allowed = selection.documents_enabled and document_id in selection.document_ids
+            return SourceScopeDecision(
+                source_kind=SourceKind.LOCAL_DOCUMENT if allowed else SourceKind.OUT_OF_SCOPE,
+                source_scope_status=SourceScopeStatus.IN_SCOPE if allowed else SourceScopeStatus.OUT_OF_SCOPE,
+                reason="matched_selected_document" if allowed else "outside_selected_documents",
+            )
+        if not selection.web_enabled or (selection.mode is SourceMode.SPECIFIC and not (
+            source_url_identity(url) in {source_url_identity(value) for value in selection.urls}
+            or any(host == domain or host.endswith("." + domain) for domain in selection.domains)
+        )):
+            return SourceScopeDecision(
+                source_kind=SourceKind.OUT_OF_SCOPE,
+                source_scope_status=SourceScopeStatus.OUT_OF_SCOPE,
+                reason="outside_source_selection",
+            )
+
     if canonical_url in scope.denied_urls:
         return SourceScopeDecision(
             source_kind=SourceKind.OUT_OF_SCOPE,
@@ -368,9 +422,18 @@ def classify_evidence_source(
             reason="matched_explicit_url_allowlist",
         )
 
+    if selection is not None and selection.mode is SourceMode.SPECIFIC and (
+        source_url_identity(url) in {source_url_identity(value) for value in selection.urls}
+    ):
+        return SourceScopeDecision(
+            source_kind=SourceKind.EXPLICIT_URL,
+            source_scope_status=SourceScopeStatus.IN_SCOPE,
+            reason="matched_selected_url",
+        )
+
     permitted_status = (
         SourceScopeStatus.IN_SCOPE
-        if scope.denied_urls
+        if scope.denied_urls or selection is not None
         else SourceScopeStatus.NOT_CONSTRAINED
     )
 

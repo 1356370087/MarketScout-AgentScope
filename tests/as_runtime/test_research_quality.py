@@ -407,9 +407,13 @@ async def test_researcher_source_mode_filters_native_tool_catalog(
         ResearchAssignment(research_topic="q"), contract()
     )
     schemas = models.created[0][2].calls[0]["tools"]
+    # SDK context compression is present in every mode; source filters apply
+    # to research tools and must not remove this framework-owned capability.
+    assert "CompressContext" in {item["function"]["name"] for item in schemas}
     names = {item["function"]["name"] for item in schemas} - {
         "think_tool",
         "ResearchComplete",
+        "CompressContext",
     }
     assert names == expected
 

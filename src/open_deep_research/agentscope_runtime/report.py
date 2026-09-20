@@ -138,6 +138,18 @@ class _ReportRun:
 
         initial = fit(0)
 
+        def fit_candidate(current_model, current, output_tokens):
+            fitted, selected = fit_writing_messages(
+                [ReportMessage(message.get_text_content() or "", name=message.name,
+                               type="system" if message.role == "system" else "human")
+                 for message in current],
+                descriptor["model"], cfg, output_tokens=output_tokens,
+                context_window=getattr(current_model, "context_size", None),
+            )
+            self.score(span_name + ".selected_evidence_count", selected)
+            return [message.model_copy(update={"content": [TextBlock(text=projected.content)]})
+                    for message, projected in zip(current, fitted, strict=True)]
+
         async def call():
             for attempt in range(3):
                 native = initial if attempt == 0 else fit(attempt)
@@ -147,14 +159,15 @@ class _ReportRun:
 
                         async def invoke(current_model, messages, **kwargs):
                             return await current_model.generate_structured_output(
-                                messages, schema
+                                fit_candidate(current_model, messages, descriptor["max_output_tokens"]), schema
                             )
 
                         return await policy.policy.invoke(
                             invoke, {"messages": native}, {}
                         )
                     return await factory.complete_with_recovery(
-                        role, native, state={}, candidates=candidates
+                        role, native, state={}, candidates=candidates,
+                        prepare_messages=fit_candidate,
                     )
                 except Exception as exc:
                     if attempt == 2 or not is_token_limit_exceeded(

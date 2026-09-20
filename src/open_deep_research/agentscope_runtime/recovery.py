@@ -280,8 +280,9 @@ class RecoverySession:
         request_details=None,
         agent=None,
         account_attempts=False,
+        operation_key=None,
     ):
-        key = self.key("model:" + role)
+        key = operation_key or self.key("model:" + role)
         if agent is not None:
             task_id = self.task_id.get()
             current = agent.state.middle_context.get("recovery_feedback", {}).get(
@@ -313,7 +314,7 @@ class RecoverySession:
         payload = {
             "role": role,
             "messages": stable_input(messages),
-            "schema": schema.model_json_schema() if schema else None,
+            "schema": schema if isinstance(schema, dict) else schema.model_json_schema() if schema else None,
             "request": stable_input(request_details or {}),
         }
         # UTF-8 size includes tool schemas; actual usage remains provider-reported.
@@ -360,6 +361,7 @@ class RecoverySession:
             }
 
         async def invoke():
+            from open_deep_research.agentscope_runtime.native_context import ContextSummaryFailed
             from open_deep_research.agentscope_runtime.gateway import (
                 GatewayCallError,
                 gateway_operation_scope,
@@ -378,6 +380,13 @@ class RecoverySession:
                 with gateway_operation_scope(key):
                     try:
                         result = await invoke_response()
+                    except ContextSummaryFailed as exc:
+                        if (request_details or {}).get("purpose") != "context_summary":
+                            raise
+                        result = {
+                            "codec": "agentscope-failed-summary-v1", "framework": "2.0.8",
+                            "error_type": str(exc), "usage_details": exc.usage_details,
+                        }
                     except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, GatewayCallError) as exc:
                         known_output_failure = not isinstance(exc, GatewayCallError) or (
                             not exc.uncertain and str(exc) in {"structured_output_missing", "structured_output_truncated"}
@@ -435,6 +444,9 @@ class RecoverySession:
         )
         if result.get("codec") == "agentscope-invalid-judge-v1":
             raise ModelOutputProtocolError(result["error"])
+        if result.get("codec") == "agentscope-failed-summary-v1":
+            from open_deep_research.agentscope_runtime.native_context import ContextSummaryFailed
+            raise ContextSummaryFailed(result["error_type"], result.get("usage_details"))
         if (
             result.get("codec") != "agentscope-response-v1"
             or result.get("framework") != "2.0.8"
@@ -504,7 +516,9 @@ class RecoverySession:
                 ),
             }
 
-        safe = tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
+        # Sensitive reads still pass governance on execution; they do not have
+        # the unknown external-write effect that requires quarantine.
+        safe = tool.effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ} or tool.supports_idempotency
         # 远区派发的工具由 Gateway 侧统一计费；宿主回执不再重复预留 tool_calls。
         reserve = {"tool_calls": 1} if bill else None
         if bill and tool.name in {"fetch_url", "fetch_webpage", "web_research"}:

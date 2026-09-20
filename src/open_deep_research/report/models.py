@@ -430,7 +430,15 @@ class ReportCitationReview(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     claim: str = ""
-    citation_target: str = ""
+    citation_target: str = Field(
+        default="",
+        description=(
+            "Exact citation target from the draft: an accepted HTTP(S) URL, "
+            "a local /documents/<id>?chunk=<id> link, a numbered marker such as [1], "
+            "or an evidence marker such as [EV-123]. Copy the complete target, "
+            "not the link title, filename, locator, prose description, or Markdown link."
+        ),
+    )
     supported: bool = False
     evidence_ids: List[str] = Field(default_factory=list)
 

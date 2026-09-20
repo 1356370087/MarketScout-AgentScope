@@ -95,6 +95,7 @@ class ToolPolicy(BaseModel):
     )
     deny_effects: list[str] = Field(default_factory=lambda: ["destructive"])
     deny_tools: list[str] = Field(default_factory=list)
+    allow_tools: list[str] = Field(default_factory=list)
 
 
 class ResourcePolicy(BaseModel):
@@ -202,12 +203,16 @@ def tool_policy_decision(
     tool_name: str,
     effect: str,
 ) -> PolicyDecision:
-    """Apply Profile tool deny/ask/allow sets without trusting Worker metadata."""
+    """Apply named deny, named allow, then effect policy from the host profile."""
     normalized_name = tool_name.lower()
     if any(
         fnmatchcase(normalized_name, pattern.lower())
         for pattern in profile.tools.deny_tools
-    ) or effect in profile.tools.deny_effects:
+    ):
+        return "deny"
+    if normalized_name in {name.lower() for name in profile.tools.allow_tools}:
+        return "allow"
+    if effect in profile.tools.deny_effects:
         return "deny"
     if effect in profile.tools.ask_effects:
         return "ask"

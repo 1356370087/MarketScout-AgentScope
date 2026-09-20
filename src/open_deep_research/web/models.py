@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -131,7 +131,7 @@ class EvidenceRecord(BaseModel):
     supporting_excerpt: str
     document_id: str
     chunk_id: str
-    locator: str
+    locator: str | dict[str, Any]
     source_url: str
     source_title: str = ""
     source_authority: float = Field(default=0.0, ge=0.0, le=1.0)

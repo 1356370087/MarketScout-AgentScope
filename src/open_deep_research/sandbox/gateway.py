@@ -1642,7 +1642,8 @@ class GatewayRuntime:
             logical_operation_id=request.logical_operation_id,
             tool_name=request.tool_name,
             idempotent=(
-                tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
+                tool.effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ}
+                or tool.supports_idempotency
             ),
         )
         try:
@@ -1981,7 +1982,8 @@ class GatewayRuntime:
             logical_operation_id=request.logical_operation_id,
             tool_name=request.tool_name,
             idempotent=(
-                tool.effect is ToolEffect.READ_ONLY or tool.supports_idempotency
+                tool.effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ}
+                or tool.supports_idempotency
             ),
         )
         try:
@@ -2604,6 +2606,13 @@ def create_gateway_app(
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+            from open_deep_research.documents.database import close_document_pool
+            from open_deep_research.documents.embeddings import close_embedding_clients
+
+            try:
+                await close_embedding_clients()
+            finally:
+                await close_document_pool()
 
     app = FastAPI(
         title="InsightForge Sandbox Gateway",

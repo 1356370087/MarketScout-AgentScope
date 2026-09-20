@@ -491,6 +491,24 @@ def build_reviewer_payload(
         for source in normalized_draft.sources
         if _canonical_reference(source.url) in accepted_references
     ]
+    if native_report.get() is not None:
+        from .writing import project_evidence
+
+        # Single-shot review is a domain operation, not conversation compression.
+        # Keep the draft and evidence intact; the native port budgets whole records.
+        return {
+            "research_brief": str(normalized_state.get("research_brief") or ""),
+            "coverage_contract": {"requirements": requirements, "dimension_coverage": dimension_coverage},
+            "evidence_registry": project_evidence(records),
+            "draft_markdown": normalized_draft.markdown,
+            "sources": [{"title": source.title, "url": source.url,
+                         "source_type": source.source_type, "locator": source.locator}
+                        for source in filtered_sources],
+            "report_type": normalized_draft.report_type or normalized_draft.profile_name,
+            "output_format": normalized_draft.output_format,
+            "reference_style": normalized_draft.reference_style,
+            "outline": [{"name": section.name} for section in normalized_draft.sections],
+        }
     payload: dict[str, Any] = {
         "research_brief": str(normalized_state.get("research_brief") or "")[:8_000],
         "coverage_contract": {
@@ -1450,7 +1468,16 @@ async def _invoke_reviewer(
 ) -> Any:
     """Invoke the structured Reviewer through the shared model gateway."""
     if native_report.get() is not None:
-        return await native_report.get().invoke("report_review", [SystemMessage(content=_REVIEW_SECURITY_SYSTEM_PROMPT), HumanMessage(content=_review_prompt({**payload, "review_attempt": attempt}, max_chars=cfg.report_review_max_input_chars))], cfg, span_name="lead.report_review", schema=ReportReview)
+        from .writing import writing_messages
+
+        fields = {key: value for key, value in payload.items() if key != "evidence_registry"}
+        messages = writing_messages(
+            getattr(_prompts, "report_review_prompt", "{payload}"),
+            {**fields, "review_attempt": attempt}, list(payload.get("evidence_registry", [])),
+            guidance=_REVIEW_SECURITY_SYSTEM_PROMPT + "\nUse report_evidence.records as evidence_registry. "
+            "Omitted evidence is unavailable; never certify unsupported claims as verified.",
+        )
+        return await native_report.get().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=ReportReview)
     model = _model_name(cfg)
     max_tokens = int(getattr(cfg, "report_review_model_max_tokens", 3_072) or 3_072)
     temperature = getattr(cfg, "report_review_temperature", None)
@@ -1556,6 +1583,18 @@ async def review_report(
             attempt=resolved_attempt,
         )
     except Exception as exc:  # noqa: BLE001 - fail-open policy is explicit
+        port = native_report.get()
+        if port is not None:
+            from open_deep_research.agentscope_runtime.recovery import ApprovalPending
+            from open_deep_research.agentscope_runtime.recovery_store import FenceLost, RecoveryConflict, UnknownOperation
+            from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
+            from .writing import ReportInputBudgetExceeded
+
+            recovery = port.models.recovery
+            if isinstance(exc, (ApprovalPending, FenceLost, RecoveryConflict, UnknownOperation, BudgetExhausted, DeadlineExceeded, ReportInputBudgetExceeded)):
+                raise
+            if recovery is not None and recovery.problem is not None:
+                raise
         fail_open = bool(getattr(cfg, "report_review_fail_open", True))
         fallback = _normalize_candidate(
             {},
@@ -1608,10 +1647,23 @@ def _revision_prompt(
     review: ReportReview,
     state: Mapping[str, Any],
     config: RunnableConfig,
-) -> str:
+) -> str | list[Any]:
     """Build a constrained Revisor prompt with no raw handoff/tool content."""
     cfg = Configuration.from_runnable_config(config)
     requirements = _requirements(state)
+    if native_report.get() is not None:
+        from .writing import project_evidence, writing_messages
+
+        return writing_messages(
+            getattr(_prompts, "report_revision_prompt", "{payload}"),
+            {"research_brief": str(state.get("research_brief") or ""),
+             "requirements": requirements, "draft_markdown": draft.markdown,
+             "review": review.model_dump(mode="json"), "report_type": draft.report_type,
+             "output_format": draft.output_format, "reference_style": draft.reference_style},
+            project_evidence(_state_evidence(state)),
+            guidance="Use report_evidence.records as accepted_evidence. Preserve the complete draft; "
+            "state evidence gaps explicitly rather than inventing missing support.",
+        )
     evidence = _accepted_evidence_for_revision(state)
     max_input_chars = int(
         getattr(cfg, "report_review_max_input_chars", 40_000) or 40_000
@@ -1642,13 +1694,13 @@ def _revision_prompt(
 
 
 async def _invoke_reviser(
-    prompt: str,
+    prompt: str | list[Any],
     config: RunnableConfig,
     cfg: Configuration,
 ) -> str:
     """Invoke the final-report writer for one bounded revision."""
     if native_report.get() is not None:
-        return (await native_report.get().invoke("report_revisor", [SystemMessage(content=WRITING_RULES), HumanMessage(content=prompt)], cfg, span_name="lead.report_revision")).content
+        return (await native_report.get().invoke("report_revisor", prompt, cfg, span_name="lead.report_revision")).content
     model = str(getattr(cfg, "final_report_model", "") or _model_name(cfg))
     max_tokens = int(getattr(cfg, "final_report_model_max_tokens", 10_000) or 10_000)
     budget_gate = _report_budget_gate(config, cfg)

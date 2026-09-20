@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from agentscope.message import ToolCallBlock, ToolResultBlock
 from open_deep_research.agentscope_runtime.messages import validate_tool_pairs
@@ -17,19 +18,64 @@ class RunContextOffloader:
     """
 
     def __init__(self, runs_dir, recovery):
-        self.directory = Path(runs_dir) / recovery.lease.run_id / "context"
+        # Keep model-readable payloads separate from manifests and credentials.
+        self.directory = Path(runs_dir) / recovery.lease.run_id / "context" / "offloaded"
         self.recovery = recovery
 
-    async def offload_context(self, session_id, msgs):
+    async def _write(self, payload):
         name = f"{uuid4().hex}.json"
-        body = json.dumps({
-            "session_id": str(session_id),
-            "messages": [message.model_dump(mode="json") for message in msgs],
-        }, ensure_ascii=False)
+        body = json.dumps(payload, ensure_ascii=False)
         async with self.recovery.store.transaction(self.recovery.lease):
             self.directory.mkdir(parents=True, exist_ok=True)
             (self.directory / name).write_text(body, encoding="utf-8")
         return f"run-context://{self.recovery.lease.run_id}/{name}"
+
+    async def offload_context(self, session_id, msgs, **kwargs):
+        """Persist the messages selected by AgentScope before replacement."""
+        return await self._write({
+            "session_id": str(session_id),
+            "messages": [message.model_dump(mode="json") for message in msgs],
+        })
+
+    async def offload_tool_result(self, session_id, tool_result, **kwargs):
+        """Persist the complete block handed off by native tool truncation."""
+        return await self._write({
+            "session_id": str(session_id),
+            "tool_result": tool_result.model_dump(mode="json"),
+        })
+
+    async def read(self, reference, *, session_id, offset=0, limit=4096):
+        """Read a bounded character page using the caller's trusted session ID.
+
+        The model supplies only the reference and pagination. The caller binds
+        session_id from the active agent, never from the tool's input.
+        """
+        if offset < 0 or not 1 <= limit <= 8192:
+            raise ValueError("invalid context artifact page")
+        parsed = urlsplit(reference)
+        if (
+            parsed.scheme != "run-context"
+            or parsed.netloc != self.recovery.lease.run_id
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.startswith("/")
+        ):
+            raise ValueError("context artifact does not belong to this run")
+        directory = self.directory.resolve()
+        path = (directory / parsed.path[1:]).resolve()
+        if path.parent != directory or path.suffix != ".json":
+            raise ValueError("context artifact escapes offload directory")
+        async with self.recovery.store.transaction(self.recovery.lease):
+            content = path.read_text(encoding="utf-8")
+            payload = json.loads(content)
+            if payload["session_id"] != str(session_id):
+                raise PermissionError("context artifact belongs to another session")
+        end = min(len(content), offset + limit)
+        return {
+            "reference": reference,
+            "content": content[offset:end],
+            "next_offset": end if end < len(content) else None,
+        }
 
 
 class NativeContextCompactor:

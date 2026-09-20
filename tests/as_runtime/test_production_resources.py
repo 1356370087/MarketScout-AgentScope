@@ -58,8 +58,9 @@ def config():
     "fail_registration, renew, late_charge",
     [(False, False, False), (True, False, False), (False, True, False), (False, False, True)],
 )
+@pytest.mark.parametrize("documents", [False, True])
 async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
-    store, monkeypatch, tmp_path, fail_registration, renew, late_charge
+    store, monkeypatch, tmp_path, fail_registration, renew, late_charge, documents
 ):
     events = []
     settings = SimpleNamespace(
@@ -87,6 +88,7 @@ async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
         async def ensure(self, **kwargs):
             events.append("key")
             assert kwargs["requested_budget_micro_usd"] == (50 if late_charge else 60)
+            assert ("if-embedding-v1" in kwargs["allowed_models"]) is documents
             return SimpleNamespace(
                 key="secret-run-key", metadata=SimpleNamespace(expires_at=0)
             )
@@ -135,6 +137,9 @@ async def test_owner_resource_registration_cleanup_and_no_secret_in_config(
         monkeypatch.setattr(store, "transaction", late_settlement)
     session = RecoverySession(store, lease, state)
     cfg = config()
+    if documents:
+        cfg["metadata"] = {"source_selection": {"mode": "documents", "sources": [
+            {"type": "document", "id": "doc"}]}}
     run = RunConfig.compile(cfg)
     try:
         async with resources.production_resources(tmp_path)(run, cfg, session) as ports:
@@ -186,6 +191,63 @@ async def test_child_attaches_without_registering_or_erasing_leader_vault(
         assert ports.model_for("compression", "pipeline")._binding.task_id == "task-a"
         assert ports.team_launcher is None
     await session.close()
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny", "cancel", "reconnect"])
+async def test_native_gateway_approval_keeps_one_tool_operation_pending(
+    store, monkeypatch, tmp_path, decision
+):
+    from open_deep_research.tools.base import ToolExecutionZone, ToolResult
+    from open_deep_research.tools.governance import ApprovalPendingError
+
+    state, lease = await create(store)
+    session = RecoverySession(store, lease, state)
+    cfg = config()
+    requested, resolved = asyncio.Event(), asyncio.Event()
+    calls = []
+    context = SimpleNamespace(config={"metadata": {"task_id": "task-a"}},
+                              operation_id="same-operation", tool_call_id="same-call")
+
+    async def call(proxy, input, current, on_progress=None):
+        assert current is context
+        calls.append(current.operation_id)
+        if len(calls) == 1:
+            requested.set()
+            raise ApprovalPendingError("awaiting decision", approval_id="approval", domain="example.test")
+        await resolved.wait()
+        if decision == "deny":
+            raise RuntimeError("egress_domain_denied")
+        return ToolResult(output="approved source")
+
+    monkeypatch.setattr(resources.GatewayToolProxy, "call", call)
+    try:
+        async with resources.production_resources(tmp_path, worker_task_id="task-a")(
+            RunConfig.compile(cfg), cfg, session
+        ) as ports:
+            tool = SimpleNamespace(execution_zone=ToolExecutionZone.GATEWAY)
+            pending = asyncio.create_task(ports.dispatcher(tool, None, context))
+            await asyncio.wait_for(requested.wait(), 2)
+            await asyncio.sleep(0)
+            assert not pending.done(), "a pending approval must not fail the Worker"
+            if decision in {"cancel", "reconnect"}:
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+                if decision == "cancel":
+                    assert calls == ["same-operation"]
+                    return
+                # Restart attaches to the same operation, never invents another call.
+                pending = asyncio.create_task(ports.dispatcher(tool, None, context))
+            resolved.set()
+            if decision == "deny":
+                with pytest.raises(RuntimeError, match="egress_domain_denied"):
+                    await asyncio.wait_for(pending, 2)
+            else:
+                assert (await asyncio.wait_for(pending, 2)).output == "approved source"
+            assert calls == ["same-operation", "same-operation"]
+            assert session.problem is None
+    finally:
+        await session.close()
 
 
 async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):

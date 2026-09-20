@@ -273,6 +273,34 @@ class ControllerWorkspace(WorkspaceBase):
         body = await self.backend.read_file(path)
         return json.loads(body.decode("utf-8"))
 
+    async def read(self, reference, *, session_id, offset=0, limit=4096):
+        """Read a session-owned offload page, never arbitrary workspace files."""
+        from pathlib import PurePosixPath
+        from urllib.parse import urlsplit
+
+        if offset < 0 or not 1 <= limit <= 8192:
+            raise ValueError("invalid context artifact page")
+        parsed = urlsplit(reference)
+        path = PurePosixPath(parsed.path)
+        if (
+            parsed.scheme != "workspace"
+            or parsed.netloc != str(self.workspace_id)
+            or parsed.query or parsed.fragment
+            or str(path.parent) != OFFLOAD_ROOT
+            or path.suffix != ".json"
+        ):
+            raise ValueError("context artifact escapes offload directory")
+        value = await self.recall(reference)
+        if value.get("payload", {}).get("session_id") != str(session_id):
+            raise PermissionError("context artifact belongs to another session")
+        content = json.dumps(value, ensure_ascii=False)
+        end = min(len(content), offset + limit)
+        return {
+            "reference": reference,
+            "content": content[offset:end],
+            "next_offset": end if end < len(content) else None,
+        }
+
 
 class ControllerWorkspaceManager(WorkspaceManagerBase):
     """原生 workspace 管理器：per-agent 分配，控制器任务支撑。"""

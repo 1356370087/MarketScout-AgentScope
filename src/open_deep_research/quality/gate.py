@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import date
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -20,7 +20,7 @@ from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configurati
 from open_deep_research.evidence import (
     SourceScopeStatus,
     classify_evidence_source,
-    compile_source_scope,
+    required_source_count,
     contract_has_source_constraints,
     is_evidence_eligible,
     source_scoped_evidence_records,
@@ -75,7 +75,7 @@ async def invoke_model_with_retry_observability(*args, **kwargs):
     return await legacy(*args, **kwargs)
 
 
-_URL_RE = re.compile(r"https?://[^\s\]\[()<>\"']+", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://[^\s\]\[()<>\"'`（）；，。；【】]+", re.IGNORECASE)
 logger = logging.getLogger(__name__)
 
 _TOOL_EXECUTION_FAILED_RE = re.compile(
@@ -159,6 +159,11 @@ def _evidence_source_identity(record: Mapping[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def count_traceable_sources(records: Iterable[Mapping[str, Any]]) -> int:
+    """Count the same document/page identities at batch, handoff and completion."""
+    return len({identity for record in records if (identity := _evidence_source_identity(record))})
 
 
 class ToolResultAssessment(BaseModel):
@@ -1472,6 +1477,10 @@ def _owned_coverage_contract_projection(
     return {
         "schema_version": coverage_contract.schema_version,
         "original_query_sha256": coverage_contract.original_query_sha256,
+        "source_selection": (
+            coverage_contract.source_selection.model_dump(mode="json")
+            if coverage_contract.source_selection is not None else None
+        ),
         "requirements": [
             requirement.model_dump(mode="json")
             for requirement in coverage_contract.requirements
@@ -1614,6 +1623,7 @@ def deterministic_tool_checks(
     *,
     min_sources: int,
     evidence_registry: list[dict[str, Any]] | None = None,
+    coverage_contract: object = None,
 ) -> dict[str, Any]:
     """Apply cheap checks before trusting an LLM quality decision."""
     evidence = [item for item in tool_results if item.get("name") not in {"think_tool", "ResearchComplete"}]
@@ -1687,7 +1697,12 @@ def deterministic_tool_checks(
     # A failed supplementary fetch does not invalidate accepted evidence.
     # The Judge still checks whether that cumulative evidence covers the topic.
     failures = [] if cumulative_evidence else list(batch_failures)
-    if search_used and source_count < min_sources:
+    required_sources = required_source_count(min_sources, coverage_contract, leaf=True)
+    retrieval_used = search_used or any(
+        item.get("name") in {"web_research", "fetch_url", "search_documents"}
+        for item in evidence
+    )
+    if retrieval_used and source_count < required_sources:
         failures.append("insufficient_traceable_sources")
     return {
         "passed": not failures,
@@ -1696,6 +1711,8 @@ def deterministic_tool_checks(
         "evidence_result_count": len(evidence),
         "error_count": error_count,
         "source_count": source_count,
+        "required_source_count": required_sources,
+        "configured_min_sources": min_sources,
         "structured_evidence_count": structured_evidence_count,
     }
 
@@ -1712,18 +1729,7 @@ def deterministic_handoff_checks(
     source_scope_enforced = contract_has_source_constraints(
         coverage_contract
     )
-    source_scope = compile_source_scope(coverage_contract)
-    # A leaf task that is explicitly restricted to named URLs may legitimately
-    # own just one of the Run-level allowlisted sources. Requiring the global
-    # diversity floor at this boundary creates an impossible contract and
-    # pressures the task to violate the user's source whitelist. Diversity is
-    # still evaluated on the merged Run output; non-explicit/official scopes
-    # retain the configured minimum here.
-    effective_min_sources = (
-        1
-        if source_scope.explicit_url_only and source_scope.allowed_urls
-        else max(1, int(min_sources))
-    )
+    effective_min_sources = required_source_count(min_sources, coverage_contract, leaf=True)
     if source_scope_enforced:
         accepted_evidence: list[Mapping[str, Any]] = [
             record
@@ -1792,6 +1798,7 @@ def deterministic_handoff_checks(
         "failures": failures,
         "source_count": source_count,
         "required_source_count": effective_min_sources,
+        "configured_min_sources": min_sources,
         "source_scope_enforced": source_scope_enforced,
         "out_of_scope_source_count": out_of_scope_source_count,
     }
@@ -2125,6 +2132,7 @@ async def evaluate_tool_results(
         evaluator_tool_results,
         min_sources=configurable.quality_evaluation_min_sources,
         evidence_registry=scoped_evidence_registry,
+        coverage_contract=resolved_contract if use_v4_contract else None,
     )
     checks["source_scope_enforced"] = source_scope_enforced
     input_limit = configurable.quality_evaluation_max_input_chars

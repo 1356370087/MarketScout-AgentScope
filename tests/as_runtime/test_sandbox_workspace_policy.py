@@ -212,6 +212,31 @@ async def test_native_offloader_keyword_protocol():
     assert stored["session_id"] == "session"
 
 
+async def test_native_offload_pages_are_session_scoped():
+    import json
+    from agentscope.message import UserMsg
+
+    backend, _ = _backend_hooks()
+    workspace = ControllerWorkspace(
+        workspace_id="ws-reader", controller=FakeController(), spec=_spec(), backend=backend,
+    )
+    message = UserMsg("user", "可回读的证据" * 30)
+    reference = await workspace.offload_context(session_id="session", msgs=[message])
+    pages, offset = [], 0
+    while offset is not None:
+        page = await workspace.read(reference, session_id="session", offset=offset, limit=31)
+        assert len(page["content"]) <= 31
+        pages.append(page["content"])
+        offset = page["next_offset"]
+    assert json.loads("".join(pages))["payload"]["messages"][0] == message.model_dump(mode="json")
+    with pytest.raises(PermissionError):
+        await workspace.read(reference, session_id="another-session")
+    with pytest.raises(ValueError):
+        await workspace.read("workspace://ws-reader/workspace/output/offload/../secret.json", session_id="session")
+    with pytest.raises(ValueError):
+        await workspace.read("workspace://other/workspace/output/offload/a.json", session_id="session")
+
+
 async def test_no_host_tool_bypass():
     """Backend 三原语只经受治理分发；缺失即拒绝，无宿主回退。"""
     bare = ControllerBackend()

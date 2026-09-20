@@ -359,11 +359,17 @@ services:
       SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
       SANDBOX_GATEWAY_PHYSICAL_PROCESS: "true"
       SANDBOX_GATEWAY_FAKE_PROVIDER: ${SANDBOX_GATEWAY_FAKE_PROVIDER:-false}
+      # 企业资料检索在 Gateway 内使用 Run Key；连接与 API 相同的资料库和向量模型。
+      DOCUMENT_RESEARCH_ENABLED: ${DOCUMENT_RESEARCH_ENABLED:-true}
+      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_EMBEDDING_MODEL: ${DOCUMENT_EMBEDDING_MODEL:-if-embedding-v1}
+      DOCUMENT_EMBEDDING_DIMENSIONS: ${DOCUMENT_EMBEDDING_DIMENSIONS:-1536}
       APP_ENV: ${APP_ENV:-production}
       LITELLM_BASE_URL: http://litellm-proxy:4000/v1
     networks:
       - default
       - sandbox-control
+      - document-internal
     read_only: true
     tmpfs:
       - /tmp:size=256m,noexec,nosuid,nodev

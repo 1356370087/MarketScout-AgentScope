@@ -1198,6 +1198,20 @@ async def finalize_report(
         value = normalized.finalization.get(key)
         if value is not None:
             update[key] = _json_native(value)
+    # Rebuild the publisher model from the reviewed/revised text. The draft's
+    # initial canonical model may be stale, and omitting it loses publication
+    # provenance and the completion status at the native SQL boundary.
+    canonical_report = _canonical_report_payload(
+        markdown,
+        {**normalized_state, "completion_decision": update.get(
+            "completion_decision", normalized_state.get("completion_decision", {})
+        )},
+        runnable_config,
+        profile,
+        list(normalized.sources),
+    )
+    if canonical_report is not None:
+        update["canonical_report"] = canonical_report
     return update
 
 

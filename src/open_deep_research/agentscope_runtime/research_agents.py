@@ -8,10 +8,9 @@ import re
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 from uuid import uuid4
 
-from agentscope.agent import Agent, ContextConfig, ModelConfig, ReActConfig
+from agentscope.agent import Agent, ModelConfig, ReActConfig
 from agentscope.event import (
     ReplyEndEvent,
     RequireExternalExecutionEvent,
@@ -21,7 +20,8 @@ from agentscope.message import AssistantMsg, Msg, UserMsg
 from agentscope.middleware import MiddlewareBase
 from pydantic import BaseModel, Field
 
-from open_deep_research.agentscope_runtime.context import ResearchContextMiddleware
+from open_deep_research.agentscope_runtime.native_context import ContextControlError, NativeResearchContext
+from open_deep_research.agentscope_runtime.context_tools import context_read_tools
 from open_deep_research.agentscope_runtime.research_completion import BusinessCompletion
 from open_deep_research.agentscope_runtime.tools import (
     ToolGovernanceMiddleware,
@@ -30,12 +30,13 @@ from open_deep_research.agentscope_runtime.tools import (
 from open_deep_research.completion import CompletionDecision, CompletionPolicyContext
 from open_deep_research.configuration import Configuration
 from open_deep_research.documents.contracts import SourceMode, selection_from_config
-from open_deep_research.evidence import source_scoped_evidence_records
+from open_deep_research.evidence import required_source_count, source_scoped_evidence_records
 from open_deep_research.prompts import lead_researcher_prompt, research_system_prompt
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
     merge_coverage_ledger,
 )
+from open_deep_research.quality.gate import count_traceable_sources
 from open_deep_research.tools.base import (
     ToolEffect,
     ToolExecutionZone,
@@ -223,7 +224,7 @@ class _Observations:
             if isinstance(records, dict):
                 records = list(records.values())
             candidates = source_scoped_evidence_records(records, self.contract)
-            if name not in {"think_tool", "ResearchComplete", "TeamSay", "SendMessage", "ListAgents", "TaskGet", "TaskList"}:
+            if name not in {"think_tool", "ResearchComplete", "TeamSay", "SendMessage", "ListAgents", "TaskGet", "TaskList", "ReadContextArtifact"}:
                 self.pending.append(row)
             elif name == "TaskGet" and candidates:
                 self.pending.append(row)
@@ -240,6 +241,13 @@ class _Observations:
 
 
 async def _reply(agent: Agent, messages: list[Msg]):
+    try:
+        return await _native_reply(agent, messages)
+    except ContextControlError as error:
+        raise error.error from error
+
+
+async def _native_reply(agent: Agent, messages: list[Msg]):
     final, reason = None, None
     async with aclosing(agent.reply_stream(messages, yield_final_msg=True)) as stream:
         async for item in stream:
@@ -329,6 +337,7 @@ class Researcher:
         tools = [
             *selected_tools,
             *coordination_tools,
+            *context_read_tools(self.offloader, lambda: agent.state.session_id),
             _control_tool("ResearchComplete", _Empty, complete),
             _control_tool("think_tool", _Thought, think),
         ]
@@ -382,7 +391,7 @@ class Researcher:
                 latest = observations.assessments[-1] if observations.assessments else None
                 ready = not cfg.quality_evaluation_enabled or (
                     latest and latest.get("accepted") and latest.get("decision") == "complete"
-                    and latest.get("deterministic_checks", {}).get("source_count", 0) >= cfg.quality_evaluation_min_sources
+                    and latest.get("deterministic_checks", {}).get("passed", False)
                 )
                 completion.finished = bool(ready)
                 if not ready:
@@ -393,9 +402,10 @@ class Researcher:
         completion.before_reasoning = quality_boundary
         toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
+        native_context = NativeResearchContext(self.models, "researcher", model)
         agent = Agent(
             name="researcher",
-            model=model,
+            model=native_context.model,
             toolkit=toolkit,
             system_prompt=research_system_prompt.format(
                 date=datetime.now(UTC).date().isoformat(),
@@ -404,16 +414,15 @@ class Researcher:
             ),
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=cfg.max_react_tool_calls),
-            context_config=ContextConfig(compression_tool_enabled=False),
+            context_config=native_context.config,
+            injection_config=native_context.injection,
             offloader=self.offloader,
             middlewares=[
                 *worker_middlewares,
                 *self.models.agent_middlewares("researcher", model),
                 completion,
                 ToolGovernanceMiddleware(),
-                ResearchContextMiddleware(
-                    max_chars=self.context_chars, offloader=self.offloader
-                ),
+                native_context,
             ],
         )
         protected = UserMsg(
@@ -558,13 +567,7 @@ class Supervisor:
             )
             return CompletionPolicyContext(
                 evidence_count=len(evidence),
-                independent_source_count=len(
-                    {
-                        urlsplit(row.get("source_url", "")).netloc
-                        or row.get("document_id", row.get("source_url", ""))
-                        for row in evidence.values()
-                    }
-                ),
+                independent_source_count=count_traceable_sources(evidence.values()),
                 active_task_count=sum(not task.done() for task in tasks.values()),
                 uncovered_requirements=uncovered,
                 has_remaining_budget=self.budget_available(),
@@ -577,7 +580,7 @@ class Supervisor:
             completion = BusinessCompletion(
                 coordination_limit,
                 completion_facts,
-                min_sources=cfg.quality_evaluation_min_sources,
+                min_sources=required_source_count(cfg.quality_evaluation_min_sources, contract),
             )
 
         def assign(input):
@@ -834,6 +837,7 @@ class Supervisor:
             from open_deep_research.agentscope_runtime.teams_tools import lead_tools, communication_tools
             tools += lead_tools(self.team_workers, cfg) if teams_mode else communication_tools(
                 self.team_workers.team, self.team_workers.team.leader, "supervisor-send:")
+        tools.extend(context_read_tools(self.offloader, lambda: agent.state.session_id))
         toolkit = await prepare_toolkit(
             tools,
             role=AgentRole.SUPERVISOR,
@@ -877,23 +881,23 @@ class Supervisor:
             from open_deep_research.agentscope_runtime.team_worker import LeaderInbox
 
             team_middlewares.append(LeaderInbox(self.team_workers))
+        native_context = NativeResearchContext(self.models, "supervisor", model)
         agent = Agent(
             name="supervisor",
-            model=model,
+            model=native_context.model,
             toolkit=toolkit,
             system_prompt=prompt,
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=coordination_limit),
-            context_config=ContextConfig(compression_tool_enabled=False),
+            context_config=native_context.config,
+            injection_config=native_context.injection,
             offloader=self.offloader,
             middlewares=[
                 *team_middlewares,
                 *self.models.agent_middlewares("supervisor", model),
                 completion,
                 ToolGovernanceMiddleware(),
-                ResearchContextMiddleware(
-                    max_chars=self.context_chars, offloader=self.offloader
-                ),
+                native_context,
             ],
         )
         try:

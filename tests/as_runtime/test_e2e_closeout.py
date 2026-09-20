@@ -31,7 +31,7 @@ async def test_production_context_offload_preserves_history_and_rejects_stale_ow
     messages = [UserMsg("user", "question"), UserMsg("user", "x" * 10000), UserMsg("user", "continue")]
     agent = SimpleNamespace(state=SimpleNamespace(context=messages, session_id="session", middle_context={}))
     await ResearchContextMiddleware(max_chars=2000, offloader=offloader).on_compress_context(agent, {}, None)
-    files = list((tmp_path / state.run_id / "context").glob("*.json"))
+    files = list(offloader.directory.glob("*.json"))
     assert len(files) == 1
     assert len(json.loads(files[0].read_text(encoding="utf-8"))["messages"]) == 3
     assert len(agent.state.context) == 2

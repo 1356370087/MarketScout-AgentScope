@@ -7,7 +7,6 @@ control-plane workers; they must never execute sandbox-local shell/file tools.
 import asyncio
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from dataclasses import replace
 
 from pydantic import SecretStr
 
@@ -128,6 +127,12 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
         }
         names = allowed_models(cfg)
         validate_model_catalog(catalog, names, budget_enabled=True)
+        # Retrieval runs use their own Run Key for embeddings inside Gateway.
+        # Embeddings are not chat candidates and have no chat output-token cap.
+        from open_deep_research.documents.contracts import selection_from_config
+        if selection_from_config(config).documents_enabled:
+            from open_deep_research.documents.settings import get_document_settings
+            names = sorted({*names, get_document_settings().embedding_model})
         run_id, fence = recovery.lease.run_id, recovery.lease.fence
         issuer = CapabilityTokenIssuer.from_root_key(cfg.sandbox_root_signing_key or "")
         bundle, profile_id, profile = resolve_profile(cfg)
@@ -328,16 +333,6 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
                     gateway_url=cfg.sandbox_gateway_url,
                     task_token=token_for(task_id),
                 )
-                from open_deep_research.tools.search_documents import search_documents
-
-                if search_documents.is_enabled(scoped):
-                    tools = [tool for tool in tools if tool.name != "search_documents"]
-                    tools.append(
-                        replace(
-                            search_documents,
-                            execution_zone=ToolExecutionZone.HOST_CONTROL,
-                        )
-                    )
                 return tools
 
             async def dispatch(tool, input, context):
@@ -348,9 +343,19 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
                 task_id = task_identity(
                     context.config.get("metadata", {}).get("task_id", "supervisor")
                 )
-                return await GatewayToolProxy(
-                    tool, cfg.sandbox_gateway_url, token_for(task_id)
-                ).call(input, context)
+                from open_deep_research.tools.governance import ApprovalPendingError
+
+                # Gateway's first response creates the human request; the same
+                # operation then long-polls its decision. Keep the native tool
+                # call pending instead of failing the Worker or asking the LLM
+                # to spend another turn on an identical call.
+                while True:
+                    try:
+                        return await GatewayToolProxy(
+                            tool, cfg.sandbox_gateway_url, token_for(task_id)
+                        ).call(input, context)
+                    except ApprovalPendingError:
+                        await asyncio.sleep(0.25)
 
             launcher = (
                 launcher_factory()

@@ -9,6 +9,7 @@ from agentscope.message import AssistantMsg
 
 from open_deep_research.agentscope_runtime.research_pipeline import PendingDecision
 from open_deep_research.configuration import Configuration
+from open_deep_research.documents.contracts import SourceSelection, selection_from_config
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     final_report_generation_prompt,
@@ -47,6 +48,27 @@ class NativeResearchStages:
 
     async def execute(self, stage, state):
         return await getattr(self, stage)(state)
+
+    def _bind_source_selection(self, state):
+        """Keep the frozen UI source boundary in the research evidence contract."""
+        config = self.config_provider()
+        if "source_selection" not in config.get("metadata", {}):
+            return
+        selection = selection_from_config(config)
+        if selection.knowledge_base_ids or selection.collection_ids:
+            document_ids = dict.fromkeys([
+                *selection.document_ids,
+                *(item["id"] for item in state.application.get("selected_source_snapshots", [])),
+            ])
+            selection = SourceSelection.model_validate({
+                "mode": selection.mode,
+                "sources": [item.model_dump() for item in selection.sources
+                            if item.type in {"url", "domain"}]
+                           + [{"type": "document", "id": value} for value in document_ids],
+            })
+        state.coverage_contract = {
+            **state.coverage_contract, "source_selection": selection.model_dump(mode="json"),
+        }
 
     @staticmethod
     def _history(state):
@@ -134,6 +156,7 @@ class NativeResearchStages:
         cfg = Configuration.from_runnable_config(self.config_provider())
         state.research_brief = result.research_brief
         state.coverage_contract = contract.model_dump(mode="json")
+        self._bind_source_selection(state)
         state.research_risk_profile = classify_research_risk(
             history,
             mode=cfg.quality_risk_mode,
@@ -147,6 +170,8 @@ class NativeResearchStages:
             return PendingDecision(stage="plan_approval", question=state.research_brief)
 
     async def research_supervisor(self, state):
+        # Older checkpoints predate structured source selection in the contract.
+        self._bind_source_selection(state)
         cfg = Configuration.from_runnable_config(self.config_provider())
         feedback = list(state.feedback)
         if cfg.enable_async_research and cfg.async_research_mode == "teams":

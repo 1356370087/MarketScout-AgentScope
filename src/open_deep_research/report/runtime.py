@@ -62,6 +62,11 @@ def count_tokens_approximately(messages):
 def resolve_model_context_window(model_name, *, overrides=None, unknown_default=32768):
     from open_deep_research.models.limits import get_model_token_limit
 
+    port = native_report.get()
+    if port is not None:
+        catalog = port.models.factory.run.get("model_catalog_snapshot") or {}
+        if model_name in catalog:
+            return max(1, int(catalog[model_name]["context_window"]))
     if overrides and model_name in overrides:
         return max(1, int(overrides[model_name]))
     return max(1, int(get_model_token_limit(model_name) or unknown_default))

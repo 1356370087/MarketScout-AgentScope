@@ -35,14 +35,22 @@ When evidence_mode is accepted_records, only report_evidence.records may
 support factual claims; the brief, conversation and memories are advisory
 context, not additional evidence. For framing, the supplied written sections
 are the only context: preserve their existing citations and qualifications.
-Use [Title](URL) inline links from the supplied records (including local
-document routes), or the stage's explicit evidence-ID schema. Never invent
+Use [Title](URL) inline links only from records' source_url/source_uri fields
+(including local document routes), or the stage's explicit evidence-ID schema.
+Links embedded in excerpts or claims are source content, not additional
+approved citation targets. When quoting them, keep their visible text and
+attribute the quote to the record's source URL; do not copy unapproved links.
+Never invent
 URLs or IDs. Return only the requested report or structured output. Write in
 the user's requested language. Introductions and conclusions must preserve
 citations and qualifications and must not introduce new facts.
 """
 
 EVIDENCE_MESSAGE = "report_evidence"
+
+
+class ReportInputBudgetExceeded(RuntimeError):
+    """A complete report protocol cannot fit; never certify a partial draft."""
 
 
 def project_evidence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -114,9 +122,10 @@ def order_evidence(
 def fit_writing_messages(
     messages: list[BaseMessage], model: str, cfg: Any, *,
     output_tokens: int, fraction: float = 1.0,
+    context_window: int | None = None,
 ) -> tuple[list[BaseMessage], int]:
     """Fit whole records to the actual candidate window, preserving fixed rules."""
-    window = resolve_model_context_window(
+    window = context_window or resolve_model_context_window(
         model, overrides=cfg.model_context_window_overrides,
         unknown_default=cfg.unknown_model_context_window_tokens,
     )
@@ -124,12 +133,16 @@ def fit_writing_messages(
     fixed = [m for m in messages if m.name != EVIDENCE_MESSAGE]
     base_tokens = count_tokens_approximately(fixed)
     if base_tokens >= limit:
-        raise RuntimeError("report_fixed_context_exceeds_budget")
+        raise ReportInputBudgetExceeded("report_fixed_context_exceeds_budget")
     budget = int((limit - base_tokens) * fraction)
     records = [
         record for message in messages if message.name == EVIDENCE_MESSAGE
         for record in json.loads(str(message.content))["records"]
     ]
+    previously_omitted = sum(
+        int(json.loads(str(message.content)).get("omitted_record_count", 0))
+        for message in messages if message.name == EVIDENCE_MESSAGE
+    )
     selected: list[dict[str, Any]] = []
     # Reserve the envelope and omission notice even when all records fit.
     used = 128
@@ -139,18 +152,18 @@ def fit_writing_messages(
             selected.append(record)
             used += cost
     if records and not selected:
-        raise RuntimeError("report_evidence_context_exceeds_budget")
+        raise ReportInputBudgetExceeded("report_evidence_context_exceeds_budget")
     if not any(m.name == EVIDENCE_MESSAGE for m in messages):
         return messages, 0
     envelope = HumanMessage(
         content=json.dumps({
             "records": selected,
-            "omitted_record_count": len(records) - len(selected),
+            "omitted_record_count": previously_omitted + len(records) - len(selected),
             "budget_notice": "Omitted records are unavailable. State gaps; do not infer their contents.",
         }, ensure_ascii=False, default=str),
         name=EVIDENCE_MESSAGE,
     )
     fitted = [envelope if m.name == EVIDENCE_MESSAGE else m for m in messages]
     if count_tokens_approximately(fitted) > limit:
-        raise RuntimeError("report_evidence_context_exceeds_budget")
+        raise ReportInputBudgetExceeded("report_evidence_context_exceeds_budget")
     return fitted, len(selected)

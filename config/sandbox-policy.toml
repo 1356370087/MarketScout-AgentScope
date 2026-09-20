@@ -43,6 +43,9 @@ deny = ["*"]
 
 [profiles.research-gateway-only.tools]
 # 团队写操作仅修改当前研究团队的任务与消息，仍由宿主身份和任务归属校验。
+# 精确允许已选企业资料的检索；仍校验资料所有权、冻结版本与工具权限。
+# deny_tools 优先于此名单，其他工具继续按效果分类判定。
+allow_tools = ["search_documents"]
 allow_effects = ["read_only", "coordination_write"]
 ask_effects = []
 deny_effects = ["sensitive_read", "external_write", "local_write", "destructive"]

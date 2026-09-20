@@ -287,9 +287,14 @@ class ModelFactory:
         field, fallback, tokens = ROLES[role]
         key = f"sandbox:{role}:{binding.task_id}"
         if key not in self._models:
+            model = self.run.get(field) or self.run.get(fallback)
+            catalog = self.run.get("model_catalog_snapshot")
             self._models[key] = SandboxChatModel(
                 binding=binding,
-                model=self.run.get(field) or self.run.get(fallback),
+                model=model,
+                # Candidate budgeting must use the same frozen window as the
+                # report's initial fit, not the adapter's default 32K window.
+                context_size=catalog.get(model, {}).get("context_window", 32768),
                 parameters=SandboxChatModel.Parameters(max_tokens=self.run.get(tokens)),
                 client=client,
                 structured_attempts=self.run.get("max_structured_output_retries"),
@@ -340,7 +345,7 @@ class ModelFactory:
             self._policies[role] = middleware
         return middleware
 
-    async def complete_with_recovery(self, role, messages, *, state, compact=None, candidates=None):
+    async def complete_with_recovery(self, role, messages, *, state, compact=None, candidates=None, prepare_messages=None):
         """写作/摘要完整响应路径；模型尝试仍通过统一策略，恢复状态可写入 AgentState。"""
         from open_deep_research.agentscope_runtime.model_policy import recover_output
         from agentscope.model import ChatResponse
@@ -350,6 +355,8 @@ class ModelFactory:
 
         async def call(current, limit):
             async def handler(current_model, messages, **kwargs):
+                if prepare_messages is not None:
+                    messages = prepare_messages(current_model, messages, limit)
                 return await current_model(messages=messages, max_tokens=limit)
 
             result = await middleware.policy.invoke(

@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from open_deep_research.documents.contracts import SourceSelection
+
 from open_deep_research.report.coverage import (
     CoverageSection,
     derive_coverage_sections,
@@ -244,6 +246,7 @@ class ResearchCoverageContract(BaseModel):
     dimensions: tuple[CoverageDimension, ...] = ()
     advisory_dimensions: tuple[str, ...] = ()
     single_research_task: bool = False
+    source_selection: SourceSelection | None = None
 
     def requirement_ids(self) -> tuple[str, ...]:
         """Return stable requirement identifiers in source order."""

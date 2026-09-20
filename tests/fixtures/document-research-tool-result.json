@@ -1,0 +1,146 @@
+{
+  "source_type": "local_document",
+  "query": "星河 验收 回滚 保留 版本 协议 合同 附件",
+  "results": [
+    {
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+      "generation_id": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "filename": "acceptance-source.md",
+      "locator": {
+        "source": "section:2",
+        "heading": "验收项目星河"
+      },
+      "heading": "验收项目星河",
+      "text": "验收项目星河\n星河验收项目采用 PostgreSQL 17 存储研究状态。验收目标响应时间为 280 毫秒，测试资料发布审批人为资料所有者。回滚保留三个历史版本，资料检索只允许授权用户访问。项目代号为 STAR-RIVER-280。",
+      "score": 0.01639344262295082,
+      "source_type": "local_document",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=1f122600-9fb3-5b80-b9cc-3252b3c966ff"
+    },
+    {
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "ce341c50-b874-556b-b76a-c784d7a4d08f",
+      "generation_id": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "filename": "acceptance-source.md",
+      "locator": {
+        "source": "section:1",
+        "heading": "InsightForge 隔离知识验收资料"
+      },
+      "heading": "InsightForge 隔离知识验收资料",
+      "text": "InsightForge 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
+      "score": 0.016129032258064516,
+      "source_type": "local_document",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f"
+    },
+    {
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "67345bd4-41fc-5197-baa2-127137209e68",
+      "generation_id": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "filename": "acceptance-source.md",
+      "locator": {
+        "source": "section:3",
+        "heading": "对比基线"
+      },
+      "heading": "对比基线",
+      "text": "对比基线\n旧版验收基线使用 PostgreSQL 16，目标响应时间为 450 毫秒，保留两个历史版本。新旧目标相差 170 毫秒。这些数字都是测试夹具中的约定，不代表 PostgreSQL 产品性能基准。",
+      "score": 0.015873015873015872,
+      "source_type": "local_document",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=67345bd4-41fc-5197-baa2-127137209e68"
+    },
+    {
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "5ac4af37-b94b-5099-b869-39d243a8eb94",
+      "generation_id": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "filename": "acceptance-source.md",
+      "locator": {
+        "source": "title:1"
+      },
+      "heading": null,
+      "text": "InsightForge 隔离知识验收资料",
+      "score": 0.015625,
+      "source_type": "local_document",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94"
+    }
+  ],
+  "documents": [
+    {
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "filename": "acceptance-source.md",
+      "source_type": "local_document",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "ev-local-8edc7ae8b168d49966f8",
+      "claim": "验收项目星河",
+      "supporting_excerpt": "验收项目星河\n星河验收项目采用 PostgreSQL 17 存储研究状态。验收目标响应时间为 280 毫秒，测试资料发布审批人为资料所有者。回滚保留三个历史版本，资料检索只允许授权用户访问。项目代号为 STAR-RIVER-280。",
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+      "locator": {
+        "source": "section:2",
+        "heading": "验收项目星河"
+      },
+      "source_url": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+      "source_title": "acceptance-source.md",
+      "source_type": "local_document",
+      "source_authority": 0.0,
+      "confidence": 0.6811475409836066,
+      "security_status": "accepted"
+    },
+    {
+      "evidence_id": "ev-local-ad366c9ade8acbc22b9c",
+      "claim": "InsightForge 隔离知识验收资料",
+      "supporting_excerpt": "InsightForge 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "ce341c50-b874-556b-b76a-c784d7a4d08f",
+      "locator": {
+        "source": "section:1",
+        "heading": "InsightForge 隔离知识验收资料"
+      },
+      "source_url": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f",
+      "source_title": "acceptance-source.md",
+      "source_type": "local_document",
+      "source_authority": 0.0,
+      "confidence": 0.6790322580645162,
+      "security_status": "accepted"
+    },
+    {
+      "evidence_id": "ev-local-9e56a5ca85aa4059719c",
+      "claim": "对比基线",
+      "supporting_excerpt": "对比基线\n旧版验收基线使用 PostgreSQL 16，目标响应时间为 450 毫秒，保留两个历史版本。新旧目标相差 170 毫秒。这些数字都是测试夹具中的约定，不代表 PostgreSQL 产品性能基准。",
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "67345bd4-41fc-5197-baa2-127137209e68",
+      "locator": {
+        "source": "section:3",
+        "heading": "对比基线"
+      },
+      "source_url": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=67345bd4-41fc-5197-baa2-127137209e68",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=67345bd4-41fc-5197-baa2-127137209e68",
+      "source_title": "acceptance-source.md",
+      "source_type": "local_document",
+      "source_authority": 0.0,
+      "confidence": 0.676984126984127,
+      "security_status": "accepted"
+    },
+    {
+      "evidence_id": "ev-local-fd37b6cc6ae64946f52e",
+      "claim": "InsightForge 隔离知识验收资料",
+      "supporting_excerpt": "InsightForge 隔离知识验收资料",
+      "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+      "chunk_id": "5ac4af37-b94b-5099-b869-39d243a8eb94",
+      "locator": {
+        "source": "title:1"
+      },
+      "source_url": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94",
+      "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94",
+      "source_title": "acceptance-source.md",
+      "source_type": "local_document",
+      "source_authority": 0.0,
+      "confidence": 0.675,
+      "security_status": "accepted"
+    }
+  ]
+}

@@ -18,7 +18,7 @@ class EvaluationEvidence(BaseModel):
     source_url: str | None = None
     source_title: str | None = None
     source_authority: float | str | None = None
-    locator: str | None = None
+    locator: str | dict[str, Any] | None = None
     confidence: Any = None
     conflict_group: str | None = None
     security_status: Literal["accepted"] = "accepted"
