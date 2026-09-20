@@ -1,0 +1,70 @@
+{
+  "collected_at": "2026-09-20T11:49:06.116589+00:00",
+  "currency": "USD",
+  "source": "LiteLLM run-key cumulative spend; includes failed/cancelled attempts",
+  "runs": [
+    {
+      "run_id": "56cb2965a96b5b32a06a9ea94ff2bd9f",
+      "batch": "preflight",
+      "case": "documents",
+      "spend_micro_usd": 176,
+      "spend_usd": 0.000176
+    },
+    {
+      "run_id": "57033073dbb7528fbe6b4d0a85e0a513",
+      "batch": "preflight",
+      "case": "hybrid",
+      "spend_micro_usd": 204,
+      "spend_usd": 0.000204
+    },
+    {
+      "run_id": "7aefcf5a36e65f34b4289364246e4d22",
+      "batch": "preflight",
+      "case": "specific",
+      "spend_micro_usd": 189,
+      "spend_usd": 0.000189
+    },
+    {
+      "run_id": "d63c5345b8f854a8aa80fe3180222ae2",
+      "batch": "preflight",
+      "case": "web",
+      "spend_micro_usd": 173,
+      "spend_usd": 0.000173
+    },
+    {
+      "run_id": "905fd98a9f6b54dd84cd6d4b91c309b5",
+      "batch": "batch2",
+      "case": "documents",
+      "spend_micro_usd": 12832,
+      "spend_usd": 0.012832
+    },
+    {
+      "run_id": "f40fc5e3217856fcb425783c3ec6f39e",
+      "batch": "batch2",
+      "case": "hybrid",
+      "spend_micro_usd": 8258,
+      "spend_usd": 0.008258
+    },
+    {
+      "run_id": "0ca61e3a3405574cbd40291042644287",
+      "batch": "batch2",
+      "case": "specific",
+      "spend_micro_usd": 75552,
+      "spend_usd": 0.075552
+    },
+    {
+      "run_id": "09ac26e79e6750ae8c8cca9b2e53855c",
+      "batch": "batch2",
+      "case": "web",
+      "spend_micro_usd": 71610,
+      "spend_usd": 0.07161
+    },
+    {
+      "run_id": "a97e446978d154599ac395840b6698fe",
+      "batch": "batch3",
+      "case": "documents",
+      "spend_micro_usd": 68397,
+      "spend_usd": 0.068397
+    }
+  ]
+}

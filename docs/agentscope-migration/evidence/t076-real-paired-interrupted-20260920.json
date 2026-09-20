@@ -1,0 +1,30 @@
+{
+  "run_id": "7b543ae26bed41a8963f59d2d92f1e9d",
+  "status": "interrupted",
+  "resume_error": "UnknownOperation",
+  "completed_samples": 2,
+  "operation_states": {
+    "committed": 32,
+    "quarantined": 1,
+    "started": 1
+  },
+  "budget": {
+    "limits": {
+      "model_calls": 60,
+      "fetch_calls": 40
+    },
+    "used": {
+      "model_calls": 16,
+      "input_tokens": 256885,
+      "output_tokens": 19300,
+      "cost_micro_usd": 48192
+    },
+    "reserved": {
+      "model_calls": 1,
+      "input_tokens": 24798,
+      "output_tokens": 8192
+    },
+    "deadline": 1789880053.0883615
+  },
+  "limitation": "Committed usage excludes the unknown in-flight attempt. SQL cost cap was absent in this first experiment; fixed before the new experiment. This journal was not rewritten."
+}

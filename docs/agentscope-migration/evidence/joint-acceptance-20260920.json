@@ -1,0 +1,397 @@
+{
+  "source_sha256": "260c81a8fe2ceddb6ed970216f631db4298af51699eb5e816e9a3e1835d1b7f3",
+  "head": "bcf8483b572c8e9ec5f5327b6ab744ca334defe1",
+  "workspace_source_changes_since_freeze": [],
+  "deployment": {
+    "source_sha256": "260c81a8fe2ceddb6ed970216f631db4298af51699eb5e816e9a3e1835d1b7f3",
+    "checked_files": 741,
+    "changed": [],
+    "python": "3.14.7",
+    "agentscope": "2.0.8",
+    "sqlalchemy": "2.0.52",
+    "runtime_dependencies": {
+      "openai": "2.54.0",
+      "httpx": "0.28.1",
+      "fastapi": "0.141.1",
+      "asyncpg": "0.31.0",
+      "mcp": "1.30.0"
+    }
+  },
+  "tests": {
+    "joint": {
+      "passed": 153,
+      "failed": 0
+    },
+    "deployment_faults": {
+      "passed": 7,
+      "failed": 0
+    }
+  },
+  "research": {
+    "main_batch": {
+      "cases": 4,
+      "successes": 0,
+      "success_rate": 0
+    },
+    "document_retest": {
+      "cases": 1,
+      "successes": 0
+    },
+    "attempts": [
+      {
+        "batch": "batch2",
+        "case": "documents",
+        "run_id": "905fd98a9f6b54dd84cd6d4b91c309b5",
+        "final_status": "cancelled",
+        "error": "user_cancelled",
+        "success": false,
+        "elapsed_seconds": 87.792,
+        "client_error": "RemoteProtocolError",
+        "requires_user_action": false,
+        "used": {
+          "model_calls": 22,
+          "input_tokens": 92412,
+          "output_tokens": 3877,
+          "cost_micro_usd": 10499,
+          "tool_calls": 8
+        },
+        "reserved": {
+          "model_calls": 4,
+          "input_tokens": 59759,
+          "output_tokens": 32768,
+          "tool_calls": 0
+        },
+        "operations": {
+          "committed": 71,
+          "started": 8
+        },
+        "spend_usd": 0.012832
+      },
+      {
+        "batch": "batch2",
+        "case": "hybrid",
+        "run_id": "f40fc5e3217856fcb425783c3ec6f39e",
+        "final_status": "cancelled",
+        "error": "user_cancelled",
+        "success": false,
+        "elapsed_seconds": 76.928,
+        "client_error": null,
+        "requires_user_action": true,
+        "used": {
+          "model_calls": 18,
+          "input_tokens": 52695,
+          "output_tokens": 3113,
+          "cost_micro_usd": 6803,
+          "tool_calls": 2
+        },
+        "reserved": {
+          "model_calls": 3,
+          "input_tokens": 35405,
+          "output_tokens": 19216,
+          "tool_calls": 1,
+          "fetch_calls": 1
+        },
+        "operations": {
+          "started": 7,
+          "committed": 38
+        },
+        "spend_usd": 0.008258
+      },
+      {
+        "batch": "batch2",
+        "case": "specific",
+        "run_id": "0ca61e3a3405574cbd40291042644287",
+        "final_status": "failed",
+        "error": "ResearchTerminated",
+        "success": false,
+        "elapsed_seconds": 379.299,
+        "client_error": null,
+        "requires_user_action": false,
+        "used": {
+          "model_calls": 69,
+          "input_tokens": 565496,
+          "output_tokens": 19734,
+          "cost_micro_usd": 75517,
+          "tool_calls": 21,
+          "fetch_calls": 3
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0,
+          "fetch_calls": 0
+        },
+        "operations": {
+          "committed": 188
+        },
+        "spend_usd": 0.075552
+      },
+      {
+        "batch": "batch2",
+        "case": "web",
+        "run_id": "09ac26e79e6750ae8c8cca9b2e53855c",
+        "final_status": "failed",
+        "error": "ReportInputBudgetExceeded",
+        "success": false,
+        "elapsed_seconds": 592.421,
+        "client_error": null,
+        "requires_user_action": false,
+        "used": {
+          "model_calls": 63,
+          "input_tokens": 503031,
+          "output_tokens": 37778,
+          "cost_micro_usd": 71583,
+          "tool_calls": 6,
+          "fetch_calls": 12
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0,
+          "fetch_calls": 0
+        },
+        "operations": {
+          "committed": 141,
+          "started": 1
+        },
+        "spend_usd": 0.07161
+      },
+      {
+        "batch": "batch3",
+        "case": "documents",
+        "run_id": "a97e446978d154599ac395840b6698fe",
+        "final_status": "failed",
+        "error": "ResearchTerminated",
+        "success": false,
+        "elapsed_seconds": 561.562,
+        "client_error": null,
+        "requires_user_action": false,
+        "used": {
+          "model_calls": 132,
+          "input_tokens": 696594,
+          "output_tokens": 29587,
+          "cost_micro_usd": 68302,
+          "tool_calls": 51
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0
+        },
+        "operations": {
+          "committed": 380
+        },
+        "spend_usd": 0.068397
+      }
+    ],
+    "preflight_count": 4,
+    "preflight_note": "deployment HITL mismatch; paused then cancelled, counted in spend, excluded from main success denominator",
+    "run_key_spend_total_usd": 0.237391
+  },
+  "knowledge": {
+    "samples": 16,
+    "distinct_questions": 8,
+    "repeats": 2,
+    "successes": 16,
+    "success_rate": 1,
+    "recall_at_12": 1.0,
+    "ndcg_at_12": 1.0,
+    "citation_validity": 1,
+    "no_answer_error_rate": 0,
+    "latency_seconds": {
+      "median": 7.566000000000001,
+      "p95_nearest_rank": 12.393,
+      "mean": 7.5863125
+    },
+    "service_key_spend_delta_usd": 0.00324429,
+    "cost_attribution": "Shared service-key interval delta, not an exact per-request invoice",
+    "isolation_http_status": 409,
+    "scope": "one synthetic document, four units; live providers; no large-corpus performance or statistical parity claim"
+  },
+  "draft_quality": {
+    "artifact_status": "unpublished_revision_from_failed_run",
+    "research_status": "failed",
+    "repeats": 2,
+    "metrics": {
+      "overall_quality/research_depth_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.4,
+        "sample_stddev": 0.0
+      },
+      "overall_quality/source_quality_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.8,
+        "sample_stddev": 0.0
+      },
+      "overall_quality/analytical_rigor_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.7,
+        "sample_stddev": 0.14142135623730956
+      },
+      "overall_quality/practical_value_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.4,
+        "sample_stddev": 0.0
+      },
+      "overall_quality/balance_and_objectivity_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 1.0,
+        "sample_stddev": 0.0
+      },
+      "overall_quality/writing_quality_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.8,
+        "sample_stddev": 0.0
+      },
+      "relevance/relevance_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.5,
+        "sample_stddev": 0.14142135623730948
+      },
+      "structure/structure_and_cohesiveness_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.4,
+        "sample_stddev": 0.0
+      },
+      "correctness/correctness_score": {
+        "statuses": [
+          "not_scored",
+          "not_scored"
+        ],
+        "mean": null,
+        "sample_stddev": null
+      },
+      "evidence_integrity/groundedness_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.5166666666666666,
+        "sample_stddev": 0.2592724864350674
+      },
+      "evidence_integrity/factual_accuracy_score": {
+        "statuses": [
+          "not_scored",
+          "not_scored"
+        ],
+        "mean": null,
+        "sample_stddev": null
+      },
+      "evidence_integrity/citation_accuracy_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 1.0,
+        "sample_stddev": 0.0
+      },
+      "evidence_integrity/source_authority_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 1.0,
+        "sample_stddev": 0.0
+      },
+      "groundedness/groundedness_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.5,
+        "sample_stddev": 0.0
+      },
+      "groundedness/factual_accuracy_score": {
+        "statuses": [
+          "not_scored",
+          "not_scored"
+        ],
+        "mean": null,
+        "sample_stddev": null
+      },
+      "completeness/completeness_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.4,
+        "sample_stddev": 0.0
+      },
+      "citation_accuracy/citation_accuracy_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.5833333333333333,
+        "sample_stddev": 0.11785113019775789
+      },
+      "tool_efficiency/tool_efficiency_score": {
+        "statuses": [
+          "scored",
+          "scored"
+        ],
+        "mean": 0.7,
+        "sample_stddev": 0.0
+      },
+      "execution_compliance/execution_compliance_score": {
+        "statuses": [
+          "not_scored",
+          "not_scored"
+        ],
+        "mean": null,
+        "sample_stddev": null
+      }
+    },
+    "judge_budget": {
+      "limits": {
+        "model_calls": 60,
+        "fetch_calls": 40,
+        "cost_micro_usd": 1000000
+      },
+      "used": {
+        "model_calls": 16,
+        "input_tokens": 95480,
+        "output_tokens": 9400,
+        "cost_micro_usd": 19031
+      },
+      "reserved": {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_micro_usd": 0
+      },
+      "deadline": 1789906309.9073098
+    },
+    "judge_elapsed_seconds": 296.04328687200905,
+    "note": "Auxiliary artifact scoring; failed run metrics remain run_failed. Not generation parity or successful report acceptance."
+  },
+  "release_gate": "failed",
+  "production_cutover": false
+}

@@ -1,0 +1,252 @@
+{
+  "date": "2026-09-20",
+  "issue": "report_recovery_review_budget",
+  "status": "fixed_and_verified",
+  "original_run_id": "09ac26e79e6750ae8c8cca9b2e53855c",
+  "reproduction": {
+    "committed_receipts_replayed": 6,
+    "failing_stage": "lead.report_review:2",
+    "error": "ReportInputBudgetExceeded: report_fixed_context_exceeds_budget",
+    "frozen_context_window": 131072,
+    "incorrect_candidate_window": 32768,
+    "fixed_input_budget_units": 28620,
+    "incorrect_input_limit": 28058,
+    "review_output_tokens": 3072,
+    "draft_chars": 19984,
+    "evidence_records": 88
+  },
+  "regression": {
+    "passed": 89,
+    "failed": 0,
+    "warnings": 4,
+    "junit": "report-budget-regression-20260920.xml",
+    "ruff": "unavailable_in_local_venv"
+  },
+  "live": {
+    "run_id": "a04ca3c0db7a4c91ac97931a3695974e",
+    "status": "completed",
+    "input_origin": "original three research handoffs and captured recovery draft; research and initial draft generation replayed, remaining report models real",
+    "elapsed_seconds": 252.942,
+    "review_calls": 4,
+    "revision_calls": 3,
+    "max_revisions": 3,
+    "fail_open": false,
+    "model": "if-report-review-v1 / if-final-report-v1 (zai/glm-5.3-flash)",
+    "budget": {
+      "limits": {
+        "fetch_calls": 40
+      },
+      "used": {
+        "model_calls": 7,
+        "input_tokens": 175617,
+        "output_tokens": 12689,
+        "cost_micro_usd": 32683
+      },
+      "reserved": {
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0
+      },
+      "deadline": 1789907240.975606
+    },
+    "publications": [
+      {
+        "format": "markdown",
+        "status": "completed",
+        "download_http_status": 200,
+        "bytes": 8515,
+        "sha256": "8113b1bbd999eea428eeeb1ba9e5bca3abb982b3ec9a47a8094f87bb048a6b28",
+        "report_sha256": "8113b1bbd999eea428eeeb1ba9e5bca3abb982b3ec9a47a8094f87bb048a6b28",
+        "publication_id": "pub-163488c7a0cab7bb02d8dc595af292da0ee1d3ce"
+      },
+      {
+        "format": "json",
+        "status": "completed",
+        "download_http_status": 200,
+        "bytes": 39280,
+        "sha256": "2ecafc9c5d4d31d5800796fe233507663510915ef9474d07ea8e027d4a3f959c",
+        "report_sha256": "8113b1bbd999eea428eeeb1ba9e5bca3abb982b3ec9a47a8094f87bb048a6b28",
+        "publication_id": "pub-09b068082b57363e74270eab155b6bb81026de19"
+      }
+    ],
+    "review_runtime_error": null,
+    "quality_result_affects_issue_status": false,
+    "quality_observation": {
+      "schema_version": "1.0",
+      "decision": "revise",
+      "dimensions": {
+        "coverage": 0.95,
+        "citation_correctness": 0.95,
+        "contradictions": 0.95,
+        "unsupported_claims": 0.9,
+        "redundancy": 0.85,
+        "executive_readability": 0.9
+      },
+      "coverage": [
+        {
+          "requirement_id": "COV-01-84a2fef0d77c",
+          "status": "covered",
+          "explanation": "变化一覆盖 CTE 与 IS NOT NULL/IS NULL 优化器改进，均出自官方发布说明与发布公告。"
+        },
+        {
+          "requirement_id": "COV-02-eb3686c9db42",
+          "status": "covered",
+          "explanation": "变化二覆盖 B-tree IN 子句执行改进，附官方来源。"
+        },
+        {
+          "requirement_id": "COV-03-47d1c41b523c",
+          "status": "covered",
+          "explanation": "变化三覆盖 EXPLAIN 的 SERIALIZE/MEMORY 选项与 I/O 时间显示，附官方来源。"
+        },
+        {
+          "requirement_id": "COV-04-622cf4bb2483",
+          "status": "covered",
+          "explanation": "三项变化均逐项说明适用范围与限制（B-tree 索引类型、ANALYZE 前置、track_io_timing GUC 依赖等），并给出官方链接；证据缺口明确标注。"
+        },
+        {
+          "requirement_id": "COV-05-34a3fa4c37c7",
+          "status": "covered",
+          "explanation": "报告明确声明发布说明性能描述仅作定性引用，不含任何基准数字，并单列说明遵守该约束。"
+        }
+      ],
+      "citation_audit": [
+        {
+          "claim": "官方发布说明列出 CTE 计划与 IS NOT NULL/IS NULL 优化器改进",
+          "citation_target": "https://www.postgresql.org/docs/17/release-17.html",
+          "supported": true,
+          "evidence_ids": [
+            "ev_eca49716e2a3886ca63a"
+          ]
+        },
+        {
+          "claim": "发布公告概括确认查询规划改进（NOT NULL、WITH 查询）",
+          "citation_target": "https://www.postgresql.org/about/news/postgresql-17-released-2936/",
+          "supported": true,
+          "evidence_ids": [
+            "ev_38d8bdedb176ad463755"
+          ]
+        },
+        {
+          "claim": "B-tree 索引 IN 子句查询性能改进",
+          "citation_target": "https://www.postgresql.org/about/news/postgresql-17-released-2936/",
+          "supported": true,
+          "evidence_ids": [
+            "ev_667393fe50d4b2511100"
+          ]
+        },
+        {
+          "claim": "发布说明概括提到 btree 索引多值搜索的查询性能改进",
+          "citation_target": "https://www.postgresql.org/docs/release/17.0/",
+          "supported": true,
+          "evidence_ids": [
+            "ev_b2476a7f804575919958"
+          ]
+        },
+        {
+          "claim": "EXPLAIN 新增 SERIALIZE 与 MEMORY 选项及本地 I/O 时间显示",
+          "citation_target": "https://www.postgresql.org/about/news/postgresql-17-released-2936/",
+          "supported": true,
+          "evidence_ids": [
+            "ev_9d1a6c26a305b55f33f0"
+          ]
+        },
+        {
+          "claim": "SERIALIZE 必须与 ANALYZE 同用；省略参数默认 TEXT；SERIALIZE NONE 为默认；无法测量网络传输成本；BUFFERS 计数转换访问",
+          "citation_target": "https://www.postgresql.org/docs/17/sql-explain.html",
+          "supported": true,
+          "evidence_ids": [
+            "ev_3d9cb4bca73f20d73c0f",
+            "ev_e686cf4365458c250d42",
+            "ev_0ec906e8f58aa365e23a",
+            "ev_ee3ba8394b116ca67099",
+            "ev_6a8924a6b835e397ca94"
+          ]
+        },
+        {
+          "claim": "I/O 读写时间仅当 track_io_timing 启用时输出；ANALYZE 实际执行语句；BEGIN/ROLLBACK 建议",
+          "citation_target": "https://www.postgresql.org/docs/17/sql-explain.html",
+          "supported": true,
+          "evidence_ids": [
+            "ev_a0337fba22d963632f35",
+            "ev_326c6c161947f9b65d5d",
+            "ev_0fe776fec2253b1b5e7f"
+          ]
+        }
+      ],
+      "issues": [
+        {
+          "category": "redundancy",
+          "severity": "info",
+          "location": "### Sources 列表",
+          "requirement_id": null,
+          "evidence_ids": [],
+          "citation_target": null,
+          "description": "报告末尾 Sources 列表包含未被引用的第三方来源（postgrespro、EDB、pganalyze、Crunchy），正文虽已声明不引用，但列入来源列表仍可能造成混淆。",
+          "revision_instruction": "可考虑从未引用来源列表中移除非官方条目，仅保留实际引用的四项官方来源。"
+        },
+        {
+          "category": "unsupported_claims",
+          "severity": "low",
+          "location": "变化一 适用范围与限制条件",
+          "requirement_id": null,
+          "evidence_ids": [],
+          "citation_target": null,
+          "description": "规划两项改进缺乏 GUC 依赖/升级前置条件的细节，报告已正确将其标注为证据缺口而非推断，可接受。",
+          "revision_instruction": "无需修改；如可获得更多官方摘录可补充。"
+        }
+      ],
+      "summary": "报告仅引用官方一手来源，三项变化（规划、执行、EXPLAIN）均获证据支持；引用的原文摘录与证据记录逐条吻合（Release 17 优化器条目、B-tree IN 改进、EXPLAIN SERIALIZE/MEMORY 限制、track_io_timing 依赖）。逐项给出适用限制与官方链接，明确声明不将发布说明用作基准数据，并如实标注证据缺口。第三方来源未被引用。仅存轻微来源列表冗余。判定：通过。",
+      "status": "degraded",
+      "skipped": false,
+      "degraded": true,
+      "hard_failures": [],
+      "deterministic_failures": [],
+      "quality_thresholds": {
+        "rigor": "balanced",
+        "runtime_dimension_floor": 3,
+        "runtime_average_floor": 3.0,
+        "outer_aggregate_floor": 0.75,
+        "outer_critical_floor": 0.7
+      },
+      "attempt": 4,
+      "draft_sha256": "8113b1bbd999eea428eeeb1ba9e5bca3abb982b3ec9a47a8094f87bb048a6b28",
+      "model": "if-report-review-v1",
+      "policy_version": "quality-gate-v4",
+      "evaluation_epoch": "b3055d14-a2dc-43b1-bf98-cb82b68cae55",
+      "input_truncated": false,
+      "provenance": {
+        "draft_sha256": "8113b1bbd999eea428eeeb1ba9e5bca3abb982b3ec9a47a8094f87bb048a6b28",
+        "attempt": 4,
+        "model": "if-report-review-v1",
+        "policy_version": "quality-gate-v4",
+        "evaluation_epoch": "b3055d14-a2dc-43b1-bf98-cb82b68cae55",
+        "input_truncated": false
+      }
+    },
+    "canonical_completion_status": "partial"
+  },
+  "source_sha256": {
+    "src/open_deep_research/agentscope_runtime/models.py": "874d7634b2961124b72f7e0f8499e1c5aadaf3658dfe46e6d2e092e11d1bfc39",
+    "src/open_deep_research/agentscope_runtime/report.py": "b56e63f6ff12dad9c7633fc7ea6d138432441be5d2ecdc47b634c0d24133dd01",
+    "src/open_deep_research/report/writing.py": "da92eae01e5f113676cb3c28efc58213a546f868f89442e5de9906a1f34d71dc",
+    "src/open_deep_research/report/reviewer.py": "dbe8d50afddbcfe9d3b631d1cb71f655923b893861bd3ca1b8864d0a658c847e",
+    "src/open_deep_research/report/orchestrator.py": "c6a43a0b0c02ba2f79ea9d7cd4bb739f069300b877fe4796eca845f39b14ff43",
+    "tests/as_runtime/test_report_sandbox_budget.py": "ed38d6296c235a373932fa2f18003143144377fb814d0f3ec6482750e31cb63f",
+    "tests/fixtures/report-recovery-review-input.json": "fc496626f876938bed1e1aae4858f05dc697088d9c7920e7752cab9d816d3b34"
+  },
+  "cleanup": {
+    "stopped": [
+      "insightforge-m9m10-auth-api-1",
+      "insightforge-m9m10-auth-sandbox-controller-1",
+      "insightforge-m9m10-auth-sandbox-gateway",
+      "insightforge-m9m10-auth-accept-db-1"
+    ],
+    "publisher": "targeted one-shot process exited",
+    "original_services": "preserved"
+  },
+  "limits": [
+    "No new research/search was run.",
+    "No browser, Office/PDF visual or cross-host fault acceptance was performed.",
+    "Historical failed run and ledgers were not modified."
+  ]
+}

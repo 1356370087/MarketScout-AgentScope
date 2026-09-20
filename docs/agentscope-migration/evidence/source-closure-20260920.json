@@ -1,0 +1,987 @@
+{
+  "date": "2026-09-20",
+  "status": "fixed_and_verified",
+  "configured_min_sources_unchanged": 3,
+  "positive_deliveries": {
+    "web": {
+      "run_id": "27a20c7238065c9c97db0d0a6adc7361",
+      "status": "completed",
+      "question": "请依据 PostgreSQL 官方资料说明 PostgreSQL 17 在查询规划、执行与 EXPLAIN 方面的三个主要变化。逐项说明适用限制并给出官方引用，不将发布说明当成性能基准。",
+      "source_selection": {
+        "mode": "web",
+        "sources": []
+      },
+      "contract_source_selection": {
+        "mode": "web",
+        "sources": []
+      },
+      "handoffs": 3,
+      "handoff_evidence_rows": 87,
+      "unique_evidence_ids": 83,
+      "source_uris": [
+        "https://aiven.io/blog/exploring-why-postgresql-18-put-asynchronous-io-in-your-database",
+        "https://pganalyze.com/blog/5mins-postgres-17-streaming-io",
+        "https://www.pgmustard.com/docs/explain/serialize",
+        "https://www.postgresql.org/about/news/postgresql-17-released-2936/",
+        "https://www.postgresql.org/docs/17/release-17.html",
+        "https://www.postgresql.org/docs/17/sql-explain.html",
+        "https://www.postgresql.org/docs/current/sql-explain.html",
+        "https://www.postgresql.org/docs/release/17.0/"
+      ],
+      "handoff_checks": [
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 7,
+          "required_source_count": 3,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        },
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 7,
+          "required_source_count": 3,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        },
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 3,
+          "required_source_count": 3,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        }
+      ],
+      "research_completion": {
+        "action": "complete_partial",
+        "reason": "iteration_limit",
+        "gaps": []
+      },
+      "review": {
+        "status": "degraded",
+        "decision": "revise",
+        "degraded": true,
+        "skipped": false,
+        "hard_failures": [],
+        "deterministic_failures": []
+      },
+      "report_revision_count": 1,
+      "markdown_chars": 4226,
+      "recorded_sql_budget": {
+        "limits": {
+          "fetch_calls": 40
+        },
+        "used": {
+          "model_calls": 94,
+          "input_tokens": 1161036,
+          "output_tokens": 46639,
+          "cost_micro_usd": 148530,
+          "tool_calls": 18,
+          "fetch_calls": 16
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 1,
+          "fetch_calls": 1
+        },
+        "deadline": null
+      },
+      "publications": [
+        {
+          "format": "markdown",
+          "publication_id": "pub-21ac652170381a89cfdadafc6a3bc52a82740b96",
+          "status": "completed",
+          "report_sha256": "6654eba96d9399a0410974863cdda33fbf45801f5c59ebf364e392dec1898843",
+          "download_status": 200,
+          "bytes": 7182,
+          "download_sha256": "6654eba96d9399a0410974863cdda33fbf45801f5c59ebf364e392dec1898843"
+        },
+        {
+          "format": "json",
+          "publication_id": "pub-dfef06f6e549162b5e5868c0f0460325384eb014",
+          "status": "completed",
+          "report_sha256": "6654eba96d9399a0410974863cdda33fbf45801f5c59ebf364e392dec1898843",
+          "download_status": 200,
+          "bytes": 36253,
+          "download_sha256": "c84b4bdc41431b6a8803215742cc625dbe2a6e02e5257ad92eb0b9b1b50b9774"
+        }
+      ],
+      "browser_download_sha256": "c84b4bdc41431b6a8803215742cc625dbe2a6e02e5257ad92eb0b9b1b50b9774",
+      "screenshot": "output/playwright/source-web-report.png"
+    },
+    "documents": {
+      "run_id": "926449dc73a44a128001034a69dec82d",
+      "status": "completed",
+      "question": "仅依据所选合成验收资料，回答星河项目的目标响应时间。请给出一个带可点击资料链接的明确结论，并标注这是测试资料约定。",
+      "source_selection": {
+        "mode": "documents",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "contract_source_selection": {
+        "mode": "documents",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "handoffs": 1,
+      "handoff_evidence_rows": 4,
+      "unique_evidence_ids": 4,
+      "source_uris": [
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=67345bd4-41fc-5197-baa2-127137209e68",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f"
+      ],
+      "handoff_checks": [
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 1,
+          "required_source_count": 1,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        }
+      ],
+      "research_completion": {
+        "action": "complete",
+        "reason": "explicit_completion",
+        "gaps": []
+      },
+      "review": {
+        "status": "completed",
+        "decision": "pass",
+        "degraded": false,
+        "skipped": false,
+        "hard_failures": [],
+        "deterministic_failures": []
+      },
+      "report_revision_count": 0,
+      "markdown_chars": 1548,
+      "recorded_sql_budget": {
+        "limits": {
+          "fetch_calls": 40
+        },
+        "used": {
+          "model_calls": 16,
+          "input_tokens": 58331,
+          "output_tokens": 5176,
+          "cost_micro_usd": 8657,
+          "tool_calls": 1
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0
+        },
+        "deadline": 1789913989.8858378
+      },
+      "publications": [
+        {
+          "format": "markdown",
+          "publication_id": "pub-cb6b381f539035252ea9934ee1142bb289850931",
+          "status": "completed",
+          "report_sha256": "57d4484100867dc80928453237b82933c986fa2ea81655dd5036a9674fc1d7c8",
+          "download_status": 200,
+          "bytes": 2313,
+          "download_sha256": "57d4484100867dc80928453237b82933c986fa2ea81655dd5036a9674fc1d7c8"
+        },
+        {
+          "format": "json",
+          "publication_id": "pub-4e2fb63ec4c8f588e370d9ce021a8bdf191121dc",
+          "status": "completed",
+          "report_sha256": "57d4484100867dc80928453237b82933c986fa2ea81655dd5036a9674fc1d7c8",
+          "download_status": 200,
+          "bytes": 9768,
+          "download_sha256": "8b293e5d5b3b7b1e19ce646d4b4274a1a2f560afe1d71ba6b451e17095037feb"
+        }
+      ],
+      "browser_download_sha256": "8b293e5d5b3b7b1e19ce646d4b4274a1a2f560afe1d71ba6b451e17095037feb",
+      "screenshot": "output/playwright/source-documents-report.png"
+    },
+    "hybrid": {
+      "run_id": "342627fe8387492db60d05c238be2701",
+      "status": "completed",
+      "question": "依据所选合成资料给出星河项目约定的目标响应时间，并查阅 PostgreSQL 17 官方资料说明 B-tree 多值搜索的执行改进。分别保留资料与网页引用，不将验收目标视为数据库性能基准。",
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "contract_source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "handoffs": 2,
+      "handoff_evidence_rows": 71,
+      "unique_evidence_ids": 62,
+      "source_uris": [
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=1f122600-9fb3-5b80-b9cc-3252b3c966ff",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=67345bd4-41fc-5197-baa2-127137209e68",
+        "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f",
+        "https://pganalyze.com/blog/5mins-postgres-17-faster-btree-index-scans",
+        "https://www.crunchydata.com/blog/real-world-performance-gains-with-postgres-17-btree-bulk-scans",
+        "https://www.postgresql.org/about/news/postgresql-17-released-2936/",
+        "https://www.postgresql.org/about/press/presskit17/zh/",
+        "https://www.postgresql.org/docs/release/17.0/"
+      ],
+      "handoff_checks": [
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 5,
+          "required_source_count": 3,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        },
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 4,
+          "required_source_count": 3,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        }
+      ],
+      "research_completion": {
+        "action": "complete",
+        "reason": "explicit_completion",
+        "gaps": []
+      },
+      "review": {
+        "status": "degraded",
+        "decision": "revise",
+        "degraded": true,
+        "skipped": false,
+        "hard_failures": [],
+        "deterministic_failures": []
+      },
+      "report_revision_count": 1,
+      "markdown_chars": 5854,
+      "recorded_sql_budget": {
+        "limits": {
+          "fetch_calls": 40
+        },
+        "used": {
+          "model_calls": 43,
+          "input_tokens": 468008,
+          "output_tokens": 29819,
+          "cost_micro_usd": 71192,
+          "tool_calls": 6,
+          "fetch_calls": 7
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0,
+          "fetch_calls": 0
+        },
+        "deadline": 1789914558.4309723
+      },
+      "publications": [
+        {
+          "format": "markdown",
+          "publication_id": "pub-e1526d61d707d5491f9589fa4d3ad9545ba8a1d6",
+          "status": "completed",
+          "report_sha256": "0bcea28fa241b3469ccf3140e1ac1d8ef4f84c59bd38de86c5548b4cfbe9470f",
+          "download_status": 200,
+          "bytes": 8787,
+          "download_sha256": "0bcea28fa241b3469ccf3140e1ac1d8ef4f84c59bd38de86c5548b4cfbe9470f"
+        },
+        {
+          "format": "json",
+          "publication_id": "pub-e69788bebf5a5db16e1400d6c1321faaecd95c45",
+          "status": "completed",
+          "report_sha256": "0bcea28fa241b3469ccf3140e1ac1d8ef4f84c59bd38de86c5548b4cfbe9470f",
+          "download_status": 200,
+          "bytes": 31791,
+          "download_sha256": "61cb73b7d0eac29a16615c488699c1bd8b5dedfedbf9ea8ae6b29426f813f5a3"
+        }
+      ],
+      "browser_download_sha256": "61cb73b7d0eac29a16615c488699c1bd8b5dedfedbf9ea8ae6b29426f813f5a3",
+      "screenshot": "output/playwright/source-hybrid-report.png"
+    },
+    "specific": {
+      "run_id": "83b34276c96342e782866941950c78df",
+      "status": "completed",
+      "question": "仅依据指定页面，介绍 PostgreSQL 17 的一项改进并附该页面引用。内容限于资料直接支持的事实。",
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "contract_source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "handoffs": 1,
+      "handoff_evidence_rows": 22,
+      "unique_evidence_ids": 22,
+      "source_uris": [
+        "https://www.postgresql.org/docs/17/release-17.html"
+      ],
+      "handoff_checks": [
+        {
+          "passed": true,
+          "failures": [],
+          "source_count": 1,
+          "required_source_count": 1,
+          "source_scope_enforced": true,
+          "configured_min_sources": 3,
+          "out_of_scope_source_count": 0
+        }
+      ],
+      "research_completion": {
+        "action": "complete",
+        "reason": "explicit_completion",
+        "gaps": []
+      },
+      "review": {
+        "status": "degraded",
+        "decision": "revise",
+        "degraded": true,
+        "skipped": false,
+        "hard_failures": [],
+        "deterministic_failures": []
+      },
+      "report_revision_count": 1,
+      "markdown_chars": 2143,
+      "recorded_sql_budget": {
+        "limits": {
+          "fetch_calls": 40
+        },
+        "used": {
+          "model_calls": 24,
+          "input_tokens": 124328,
+          "output_tokens": 11441,
+          "cost_micro_usd": 20619,
+          "tool_calls": 2,
+          "fetch_calls": 1
+        },
+        "reserved": {
+          "model_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "tool_calls": 0,
+          "fetch_calls": 0
+        },
+        "deadline": 1789916373.380308
+      },
+      "publications": [
+        {
+          "format": "markdown",
+          "publication_id": "pub-1e1ccf8d1288469c211eca95d55ba8cd645b09d0",
+          "status": "completed",
+          "report_sha256": "83dc86b263d73cdce177c9d0d0b170006518627454da25a92b7cfe862fb220f3",
+          "download_status": 200,
+          "bytes": 3526,
+          "download_sha256": "83dc86b263d73cdce177c9d0d0b170006518627454da25a92b7cfe862fb220f3"
+        },
+        {
+          "format": "json",
+          "publication_id": "pub-cfa466195d8489be4e41879ae7eec8f74c6af7da",
+          "status": "completed",
+          "report_sha256": "83dc86b263d73cdce177c9d0d0b170006518627454da25a92b7cfe862fb220f3",
+          "download_status": 200,
+          "bytes": 17160,
+          "download_sha256": "b477ba62186ba6df79c5a89787f3149588b27087e86760435377ccd1343fe1ce"
+        }
+      ],
+      "browser_download_sha256": "b477ba62186ba6df79c5a89787f3149588b27087e86760435377ccd1343fe1ce",
+      "screenshot": "output/playwright/source-specific-report.png"
+    }
+  },
+  "approval_checks": {
+    "allow": {
+      "run_id": "3e959f0e67d04dfe8a9403be9b43a318",
+      "run_status": "failed",
+      "task_errors": [
+        {
+          "task_id": "c5b7409074d75565be971d8f93cb5473",
+          "status": "completed",
+          "error": null
+        }
+      ],
+      "approved_tool_receipts": 1,
+      "approvals": [
+        {
+          "schema_version": 1,
+          "approval_id": "537a6edc-ccea-4c93-ba8d-4d6d8daab3db",
+          "run_id": "3e959f0e67d04dfe8a9403be9b43a318",
+          "task_id": "c5b7409074d75565be971d8f93cb5473",
+          "fence_token": 1,
+          "kind": "network",
+          "capability": "tool.egress",
+          "target": {
+            "domain": "bucardo.org",
+            "port": 443
+          },
+          "target_fingerprint": "97d413c97d80d6c6c5303a2ab93db8330fb2ddae111e584a22754ee78013f87e",
+          "status": "resolved",
+          "decision": "allow_once",
+          "reason": "",
+          "requested_at": 1789911953.2486846,
+          "expires_at": 1789912852.988415,
+          "resolved_at": 1789912291.5177562,
+          "resolved_by": "0430c0c1-b6b4-4c6b-9102-6deffe0c91b4",
+          "operation_id": "network:578aea152025d925cf8b521ea6b3e862e56671c0a642b0682c22e4f550957133:9bdb5c2f238b375650dc004c58baecff068fb2ce8b8e6341e2caf15930a858ce",
+          "version": 2
+        },
+        {
+          "schema_version": 1,
+          "approval_id": "2e4021f2-9433-4500-81e8-c6993967ff01",
+          "run_id": "3e959f0e67d04dfe8a9403be9b43a318",
+          "task_id": "c5b7409074d75565be971d8f93cb5473",
+          "fence_token": 1,
+          "kind": "network",
+          "capability": "tool.egress",
+          "target": {
+            "domain": "bucardo.org",
+            "port": 443
+          },
+          "target_fingerprint": "97d413c97d80d6c6c5303a2ab93db8330fb2ddae111e584a22754ee78013f87e",
+          "status": "resolved",
+          "decision": "allow_run",
+          "reason": "",
+          "requested_at": 1789912350.2181287,
+          "expires_at": 1789913250.1511385,
+          "resolved_at": 1789912492.6436799,
+          "resolved_by": "0430c0c1-b6b4-4c6b-9102-6deffe0c91b4",
+          "operation_id": "network:a04d1d5d458dca1f8ed1808e85e75a8fab8be29c8898b3bde4f2138f2874df23:56607b2d874840fc5ebeb6e51e6ba9a52ec1eb6341bda7cdcb46afe973851417",
+          "version": 2
+        }
+      ],
+      "browser_reload_before_allow": true,
+      "report_quality_not_used_as_control_acceptance": true
+    },
+    "deny": {
+      "run_id": "dae59e25d8514b268a58ba2d4a31349c",
+      "run_status": "cancelled",
+      "task_errors": [
+        {
+          "task_id": "020f5b65185e5028a21d808086143237",
+          "status": "running",
+          "error": null
+        }
+      ],
+      "approved_tool_receipts": 0,
+      "approvals": [
+        {
+          "schema_version": 1,
+          "approval_id": "38787188-6752-4159-833e-8236c83e25e0",
+          "run_id": "dae59e25d8514b268a58ba2d4a31349c",
+          "task_id": "020f5b65185e5028a21d808086143237",
+          "fence_token": 1,
+          "kind": "network",
+          "capability": "tool.egress",
+          "target": {
+            "domain": "bucardo.org",
+            "port": 443
+          },
+          "target_fingerprint": "97d413c97d80d6c6c5303a2ab93db8330fb2ddae111e584a22754ee78013f87e",
+          "status": "resolved",
+          "decision": "deny",
+          "reason": "",
+          "requested_at": 1789913122.7147267,
+          "expires_at": 1789914022.4507527,
+          "resolved_at": 1789913291.7937236,
+          "resolved_by": "0430c0c1-b6b4-4c6b-9102-6deffe0c91b4",
+          "operation_id": "network:cb62129bc2ff36a21b16da22a080e7dfe6e2529b7e874dbfa728be32077ee865:ebb371dd0d6eb9cd09ce67d45cac1082826711223b8216f4e344d785ceb5e55c",
+          "version": 2
+        },
+        {
+          "schema_version": 1,
+          "approval_id": "8aa4a38e-5cea-4716-bc8f-501d018320f4",
+          "run_id": "dae59e25d8514b268a58ba2d4a31349c",
+          "task_id": "020f5b65185e5028a21d808086143237",
+          "fence_token": 1,
+          "kind": "network",
+          "capability": "tool.egress",
+          "target": {
+            "domain": "bucardo.org",
+            "port": 443
+          },
+          "target_fingerprint": "97d413c97d80d6c6c5303a2ab93db8330fb2ddae111e584a22754ee78013f87e",
+          "status": "expired",
+          "decision": "deny",
+          "reason": "mode",
+          "requested_at": 1789913303.2641623,
+          "expires_at": 1789914203.2044604,
+          "resolved_at": 1789917656.8998175,
+          "resolved_by": null,
+          "operation_id": "network:7df67e7aa8f45ac94af139d6048ed402423e35af630597e5a39ed232f0a6407f:4865918fcba39a6746125d8635240f291fa4e435b3cfd3afa96a939880fe955b",
+          "version": 2
+        }
+      ],
+      "browser_reload_before_allow": false,
+      "report_quality_not_used_as_control_acceptance": true
+    },
+    "cancel": {
+      "run_id": "aefa7a279b594ea398258c2083d999ef",
+      "run_status": "cancelled",
+      "task_errors": [
+        {
+          "task_id": "cf1ec474e3fb5e1ca153c2db21d2a182",
+          "status": "running",
+          "error": null
+        }
+      ],
+      "approved_tool_receipts": 0,
+      "approvals": [
+        {
+          "schema_version": 1,
+          "approval_id": "054eaab2-9e2b-4426-b7ab-bb39ce244121",
+          "run_id": "aefa7a279b594ea398258c2083d999ef",
+          "task_id": "cf1ec474e3fb5e1ca153c2db21d2a182",
+          "fence_token": 1,
+          "kind": "network",
+          "capability": "tool.egress",
+          "target": {
+            "domain": "bucardo.org",
+            "port": 443
+          },
+          "target_fingerprint": "97d413c97d80d6c6c5303a2ab93db8330fb2ddae111e584a22754ee78013f87e",
+          "status": "expired",
+          "decision": "deny",
+          "reason": "mode",
+          "requested_at": 1789911644.7879865,
+          "expires_at": 1789912544.4830658,
+          "resolved_at": 1789917656.7217302,
+          "resolved_by": null,
+          "operation_id": "network:ddc2f2cba48bc4fd06d6d6cf43a26faf12c0a1b22eceab294711a87ea1efb797:01897103a95e6180443e74cf068ddbc45b7ed03da4fe8b942924070a2e5ec08a",
+          "version": 2
+        }
+      ],
+      "browser_reload_before_allow": false,
+      "report_quality_not_used_as_control_acceptance": true
+    }
+  },
+  "tests": {
+    "native": {
+      "passed": 159,
+      "deselected": 1,
+      "note": "The legacy-only test is covered by the legacy suite."
+    },
+    "legacy": {
+      "passed": 173,
+      "deselected": 1,
+      "note": "Excluded failure reproduced in pre-change snapshot."
+    },
+    "source_contract_focused": {
+      "passed": 15
+    },
+    "fetch_boundary": {
+      "passed": 3
+    },
+    "counts_overlap": true
+  },
+  "quality_changes_block_ledger": false,
+  "cleanup": {
+    "frontend_port_3100": "stopped",
+    "browser_session": "sourceclosure closed",
+    "publisher": "one-shot processes exited",
+    "containers_stopped": [
+      "insightforge-m9m10-auth-api-1",
+      "insightforge-m9m10-auth-sandbox-controller-1",
+      "insightforge-m9m10-auth-sandbox-gateway",
+      "insightforge-m9m10-auth-accept-db-1"
+    ],
+    "preexisting_services": "Not targeted by cleanup. Final Docker inventory showed them exited as well; cause not established, no restart performed."
+  },
+  "source_sha256": {
+    "src/open_deep_research/evidence.py": "e4079ec90937d24d2923dc55320291318427a9872b44f4baf93d04c422f83f43",
+    "src/open_deep_research/quality/contract.py": "759c02bc251b84386462968c2d8f52c86aff30e4ad9408938dc7cce9f17f1f05",
+    "src/open_deep_research/quality/gate.py": "fccd2ff0337be72d382de0e5c4165a8978361d9840a6ca651e82283703ac6ae6",
+    "src/open_deep_research/web/models.py": "148ea944180aa77c9f2036d748fac4f77e783898d2ee62d3438f27d9d8be0340",
+    "src/open_deep_research/evaluation/models.py": "230cc5bdf64cd77bdf327e29a5c2761cf80e0a8669dd5f7cbddfea02604ff973",
+    "src/open_deep_research/agentscope_runtime/research_stages.py": "8c6438f5cde9dd3c8e7b7e9cc4d1e7f21f7b479a59a8f227c538d975bb2d1713",
+    "src/open_deep_research/agentscope_runtime/research_agents.py": "4e974e2f9cb6b3bf96d33f68768ce514ce3485d43b0cfb7e159b254e00c08414",
+    "src/open_deep_research/agentscope_runtime/production_resources.py": "bfb67d78a9c7723f36a9033770905d985bc69e621ca969ddf0365a8f68ec1b83",
+    "src/open_deep_research/report/models.py": "2515634282820442f1ca6fd889f399d529db821b8306f67bc4438b480853f294",
+    "src/open_deep_research/report/writing.py": "9e9dc648c33e7431c2a684e36d2a8dbc631cfff6d0e5e24f6241312b2f0c32b2",
+    "tests/as_runtime/test_source_contract_completion.py": "f8fd8dee79c13ccade9c9ef3cc5fcdda087bc43bf39b77147fd2daff8446ca1a",
+    "tests/test_source_selection_fetch_boundary.py": "cf73c70f0defa38311660108a3c7c6c7fd9e1b0b6e32fcaf7125dd095408cd4f",
+    "tests/fixtures/document-research-tool-result.json": "92555066d0a4dc4bfa1129aac9faf68b1a0f4dab8190e4af85e60b2b9f6b2fe9"
+  },
+  "all_recorded_attempts": [
+    {
+      "run_id": "a5fd84df36eb54a4ac6e2c0c1e67f6d8",
+      "label": "documents",
+      "error": "ValidationError",
+      "recorded_cost_micro_usd": 19805,
+      "source_selection": null,
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "5cbf420756765a6989fbf28563abf621",
+      "label": "specific",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 42021,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "76cb4f5972705ed8aff7e319208e888c",
+      "label": "web",
+      "error": null,
+      "recorded_cost_micro_usd": 106299,
+      "source_selection": {
+        "mode": "web",
+        "sources": []
+      },
+      "last_observed_status": "completed"
+    },
+    {
+      "run_id": "79a3c156e3b55b89bc26686dc3f0b32a",
+      "label": "hybrid",
+      "error": "ValidationError",
+      "recorded_cost_micro_usd": 34573,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "fecf1e096c6b523fa4db6e40a51bd783",
+      "label": "approval",
+      "error": "ValidationError",
+      "recorded_cost_micro_usd": 31961,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "38032eb20e2c554eaa1346754b08db1f",
+      "label": "documents",
+      "error": "GatewayCallError",
+      "recorded_cost_micro_usd": 35600,
+      "source_selection": {
+        "mode": "documents",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "06a153c34d9458838ab407ec79b30caa",
+      "label": "specific",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 73586,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "27a20c7238065c9c97db0d0a6adc7361",
+      "label": "web",
+      "error": null,
+      "recorded_cost_micro_usd": 148530,
+      "source_selection": {
+        "mode": "web",
+        "sources": []
+      },
+      "last_observed_status": "completed"
+    },
+    {
+      "run_id": "61ddbf264b0856db965100c43977fddd",
+      "label": "hybrid",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 106862,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "51e89e70f8364092aaf098a8a425eaff",
+      "label": "approval_approve",
+      "error": "ResearchTerminated",
+      "recorded_cost_micro_usd": 29553,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "f8891072e5ed4f76a7ce61d4ec1b72d3",
+      "label": "approval_deny",
+      "error": "ResearchTerminated",
+      "recorded_cost_micro_usd": 12413,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "04ffd141748140c9abfd905d0c3faa5f",
+      "label": "approval_cancel",
+      "error": "ResearchTerminated",
+      "recorded_cost_micro_usd": 10605,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "8aa3b20de0e14c6781a33a2b8282b3b6",
+      "label": "serial_documents",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 11989,
+      "source_selection": {
+        "mode": "documents",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "aefa7a279b594ea398258c2083d999ef",
+      "label": "serial_approval_cancel",
+      "error": "user_cancelled",
+      "recorded_cost_micro_usd": 2620,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://bucardo.org/"
+          }
+        ]
+      },
+      "last_observed_status": "cancelled"
+    },
+    {
+      "run_id": "3e959f0e67d04dfe8a9403be9b43a318",
+      "label": "serial_approval_allow",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 16356,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://bucardo.org/"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "c29b2823e9c24c2d812af13669e83d86",
+      "label": "serial_specific",
+      "error": null,
+      "recorded_cost_micro_usd": 54711,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "running",
+      "final_status_not_captured": true
+    },
+    {
+      "run_id": "926449dc73a44a128001034a69dec82d",
+      "label": "serial_delivery_documents",
+      "error": null,
+      "recorded_cost_micro_usd": 8657,
+      "source_selection": {
+        "mode": "documents",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "completed"
+    },
+    {
+      "run_id": "dae59e25d8514b268a58ba2d4a31349c",
+      "label": "serial_approval_deny",
+      "error": "user_cancelled",
+      "recorded_cost_micro_usd": 4242,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://bucardo.org/"
+          }
+        ]
+      },
+      "last_observed_status": "cancelled"
+    },
+    {
+      "run_id": "ffcb9798e349468a91a60832c0548b9e",
+      "label": "serial_delivery_specific",
+      "error": "RuntimeError",
+      "recorded_cost_micro_usd": 39105,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "342627fe8387492db60d05c238be2701",
+      "label": "serial_delivery_hybrid",
+      "error": null,
+      "recorded_cost_micro_usd": 71192,
+      "source_selection": {
+        "mode": "hybrid",
+        "sources": [
+          {
+            "type": "document",
+            "id": "91b62071-b3ac-4048-ae9c-fb98c15af93e"
+          }
+        ]
+      },
+      "last_observed_status": "completed"
+    },
+    {
+      "run_id": "ae7ba40e7caa42f0b50b79b473efc16f",
+      "label": "serial_delivery_specific_quote",
+      "error": null,
+      "recorded_cost_micro_usd": null,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "failed"
+    },
+    {
+      "run_id": "83b34276c96342e782866941950c78df",
+      "label": "serial_delivery_specific_final",
+      "error": null,
+      "recorded_cost_micro_usd": 20619,
+      "source_selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "url",
+            "url": "https://www.postgresql.org/docs/17/release-17.html"
+          }
+        ]
+      },
+      "last_observed_status": "completed"
+    }
+  ],
+  "attempt_note": "Exploratory, reproduction and dedicated approval runs are retained. Four positive deliveries are examples of each mode, not a claim that all initial requests passed or that content quality passed.",
+  "ledger": {
+    "T072": "completed",
+    "completed_tasks": 67,
+    "total_tasks": 81
+  }
+}

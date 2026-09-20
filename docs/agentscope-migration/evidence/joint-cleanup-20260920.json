@@ -1,0 +1,35 @@
+{
+  "acceptance_running": [],
+  "acceptance_team_running": [],
+  "preexisting_native_services_running": [
+    "insightforge-native-e2e-frontend-1",
+    "insightforge-native-e2e-api-1",
+    "insightforge-native-e2e-litellm-proxy-1",
+    "insightforge-native-e2e-sandbox-controller-1",
+    "insightforge-native-e2e-litellm-db-1",
+    "insightforge-native-e2e-litellm-redis-1",
+    "insightforge-native-e2e-app-db-1",
+    "insightforge-native-e2e-sandbox-gateway",
+    "insightforge-native-e2e-publisher-worker-1"
+  ],
+  "images": {
+    "api": {
+      "id": "sha256:6786ad1244295d609b866eb4f118537b00a9b1bd315b7f5890eca1c279906641",
+      "tags": [
+        "insightforge-api:joint-260c81a8"
+      ]
+    },
+    "gateway": {
+      "id": "sha256:2c5f3fb24451cafb263b889ff56e361ac267ca283c4d6081c6a506b98930c15a",
+      "tags": [
+        "insightforge-gateway:joint-260c81a8"
+      ]
+    },
+    "controller": {
+      "id": "sha256:ee98ff3fb01c8f286cefa94a628fa34e5bf51cce1eed0f2b1060ba6ce9cdd2cc",
+      "tags": [
+        "insightforge-controller:joint-260c81a8"
+      ]
+    }
+  }
+}

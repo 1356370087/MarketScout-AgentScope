@@ -1,0 +1,115 @@
+{
+  "source_sha256": "260c81a8fe2ceddb6ed970216f631db4298af51699eb5e816e9a3e1835d1b7f3",
+  "corpus_refs": [
+    {
+      "artifact_version": "7c6fda8c-6401-4d15-b0f4-518e80e63902",
+      "generation": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "unit": "3882f7eb-b41e-5a64-996d-f69fa561b589",
+      "text_sha256": "da540051d8a21f24a53c53ba1f65ff42e7b7e448f2bdb96c5e2195bfdb740a8d"
+    },
+    {
+      "artifact_version": "7c6fda8c-6401-4d15-b0f4-518e80e63902",
+      "generation": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "unit": "69fbe17e-21f5-55c0-a145-79a5e5913550",
+      "text_sha256": "301dbd7f6312e4aace6e20fa85b9e9230df7dfe085d35918fc5083a3cd683b1d"
+    },
+    {
+      "artifact_version": "7c6fda8c-6401-4d15-b0f4-518e80e63902",
+      "generation": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "unit": "81b380ce-f86b-530d-b6d6-080b080189f0",
+      "text_sha256": "5cdafa48acd0545587e539890366441e3cd6bbd779191bcd065e41e3d6b759c5"
+    },
+    {
+      "artifact_version": "7c6fda8c-6401-4d15-b0f4-518e80e63902",
+      "generation": "7f23593d-db03-4b42-ac61-bfbe8e9a7ea9",
+      "unit": "2fbaec8e-16e5-5699-9d1f-e48e21f57fc7",
+      "text_sha256": "fdc85e16e9c7bb52c6794120c18e400ee47865497e3ccd4b16bc30ec817fd243"
+    }
+  ],
+  "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
+  "cases": [
+    {
+      "id": "target",
+      "question": "星河验收项目的目标响应时间是多少？",
+      "snippets": [
+        "280"
+      ],
+      "answer_tokens": [
+        "280"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "baseline",
+      "question": "旧版验收基线的目标响应时间是多少？",
+      "snippets": [
+        "450"
+      ],
+      "answer_tokens": [
+        "450"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "difference",
+      "question": "新旧目标响应时间相差多少毫秒？",
+      "snippets": [
+        "170"
+      ],
+      "answer_tokens": [
+        "170"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "version",
+      "question": "星河验收项目采用哪个版本的数据库？",
+      "snippets": [
+        "PostgreSQL 17"
+      ],
+      "answer_tokens": [
+        "17"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "rollback",
+      "question": "星河验收项目回滚保留几个历史版本？",
+      "snippets": [
+        "三个历史版本"
+      ],
+      "answer_tokens": [
+        "三",
+        "3"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "alias",
+      "question": "What is the project code of the Star River acceptance project?",
+      "snippets": [
+        "STAR-RIVER-280"
+      ],
+      "answer_tokens": [
+        "STAR-RIVER-280"
+      ],
+      "answerable": true
+    },
+    {
+      "id": "no-answer",
+      "question": "星河项目的年度采购预算是多少人民币？",
+      "snippets": [],
+      "answer_tokens": [],
+      "answerable": false
+    },
+    {
+      "id": "no-answer2",
+      "question": "星河项目在2027年第三季度的营业利润是多少？",
+      "snippets": [],
+      "answer_tokens": [],
+      "answerable": false
+    }
+  ],
+  "repeats": 2,
+  "scope": "small synthetic corpus; real embedding/rerank/answer services; no population-quality claim"
+}

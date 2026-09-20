@@ -1,0 +1,29 @@
+[
+  {
+    "batch": "batch2",
+    "case": "web",
+    "run_id": "09ac26e79e6750ae8c8cca9b2e53855c",
+    "http_status": 409,
+    "body": {
+      "detail": "run_not_completed"
+    }
+  },
+  {
+    "batch": "batch2",
+    "case": "specific",
+    "run_id": "0ca61e3a3405574cbd40291042644287",
+    "http_status": 409,
+    "body": {
+      "detail": "run_not_completed"
+    }
+  },
+  {
+    "batch": "batch3",
+    "case": "documents",
+    "run_id": "a97e446978d154599ac395840b6698fe",
+    "http_status": 409,
+    "body": {
+      "detail": "run_not_completed"
+    }
+  }
+]

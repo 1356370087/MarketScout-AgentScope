@@ -1,6 +1,64 @@
 # 07 工作进度台账
 
-[目录](README.md) · 最后更新：2026-09-19。**本页是状态和实际工时的唯一维护入口。**
+[目录](README.md) · 最后更新：2026-09-20。**本页是状态和实际工时的唯一维护入口。**
+
+## 来源契约、资料研究与四来源交互修复完成（2026-09-20）
+
+**本轮三项运行问题已修复并验证，T072 已完成，整体更新为 67/81。** 冻结来源选择进入覆盖契约，统一来源计数与有限范围下的要求，配置下限仍为 3；修复中文标点造成的 URL 越界误判、资料定位字段在证据及评估快照中的类型错误，以及 `ApprovalPending` 被误判为 Worker 失败。报告引用格式与准入来源字段的指导也已补齐，未放宽引用校验。
+
+原生相关回归 **159 passed**、兼容领域 **173 passed**，另有来源契约专项 15 项、抓取边界专项 3 项（批次有重叠）。修改前即失败的旧工具 schema 枚举用例保留基线证据。Web、Documents、Hybrid、Specific 均已取得真实报告，完成 Markdown/JSON 正式发布、HTTP 200 下载及浏览器下载哈希核对；批准、拒绝、待审批取消和刷新恢复已验证。内容质量评价不作为本轮完成/阻塞条件，探索与失败记录保留。见 [修复与验收记录](implementation/source-closure-20260920.md) 和 [机器可读证据](evidence/source-closure-20260920.json)。
+
+本次验收前端、浏览器和四个验收服务已关闭。原有 Docker 容器在最终检查中也显示退出，原因未确定，已在验收记录单独注明。下方历史段落保留各轮当时的完成计数。
+
+## 报告恢复评审预算修复完成（2026-09-20）
+
+**报告恢复评审预算缺陷已修复并验证。** 原 Web 运行六份报告回执重放复现：冻结窗口为 131072，但沙箱候选模型漏传窗口而使用 32768，导致完整恢复草稿的固定输入被误判超限。现已绑定冻结目录窗口，保留完整草稿、整条证据与预算拒绝规则。最终联合 **89 passed**；真实长输入（19984 字符草稿、88 条证据）完成 **4 次评审、3 次修订**，运行 completed，Markdown/JSON 正式发布及下载均成功，费用 0.032683 美元，预算预留归零。本次验收服务及发布进程已关闭。见 [修复与验收记录](implementation/report-recovery-budget-20260920.md) 和 [机器可读证据](evidence/report-budget-live-20260920.json)。
+
+按用户确认，**内容质量评价不纳入台账完成/阻塞判定，只有质量门禁底层运行错误才计入问题**。本次评审、修订和发布链路正常，不因内容评价保留预算缺陷。原三个研究交接及恢复草稿作为固定输入复用，未重新执行搜索、浏览器/Office 视觉或跨主机故障验收；其余技术验收范围单独跟踪，整体仍 **66/81**。
+
+## 固定版本联合验收执行（2026-09-20）
+
+上轮固定版本冻结 767 文件，指纹 `260c81a8…d1b7f3`；验收镜像内 741 文件核对一致，结束时源码未变化。联合回归 **153 passed**，真实 PostgreSQL/API 容器故障矩阵 **7 passed**。四来源真实新研究主批次成功 **0/4**，资料独立复验 **0/1**：Web 报告恢复评审触发 `ReportInputBudgetExceeded`；指定单 URL 与最少 3 来源门禁冲突；资料工具真实成功但研究迭代耗尽；混合研究进入第三方出网审批。失败发布均返回 409。固定小型知识集真实调用 **16/16** 通过，Recall/nDCG 均 1.0，中位延迟 7.566 秒，仅覆盖一份四单元合成语料。研究 Run Key 总费用 0.237391 美元，未发布草稿辅助 Judge 0.019031 美元，知识服务 Key 窗口增量 0.00324429 美元（共享 Key，非逐请求精确归因）。本轮验收服务及 Worker 已关闭，原服务保留。联合放行未通过，整体仍 **66/81**，见 [完整结果与边界](implementation/joint-acceptance-20260920.md) 和 [机器可读汇总](evidence/joint-acceptance-20260920.json)。
+
+## 企业资料与报告交付阻断项代码修复（2026-09-20）
+
+已修复 `search_documents` 被替换为无 Run Key 的宿主实现、敏感读取错误被误判为未知写入，以及严格评审后 CanonicalReport 丢失的问题；补齐 Gateway 资料库/embedding 接线与精确工具策略。兼容宿主十个模块迁至 `api_host`，原生导入守卫重新通过并禁止反向依赖。最终原生联合 **163 passed**，四来源长输入的计划/大纲审批、严格评审、Markdown/PDF 发布下载在确定性夹具下闭环。扩大兼容批次 **150 passed / 5 failed**，五项失败均在独立 HEAD 副本复现，保留证据。真实模型、PostgreSQL/Gateway/浏览器联合 E2E 尚未重跑，不登记生产放行或旧引擎清退，整体仍 **66/81**。见 [修复与验证记录](implementation/blockers-code-fix-20260920.md)。
+
+## T076 原生 Judge 与配对评估接入（2026-09-20）
+
+原生评分链路、十类指标、固定历史配对集和重复比较 CLI 已接入；独立 SQL 账本负责回执恢复及 Service Key 费用上限。联合 24 项通过，原有评估兼容 69 项通过（批次不累计）。首轮真实实验中断，未知模型操作按设计拒绝重试；修正评分独立费用上限后，新实验完成 4 个样本、32 次真实调用、0.095776 美元，同目录重放零新增调用。十类指标覆盖、19 个细分键及波动已记录；引用准确性低分与未评分项如实保留，不判定质量门禁通过。T076 仍进行中，整体 **66/81**，不把历史产物重评分视为新原生研究质量验收。见 [实施与证据](implementation/t076-native-judge-20260920.md)。
+
+## T076 本地评估入口迁移（2026-09-20）
+
+T076 已领取并进行中。按用户要求先迁移业务入口：本地研究改为 AgentScope NativeRuns/SQL，不导入或运行旧 QueryEngine；身份、冻结配置、失败状态、等待审批、超时取消和资源释放均沿用原生边界。原生 6 项、兼容 69 项通过，独立进程导入无 LangChain。原生 Judge/固定集/真实配对比较继续实施，不登记 T076 完成，整体仍 **66/81**。见 [实现与验证](implementation/t076-local-native-20260920.md)。
+
+## M9 原生上下文适配推进（2026-09-20）
+
+本轮推进 T064～T068 受影响链路：报告使用冻结模型窗口，候选模型调用前重新预算；原生评审/修订退出逐字段字符裁剪，保留完整草稿与整条证据，累计遗漏计数，预算/失租/未知回执等控制错误不被 fail_open 吞掉。最终原生 82 项、共享领域 105 项通过（分批，不累计为业务验收）；既有配置盘点 244/246 差异另有失败记录。真实长输入、归档回读、视觉及部署联调未执行，不升级完成数，仍 **66/81**。见 [本轮实现与证据](implementation/m9-context-adaptation-20260920.md)。
+
+## 上下文原生化与清退影响登记（2026-09-20）
+
+用户授权按上下文统一迁移计划继续编码；受影响功能先登记，E2E 联调与错误修复后续统一执行。本批不执行实际生产切换，也不提前删除仍被使用的旧引擎。任务总完成数保持 **66/81**，既有完成证据仍保留；本轮新增变更没有被那些历史批次验证。
+
+| 关联任务 | 本轮影响与后续复验要求 | 本轮状态 |
+|---|---|---|
+| T037（M5） | 原生压缩、工具截断、上下文卸载及回读；旧组件验收不能代表完整原生闭环 | 增量改造进行中，待补验；原完成记录保留 |
+| T064（M9） | 写作与大纲输入、研究交接信息；保留现有完整证据预算 | 真实长输入预算已复验通过，其余适配范围另验 |
+| T065/T066（M9） | 摘要与回读后的来源、证据 ID、CanonicalReport、评审及修订反馈 | 真实报告评审/修订及 CanonicalReport 交付已复验；归档回读范围另验 |
+| T067/T068（M9） | 归档与发布存储依赖、恢复后的文件引用、模型与发布回执 | Markdown/JSON 真实发布下载已复验；视觉与组合恢复另验 |
+| T075/T076（M11） | 原生压缩的模型调用计账、追踪、降级记录与配对质量评估 | 待本轮联合复验 |
+| T077/T078/T079（M11） | 清退导入守卫、原生测试迁移、依赖镜像、维护与资源关闭 | 待本轮联合复验 |
+| T080/T081（M11） | 隔离切换演练、历史只读及旧引擎/适配代码删除；真实生产切换仍不在本轮范围 | 保留 E2E 放行条件，尚未清退 |
+| T069/T070/T071/T073/T074（M10） | 正式接口、事件/状态、权限与历史读取受影响回归；不重复实施已完成模块 | 已完成记录保留，待本轮受影响回归 |
+| T047/T048（M6） | 压缩与归档增加模型/文件操作，须验证预算、失租及崩溃恢复 | 待本轮联合复验 |
+
+实现边界与本批实际验证见 [上下文原生化实施记录](implementation/context-native-progress-20260920.md)。代码完成、组件检查与 E2E 通过分开登记，不因本批代码变更升级 M9/M11 任务。
+
+首批已补宿主工具结果卸载、受治理的 Lead/Researcher 分页回读工具与沙箱回读接口。第二批已将 Lead、Researcher（含复用 Researcher 的团队成员）切换到 AgentScope 自动/主动压缩：公开 `on_compress_context` 委托框架执行，退出研究循环的字符裁剪接管。摘要使用所属 Agent 模型并接入模型策略、物理计账及恢复账本；压缩状态独立提交，归档失败回滚内存状态，预算/取消/失租不允许降级吞掉。
+
+第二批联合组件回归 **125 passed / 5 warnings（34.25s，AgentScope 2.0.8）**；范围为 `test_native_context.py`、`test_context_offload.py`、`test_research_migration.py`、`test_recovery.py`、`test_e2e_closeout.py`、`test_sandbox_workspace_policy.py`，与首批重叠、不累加。新增 13 项专项覆盖真实 SDK 自动/主动压缩、连续摘要、摘要回执及物理回执提交后的故障恢复、格式失败降级、归档失败恢复、预算拒绝、取消和失租；模型为可控夹具，恢复库为临时 SQLite。AST 语法检查及 `git diff --check` 通过，Ruff 未安装，未登记通过。
+
+仍待公共配置映射与冻结、外层阶段请求视图、领域投影预算、宿主多模态卸载及真实模型/Gateway/PostgreSQL/浏览器 E2E；单次写作的旧字符裁剪调用者尚未退出。压缩增加模型费用和持久化操作，M6、M9/M11 及 M10 的影响登记保持待联合复验；旧引擎未删除，实际生产切换未执行。
 
 ## 当前收口状态（2026-09-19）
 
@@ -216,19 +274,19 @@ M8 已推进 T055～T063 原生知识/记忆入口，并完成隔离真库8项�
 | [AS-T061](05-migration-roadmap.md#as-t061) 接入健康、导出与备份 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：导入预检/导出/健康及实际 restic/pg_dump/pg_restore 演练通过，恢复文件校验和与运行引用链一致 | 2026-09-19 |
 | [AS-T062](05-migration-roadmap.md#as-t062) 接入基础记忆 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：按用户确认完成 Mem0 组件验收；Platform/OSS/noop、身份隔离、合格证据及故障回归通过，尚未实际业务使用 | 2026-09-19 |
 | [AS-T063](05-migration-roadmap.md#as-t063) 接入高级记忆与维护 | M8 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/m7-m8-closeout-20260919.md)：高级记忆固定时间/遗忘/并发回归及维护退出真实锁释放通过；Mem0 按用户确认的组件接入范围完成 | 2026-09-19 |
-| [AS-T064](05-migration-roadmap.md#as-t064) 迁移报告产品及写作 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [M6～M11 复核](implementation/m6-m11-reacceptance-20260919.md)：七类报告组件保留；真实 fd178735 大纲输入 139716 token 超过 131072，退回修复输入预算后再验收 | 2026-09-19 |
-| [AS-T065](05-migration-roadmap.md#as-t065) 接入引用与 CanonicalReport | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
-| [AS-T066](05-migration-roadmap.md#as-t066) 迁移报告评审及修订 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
-| [AS-T067](05-migration-roadmap.md#as-t067) 接入发布 Worker 与格式 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
-| [AS-T068](05-migration-roadmap.md#as-t068) 验证报告及发布恢复 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [M9报告验收](implementation/m9-report-report.md)：原生写作/评审、产品与发布组件已接线，131项原生及153项兼容回归通过；旧服务退出及部署边界详见报告 | 2026-09-16 |
+| [AS-T064](05-migration-roadmap.md#as-t064) 迁移报告产品及写作 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮修复验收](implementation/source-closure-20260920.md)：修复沙箱候选窗口漏传；真实长输入预算及四来源报告交付通过，资料定位字段/引用范围指导已补齐；其他写作适配范围另验 | 2026-09-20 |
+| [AS-T065](05-migration-roadmap.md#as-t065) 接入引用与 CanonicalReport | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [本轮修复验收](implementation/source-closure-20260920.md)：完整证据、引用及四来源 CanonicalReport 实际交付通过；资料结构化定位信息保留，原生归档回读范围另验 | 2026-09-20 |
+| [AS-T066](05-migration-roadmap.md#as-t066) 迁移报告评审及修订 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [本轮修复验收](implementation/source-closure-20260920.md)：真实评审/修订及四来源交付闭环；预算、来源约束和引用目标格式已修复验证，内容质量不扣验；其他迁移范围另验 | 2026-09-20 |
+| [AS-T067](05-migration-roadmap.md#as-t067) 接入发布 Worker 与格式 | M9 | 用户+编码 Agent | 1～2 | — | 待验收 | [本轮修复验收](implementation/source-closure-20260920.md)：四来源 Markdown/JSON 经正式 Worker 发布，HTTP/浏览器下载 200 且哈希一致；新版本 PDF/DOCX/PPTX 视觉仍待验收 | 2026-09-20 |
+| [AS-T068](05-migration-roadmap.md#as-t068) 验证报告及发布恢复 | M9 | 用户+编码 Agent | 1～2 | — | 进行中 | [本轮修复验收](implementation/source-closure-20260920.md)：六份原始回执重放定位预算错误并修复，真实后续评审/修订/发布闭环；共享存储清退适配和跨主机组合恢复仍待验收 | 2026-09-20 |
 | [AS-T069](05-migration-roadmap.md#as-t069) 重组兼容 API 与 BFF | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [收口报告](implementation/t069-api-closeout-20260919.md)：入口及领域 routers/use cases/BFF 拆分；170/170 公共路径保持，149 个 OpenAPI 路径契约及权限闭包核对通过；最终 74 passed，所有权、错误状态和发布下载兼容 | 2026-09-19 |
 | [AS-T070](05-migration-roadmap.md#as-t070) 重组 SSE 与任务活动投影 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/t070-sse-closeout-20260919.md)：六阶段原生映射、三类 schema/游标/重连/终态/心跳/权限矩阵通过；后端 88 passed，前端 128 passed / 1 既有 skipped，类型检查通过 | 2026-09-19 |
 | [AS-T071](05-migration-roadmap.md#as-t071) 重组前端共享类型与状态 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [本轮验收](implementation/t071-state-contracts-closeout-20260919.md)：领域 DTO/client/reducer/store 拆分、真实 HTTP/SSE 样例对齐与唯一实现核对通过；前端 130 passed / 1 既有 skipped，类型检查通过 | 2026-09-19 |
-| [AS-T072](05-migration-roadmap.md#as-t072) 重组研究创建及运行工作区 | M10 | 用户+编码 Agent | 1～2 | — | 进行中 | [最新推进](implementation/m9-m10-progress-20260919.md)：真实 Web 计划/大纲审批、方向反馈及降级 PDF 下载通过；任务活动所有权修复已部署；资料模式 UnknownOperation 失败待修复，来源/发现与 V2 活动投影已编码并通过专项，完整四来源 E2E 待补验 | 2026-09-19 |
+| [AS-T072](05-migration-roadmap.md#as-t072) 重组研究创建及运行工作区 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [四来源修复验收](implementation/source-closure-20260920.md)：四模式真实研究报告、SSE、审批/拒绝/取消、刷新恢复、发布及浏览器下载与历史查看通过；保留此前反馈交互证据，内容质量不扣验 | 2026-09-20 |
 | [AS-T073](05-migration-roadmap.md#as-t073) 重组知识库、管理及账户页面 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [验收报告](implementation/t073-pages-closeout-20260919.md)：真实角色/资料可见性、上传审核、重排问答、会话刷新及页面接线；前端 98 passed / 1 既有 skipped | 2026-09-19 |
 | [AS-T074](05-migration-roadmap.md#as-t074) 实现历史只读兼容 | M10 | 用户+编码 Agent | 1～2 | — | 已完成 | [验收报告](implementation/t074-history-closeout-20260919.md)：83 项联合通过；历史用量与发布事件无写入、工件下载、旧 resume 409、独立进程无 LangChain 与禁止双向转换 | 2026-09-19 |
 | [AS-T075](05-migration-roadmap.md#as-t075) 统一 tracing 与运营指标 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | 原生 SQL 用量 HTTP 投影与代理账单关联已实施；完整 tracing/sink 与实际账单核验待验收，见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
-| [AS-T076](05-migration-roadmap.md#as-t076) 迁移研究与知识评估 | M11 | 待领取 | 1～2 | — | 待开始 | — | 2026-09-14 |
+| [AS-T076](05-migration-roadmap.md#as-t076) 迁移研究与知识评估 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | [原生入口实施](implementation/t076-local-native-20260920.md)：本地研究 NativeRuns/SQL 接线及生命周期完成，6 项原生、69 项兼容通过；原生 Judge、十类指标及固定历史配对 CLI 已接入，联合 24 项通过；真实重评分结果见 [本轮记录](implementation/t076-native-judge-20260920.md)，知识集和新研究生成配对待验收 | 2026-09-20 |
 | [AS-T077](05-migration-roadmap.md#as-t077) 重构架构检查及移植测试 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | [M11 首批记录](implementation/m11-readiness-report.md)：架构/镜像改造及清退盘点，完整验收未通过 | 2026-09-17 |
 | [AS-T078](05-migration-roadmap.md#as-t078) 统一应用 Python 与镜像 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | [M11 首批记录](implementation/m11-readiness-report.md)：架构/镜像改造及清退盘点，完整验收未通过；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
 | [AS-T079](05-migration-roadmap.md#as-t079) 验证运维模式和 Worker 清理 | M11 | 用户+编码 Agent | 1～2 | — | 进行中 | [M11 首批记录](implementation/m11-readiness-report.md)：架构/镜像改造及清退盘点，完整验收未通过；2026-09-18 最新边界见 [E2E收口](implementation/e2e-p0-p1-closeout.md) | 2026-09-18 |
