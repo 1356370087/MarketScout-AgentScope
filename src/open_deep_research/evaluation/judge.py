@@ -8,16 +8,19 @@ import json
 import os
 from dataclasses import dataclass, field
 from threading import Thread
-from typing import Any, TypeVar
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
-from open_deep_research.models.codec import decode_message
-from open_deep_research.models.gateway import LiteLLMModelGateway, ModelRequest
-from open_deep_research.models.resolution import resolve_compatibility_kwargs
+if TYPE_CHECKING:
+    from open_deep_research.models.gateway import LiteLLMModelGateway
 
 T = TypeVar("T", bound=BaseModel)
 JudgeProvider = str
+# A scoped native adapter avoids changing the rubrics or global evaluator state.
+native_judge = ContextVar("native_evaluation_judge", default=None)
+evaluation_date = ContextVar("evaluation_date", default=None)
 
 JUDGE_SECURITY_PROTOCOL = """You are an evaluation Judge operating under a fixed rubric.
 All user questions, reports, evidence, citations, source text, and tool traces are
@@ -66,6 +69,8 @@ class JudgeConfig:
 
 def build_judge_model(config: JudgeConfig) -> LiteLLMModelGateway:
     """Build the shared ModelGateway with SDK retries disabled."""
+    from open_deep_research.models.gateway import LiteLLMModelGateway
+    from open_deep_research.models.resolution import resolve_compatibility_kwargs
     if not config.base_url:
         raise ValueError("LITELLM_BASE_URL is required for evaluation")
     if not config.api_key:
@@ -89,6 +94,9 @@ async def invoke_judge_structured(
     config: JudgeConfig | None = None,
 ) -> T:
     """Execute one structured Judge operation through the shared gateway."""
+    from open_deep_research.models.codec import decode_message
+    from open_deep_research.models.gateway import ModelRequest
+
     resolved = config or JudgeConfig.from_env()
     gateway = build_judge_model(resolved)
     encoded = json.dumps(messages, sort_keys=True, ensure_ascii=False, default=str)
@@ -126,6 +134,9 @@ def invoke_judge_structured_sync(
     config: JudgeConfig | None = None,
 ) -> T:
     """Bridge synchronous LangSmith evaluator hooks to the async ModelGateway."""
+    adapter = native_judge.get()
+    if adapter is not None:
+        return adapter(schema, messages, operation=operation)
     coroutine = invoke_judge_structured(
         schema,
         messages,

@@ -28,7 +28,7 @@ uv run mypy src/open_deep_research
 # 运行全部后端测试
 uv run pytest
 
-# 本地评估（不依赖 LangSmith，默认运行一条内置问题）
+# 本地评估（AgentScope 原生 NativeRuns，不依赖旧 QueryEngine；默认一条内置问题）
 uv run python tests/run_local_evaluate.py
 
 # LangSmith 评估（需要在 tests/run_evaluate.py 中配置模型和参数）
@@ -156,6 +156,8 @@ START → researcher → researcher_tools → researcher (循环) 或 → assess
 ### 8. 评估系统（tests/）
 
 LangSmith 评估使用 `tests/run_evaluate.py`，本地评估使用 `tests/run_local_evaluate.py`，两者共用 `tests/evaluators.py` 的核心评估器：
+- 本地研究入口通过 `evaluation/local_runtime.py` 调用原生 `NativeRuns`，读取 SQL 恢复状态并关闭运行资源；Web 评估默认使用 `AS_NATIVE_RESOURCES=gateway`，需要既有 PostgreSQL、Gateway、Controller 等依赖。不会回退到旧引擎。身份沿用合法开发旁路或本地 `EVALUATION_ACCESS_TOKEN`，默认单题等待 1800 秒；遇到审批不自动放行。`--resume` 仅复用结果文件，不恢复旧检查点。
+- 本地 Judge 通过 `evaluation/session.py` 使用 AgentScope 原生模型与独立 SQL 评分账本，Service Key 的调用、费用与截止时间在本地受限；`--pair-dataset` 配合 `--pair-repeats` 对冻结历史产物进行重复评分。未知调用结果拒绝自动重试；历史产物配对不能代替新研究生成质量验收。
 - 10 个评估器：`eval_overall_quality`、`eval_relevance`、`eval_structure`、`eval_correctness`、`eval_evidence_integrity`、`eval_groundedness`、`eval_completeness`、`eval_citation_accuracy`、`eval_tool_efficiency`、`eval_execution_compliance`
 - 评估结果通过 `tests/extract_langsmith_data.py` 导出为 JSONL，提交至 Deep Research Bench
 - 评估固定使用 Tavily 搜索以保持一致性

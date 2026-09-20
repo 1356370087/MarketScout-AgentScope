@@ -11,7 +11,7 @@ from open_deep_research.report.coverage import (
     derive_state_coverage_checklist,
 )
 from open_deep_research.sandbox.policy import allowed_domains
-from open_deep_research.tools.utils import get_model_connection_kwargs
+from open_deep_research.tools.legacy_shims import get_model_connection_kwargs
 from tests import run_local_evaluate
 from tests.run_local_evaluate import (
     aggregate_score,
@@ -592,22 +592,8 @@ async def test_run_question_does_not_promote_runtime_error_with_report(
     tmp_path,
     monkeypatch,
 ) -> None:
-    class FailedEngine:
-        run_id = "failed-after-report"
-        config = {
-            "configurable": {
-                "search_api": "none",
-                "max_concurrent_research_units": 1,
-                "max_researcher_iterations": 1,
-                "max_react_tool_calls": 1,
-            }
-        }
-
-        def __init__(self, _config) -> None:
-            pass
-
-        async def submit_message(self, _messages, _config):
-            return {
+    async def failed_native_run(_messages, _config, **kwargs):
+        return "failed-after-report", {
                 "final_report": "A report generated before finalization failed.",
                 "result": {
                     "status": "error",
@@ -618,7 +604,7 @@ async def test_run_question_does_not_promote_runtime_error_with_report(
     async def no_metrics(_inputs, _state):
         return []
 
-    monkeypatch.setattr(run_local_evaluate, "QueryEngine", FailedEngine)
+    monkeypatch.setattr(run_local_evaluate, "run_native_question", failed_native_run)
     monkeypatch.setattr(run_local_evaluate, "evaluate_state", no_metrics)
     monkeypatch.setattr(
         run_local_evaluate,

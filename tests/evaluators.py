@@ -10,7 +10,6 @@ from datetime import date
 from functools import lru_cache
 from typing import Any, Literal, get_args, get_origin
 
-from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from open_deep_research.evaluation import (
@@ -74,7 +73,9 @@ def _get_eval_model() -> Any:
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    from open_deep_research.evaluation.judge import evaluation_date
+
+    return evaluation_date.get() or date.today().isoformat()
 
 
 def _format_input_query(inputs: dict[str, Any]) -> str:
@@ -216,6 +217,8 @@ def _payload_from_structured_result(result: Any) -> Any:
         return parsed
 
     raw = result.get("raw")
+    # Legacy raw envelopes are the only path that needs this compatibility type.
+    from langchain_core.messages import AIMessage
     if not isinstance(raw, AIMessage):
         raise JudgeOutputError(
             "invalid_raw_message",

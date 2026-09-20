@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "name": "archived-agent-evaluation-pair",
+  "scope": "Historical successful outputs; rejudging validates Judge integration, not native research quality uplift.",
+  "cases": [
+    {
+      "id": "agent-evaluation",
+      "kind": "research",
+      "question": "截至 2026 年 7 月，系统比较 LLM Agent 的主流评估方法。请覆盖任务成功率、轨迹与工具调用质量、事实性和引用质量、成本与延迟、安全性，以及 LLM-as-Judge 的偏差、可复现性和校准方法；结合公开基准或框架提出一套适合企业深度研究 Agent 的落地评估方案，并引用一手来源。",
+      "baseline": "../local_eval_results/20260712-full/01_agent-evaluation.json",
+      "baseline_sha256": "afa55050c436a872505f60cf52b42e5ee5dcff781b903cd4e8681291761fbef5",
+      "candidate": "../local_eval_results/20260713-flash-one-after-1m/01_agent-evaluation.json",
+      "candidate_sha256": "c664ed62e72bd02cd972473b5eabd9577bcd7f89b0572af86d71ff043ada2e6c",
+      "reference_outputs": {}
+    }
+  ]
+}

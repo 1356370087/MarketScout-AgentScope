@@ -13,13 +13,12 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Iterator
 
 from dotenv import load_dotenv
 
-from open_deep_research.agents.query_engine import QueryEngine
+from open_deep_research.evaluation.local_runtime import run_native_question
 from open_deep_research.evaluation import (
-    EvaluationMetric,
     JudgeConfig,
     MetricStatus,
     normalize_evaluator_metric,
@@ -29,15 +28,7 @@ from open_deep_research.quality.policy import (
     get_quality_rigor_policy,
     rigor_from_legacy_min_score,
 )
-from tests.evaluators import (
-    eval_completeness,
-    eval_evidence_integrity,
-    eval_execution_compliance,
-    eval_overall_quality,
-    eval_relevance,
-    eval_structure,
-    eval_tool_efficiency,
-)
+from tests.evaluators import eval_execution_compliance
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RESULTS_ROOT = ROOT / "tests" / "local_eval_results"
@@ -90,16 +81,6 @@ LOCAL_QUESTIONS = [
     },
 ]
 
-Evaluator = Callable[..., dict[str, Any] | list[dict[str, Any]]]
-LOCAL_EVALUATORS: list[tuple[str, Evaluator]] = [
-    ("overall_quality", eval_overall_quality),
-    ("relevance", eval_relevance),
-    ("structure", eval_structure),
-    ("evidence_integrity", eval_evidence_integrity),
-    ("completeness", eval_completeness),
-    ("execution_compliance", eval_execution_compliance),
-    ("tool_efficiency", eval_tool_efficiency),
-]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -107,7 +88,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def build_run_config() -> dict[str, Any]:
-    """Build the same QueryEngine configuration for every local question."""
+    """Build the same AgentScope configuration for every local question."""
     run_id = str(uuid.uuid4())
     default_model = "openai:deepseek-v4-flash"
     summarization_model = os.getenv("SUMMARIZATION_MODEL", default_model)
@@ -118,6 +99,7 @@ def build_run_config() -> dict[str, Any]:
         "enable_memory": False,
         "max_structured_output_retries": _env_int("MAX_STRUCTURED_OUTPUT_RETRIES", 3),
         "allow_clarification": False,
+        "enable_human_in_loop": False,
         "max_concurrent_research_units": _env_int("MAX_CONCURRENT_RESEARCH_UNITS", 3),
         "search_api": os.getenv("SEARCH_API", "tavily"),
         "max_researcher_iterations": _env_int("MAX_RESEARCHER_ITERATIONS", 4),
@@ -152,6 +134,8 @@ def evaluation_runtime_environment() -> Iterator[None]:
         "ALLOW_CLARIFICATION": "false",
         "ENABLE_MEMORY": "false",
         "WEB_PIPELINE_MODE": "enforced",
+        "ENABLE_HUMAN_IN_LOOP": "false",
+        "AS_NATIVE_RESOURCES": os.getenv("AS_NATIVE_RESOURCES", "gateway"),
     }
     previous = {name: os.environ.get(name) for name in overrides}
     os.environ.update(overrides)
@@ -174,31 +158,19 @@ def _flatten_evaluation_result(
 
 
 async def evaluate_state(inputs: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
-    """Run local judges sequentially to avoid provider rate-limit bursts."""
-    metrics: list[dict[str, Any]] = []
-    for evaluator_name, evaluator in LOCAL_EVALUATORS:
-        try:
-            result = await asyncio.to_thread(evaluator, inputs, state)
-            metrics.extend(_flatten_evaluation_result(evaluator_name, result))
-        except Exception as exc:  # noqa: BLE001 - preserve the remaining local evaluation
-            metrics.append(
-                EvaluationMetric(
-                    evaluator=evaluator_name,
-                    key=f"{evaluator_name}_score",
-                    score=None,
-                    comment=f"Evaluator failed: {exc}",
-                    status=MetricStatus.EVALUATOR_ERROR,
-                ).model_dump(mode="json", exclude_none=False)
-            )
-    metrics.append(
-        EvaluationMetric(
-            evaluator="correctness",
-            key="correctness_score",
-            score=None,
-            comment="Not scored because this local dataset has no independent golden answer.",
-            status=MetricStatus.NOT_SCORED,
-        ).model_dump(mode="json", exclude_none=False)
-    )
+    """Run all ten unchanged rubrics in an independent native Judge journal."""
+    from open_deep_research.evaluation.session import native_judge_session
+
+    directory = state.pop("_judge_directory", ROOT / ".runs" / "evaluations" / uuid.uuid4().hex)
+    async with native_judge_session(directory) as judge:
+        metrics = await judge.score(
+            case_id="local", sample_id="score:0", inputs=inputs, outputs=state,
+        )
+        state["evaluation_provenance"] = {
+            "engine": "agentscope", "run_id": judge.manifest["run_id"],
+            "judge_sha256": judge.manifest["judge_sha256"],
+            "rubric_sha256": judge.manifest["rubric_sha256"],
+        }
     return reconcile_judge_metrics(metrics)
 
 
@@ -599,6 +571,7 @@ async def rescore_existing(
     inputs = {"messages": [{"role": "user", "content": result["question"]}]}
     started = time.perf_counter()
     result["metrics"] = await evaluate_state(inputs, state)
+    result["evaluation_provenance"] = state.get("evaluation_provenance")
     result["evaluation_elapsed_seconds"] = time.perf_counter() - started
     result["aggregate_score"] = aggregate_score(result["metrics"])
     if quality_rigor is not None:
@@ -771,16 +744,19 @@ async def run_question(
     research_started = time.perf_counter()
     with evaluation_runtime_environment():
         config = build_run_config()
-        engine = QueryEngine(config)
+        run_id = None
         try:
-            state = await engine.submit_message(inputs["messages"], config)
+            run_id, state = await run_native_question(
+                inputs["messages"], config, runs_dir=output_dir / "runtime",
+                timeout=float(os.getenv("EVALUATION_RESEARCH_TIMEOUT_SECONDS", "1800")),
+            )
         except Exception as exc:  # noqa: BLE001 - save a durable failed result
             state = {
-                "result": {"status": "error", "error": str(exc)},
+                "result": {"status": "error", "error": type(exc).__name__},
                 "final_report": "",
             }
     research_elapsed = time.perf_counter() - research_started
-    effective_config = engine.config.get("configurable", config["configurable"])
+    effective_config = {**config["configurable"], **state.get("evaluation_configuration", {})}
     state["evaluation_metadata"] = {
         key: effective_config[key]
         for key in (
@@ -792,6 +768,7 @@ async def run_question(
     }
     print(f"[{index}/{total}] Judge started: {question['title']}", flush=True)  # noqa: T201
     evaluation_started = time.perf_counter()
+    state["_judge_directory"] = output_dir / "judges" / f"{index:02d}_{question['id']}"
     metrics = await evaluate_state(inputs, state)
     evaluation_elapsed = time.perf_counter() - evaluation_started
     run_result = state.get("result", {})
@@ -816,7 +793,9 @@ async def run_question(
         "raw_notes": state.get("raw_notes", []),
         "notes": state.get("notes", []),
         "run_result": run_result,
-        "run_id": engine.run_id,
+        "run_id": run_id,
+        "engine": "agentscope",
+        "evaluation_provenance": state.get("evaluation_provenance"),
         "completed_task_outputs": state.get("completed_task_outputs", []),
         "supervisor_messages": state.get("supervisor_messages", []),
         "evidence_registry": state.get("evidence_registry", []),
@@ -836,6 +815,8 @@ async def run_question(
 def build_argument_parser() -> argparse.ArgumentParser:
     """Build the CLI parser; a bare invocation intentionally runs one question."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pair-dataset", type=Path, help="固定问题与基线/候选 JSON 及 SHA256 的配对清单")
+    parser.add_argument("--pair-repeats", type=int, default=2, help="每侧重复评分次数，至少 2 次；沿用统一预算")
     parser.add_argument("--output-dir", type=Path, help="Directory for local JSON and Markdown results")
     parser.add_argument("--question-limit", type=int, default=1, choices=range(1, 6))
     parser.add_argument(
@@ -875,6 +856,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
 async def main() -> Path:
     load_dotenv(ROOT / ".env")
     args = build_argument_parser().parse_args()
+
+    if args.pair_dataset:
+        from open_deep_research.evaluation.experiment import evaluate_pairs
+
+        destination = args.output_dir or DEFAULT_RESULTS_ROOT / ("paired-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+        await evaluate_pairs(args.pair_dataset, destination, repeats=args.pair_repeats)
+        print(f"Paired native evaluation written to: {destination}", flush=True)
+        return destination
 
     if args.rescore_json:
         output_path = await rescore_existing(
