@@ -12,7 +12,6 @@ from open_deep_research.api.contracts import (
     SecurityApprovalDecisionRequest,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.events.public import event_publisher_from_config
 from open_deep_research.run_context import JournalCorruptedError
 from open_deep_research.sandbox.approvals import SecurityApprovalStore
 from open_deep_research.sandbox.egress_ledger_store import (
@@ -25,7 +24,6 @@ from open_deep_research.sandbox.egress_mode import (
     policy_baseline_mode,
 )
 from open_deep_research.sandbox.schema import network_target_decision, resolve_profile
-from open_deep_research.tasks.registry import TaskStatus, get_task_registry
 from security.rbac import Principal, require_run_owner_or_any
 from security.rbac.permissions import (
     RESEARCH_SECURITY_APPROVAL_READ_OWN,
@@ -236,7 +234,7 @@ class SecurityRoutes:
         except ValueError as exc:
             status_code = 409 if str(exc) == "stale_fence" else 400
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-        await event_publisher_from_config(config).publish(
+        await config["_event_publisher"].publish(
             "security.approval.resolved",
             stage="researching",
             payload={
@@ -250,25 +248,6 @@ class SecurityRoutes:
             },
             dedupe_key=f"security-approval:{approval.approval_id}:resolved:{approval.version}",
         )
-        task = get_task_registry().get(approval.task_id)
-        if task is not None and task.run_id == run_id:
-            _version, pending = await asyncio.to_thread(
-                SecurityApprovalStore(run_id, runs_dir=configurable.runs_dir).list,
-                status="pending",
-            )
-            task_pending = [
-                item for item in pending if item.task_id == approval.task_id
-            ]
-            if task_pending:
-                task.pending_domain = (
-                    str(task_pending[0].target.get("domain") or "") or None
-                )
-                task.pending_domain_tool = task_pending[0].capability
-            else:
-                task.pending_domain = None
-                task.pending_domain_tool = None
-            if not task_pending and task.status == TaskStatus.WAITING_FOR_CONFIRMATION:
-                get_task_registry().update_status(approval.task_id, TaskStatus.RUNNING)
         return approval.model_dump(mode="json")
 
     async def get_egress_state(
@@ -343,7 +322,7 @@ class SecurityRoutes:
             raise HTTPException(
                 status_code=409, detail={"code": str(exc), "state": latest}
             ) from exc
-        await event_publisher_from_config(config).publish(
+        await config["_event_publisher"].publish(
             "security.egress_target_changed",
             stage="researching",
             payload=result,
@@ -426,7 +405,7 @@ class SecurityRoutes:
             fence_token=fence_token,
             origin="api",
         )
-        await event_publisher_from_config(config).publish(
+        await config["_event_publisher"].publish(
             "security.egress_mode_changed",
             stage="researching",
             payload={

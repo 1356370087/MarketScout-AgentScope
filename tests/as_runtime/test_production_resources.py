@@ -259,7 +259,6 @@ async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):
     from open_deep_research.sandbox.internal_api import (
         EgressTargetCheckRequest,
         TaskActivityPublishRequest,
-        TeamBridgeRequest,
         build_internal_sandbox_router,
     )
 
@@ -306,19 +305,11 @@ async def test_native_egress_authority_uses_live_sql_fence(store, tmp_path):
                 json=request.model_dump(mode="json"),
             )
         ).status_code == 401
-        request = gateway.internal.signed(
-            TeamBridgeRequest,
-            run_id=state.run_id,
-            fence_token=lease.fence,
-            task_id="t",
-            action="catalog",
-            payload={},
-        )
         assert (
             await client.post(
-                "/internal/sandbox/team", json=request.model_dump(mode="json")
+                "/internal/sandbox/team", json={"run_id": state.run_id, "action": "catalog"}
             )
-        ).json() == {"tools": []}
+        ).status_code == 404
         from open_deep_research.events.task_activity import TaskActivityStore
 
         activity_request = gateway.internal.signed(

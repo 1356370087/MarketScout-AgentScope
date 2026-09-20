@@ -14,7 +14,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from open_deep_research.agentscope_runtime.native_host import (
-    LEGACY_ENGINE,
     NATIVE_ENGINE,
     mount_native_research,
     research_engine,
@@ -40,11 +39,14 @@ from tests.auth_helpers import research_principal
 pytestmark = pytest.mark.asyncio
 
 
-async def test_engine_flag_defaults_to_legacy_and_validates(monkeypatch):
+async def test_engine_flag_defaults_to_native_and_rejects_retired_engine(monkeypatch):
     monkeypatch.delenv("RESEARCH_ENGINE", raising=False)
-    assert research_engine() == LEGACY_ENGINE
+    assert research_engine() == NATIVE_ENGINE
     monkeypatch.setenv("RESEARCH_ENGINE", "native")
     assert research_engine() == NATIVE_ENGINE
+    monkeypatch.setenv("RESEARCH_ENGINE", "legacy")
+    with pytest.raises(RuntimeError, match="unsupported RESEARCH_ENGINE"):
+        research_engine()
     monkeypatch.setenv("RESEARCH_ENGINE", "quantum")
     with pytest.raises(RuntimeError, match="unsupported RESEARCH_ENGINE"):
         research_engine()

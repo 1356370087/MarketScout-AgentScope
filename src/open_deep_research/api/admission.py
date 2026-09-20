@@ -4,19 +4,31 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Callable, Mapping
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 
-from open_deep_research.api_host.run_registry import RunRecord
-from open_deep_research.api_host.run_retention import _TERMINAL_RUN_STATUSES
 from open_deep_research.api_governance import ConnectionLimiter, FixedWindowRateLimiter
 from open_deep_research.configuration import Configuration
 from open_deep_research.observability.telemetry import get_prometheus_metrics
 from security.rbac import Principal
 
 logger = logging.getLogger(__name__)
+
+
+class LimitedStreamingResponse(StreamingResponse):
+    """Release admission even when disconnect wins before iteration starts."""
+
+    def __init__(self, content, *, admission, release_token, **kwargs):
+        super().__init__(content, **kwargs)
+        self.admission, self.release_token = admission, release_token
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            await self.admission.connection_limiter.release(self.release_token)
 
 
 def _user_identity(user: Principal) -> str:
@@ -69,27 +81,14 @@ def _observe_limiter_error(
     )
 
 
-class RunAdmission:
-    """Own process-local limiters and count active records from the registry."""
+class ApiAdmission:
+    """Share creation and SSE limits across native HTTP route families."""
 
-    def __init__(self, runs: Callable[[], Mapping[str, RunRecord]]) -> None:
-        self.runs = runs
+    def __init__(self):
         self.rate_limiter = FixedWindowRateLimiter()
         self.connection_limiter = ConnectionLimiter()
 
-    def _active_runs_for_user(self, user_id: str) -> int:
-        """Count process-local non-terminal runs owned by one principal."""
-        active = 0
-        for record in self.runs().values():
-            if record.status in _TERMINAL_RUN_STATUSES:
-                continue
-            metadata = getattr(record.engine, "config", {}).get("metadata", {})
-            owner = metadata.get("owner") or metadata.get("user_id")
-            if str(owner or "") == user_id:
-                active += 1
-        return active
-
-    def _enforce_run_create_limits(self, user: Principal, configurable: Configuration) -> None:
+    def enforce_creation(self, user: Principal, configurable: Configuration, active_runs: int) -> None:
         """Apply per-principal creation and active-run limits, failing open on bugs."""
         identity = _user_identity(user)
         try:
@@ -111,7 +110,7 @@ class RunAdmission:
 
         try:
             maximum = configurable.max_concurrent_runs_per_user
-            if maximum > 0 and self._active_runs_for_user(identity) >= maximum:
+            if maximum > 0 and active_runs >= maximum:
                 _observe_rate_limited(configurable, "concurrent_runs", user)
                 raise HTTPException(
                     status_code=429,

@@ -16,7 +16,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from open_deep_research.api_host.run_retention import _runs_dir_size_bytes
+from open_deep_research.api.retention import directory_bytes as _runs_dir_size_bytes
 from open_deep_research.configuration import Configuration
 from open_deep_research.documents.database import document_operational_snapshot
 from open_deep_research.documents.settings import get_document_settings
