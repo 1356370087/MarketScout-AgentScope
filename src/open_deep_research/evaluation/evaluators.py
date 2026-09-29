@@ -149,13 +149,8 @@ def _judge_input(content: str) -> str:
 
 
 def _structured_output(schema: type[BaseModel]) -> Any:
-    """Return the Gateway runner while preserving the evaluator test seam."""
-    model = _get_eval_model()
-    structured = getattr(model, "structured", None)
-    if structured is not None:
-        return structured(schema)
-    compatibility = model.with_structured_output
-    return compatibility(schema, method="function_calling", include_raw=True)
+    """Return the governed native Judge runner."""
+    return _get_eval_model().structured(schema)
 
 
 def _unwrap_single_key_schema_payload(
@@ -217,27 +212,22 @@ def _payload_from_structured_result(result: Any) -> Any:
         return parsed
 
     raw = result.get("raw")
-    # Legacy raw envelopes are the only path that needs this compatibility type.
-    from langchain_core.messages import AIMessage
-
-    if not isinstance(raw, AIMessage):
+    from agentscope.message import Msg, ToolCallBlock
+    if not isinstance(raw, Msg) or raw.role != "assistant":
         raise JudgeOutputError(
             "invalid_raw_message",
-            "Judge raw response was not a normalized AIMessage",
+            "Judge raw response was not a native assistant message",
         )
-    tool_calls = raw.tool_calls
-    if not isinstance(tool_calls, list) or len(tool_calls) != 1:
+    tool_calls = [block for block in raw.content if isinstance(block, ToolCallBlock)]
+    if len(tool_calls) != 1:
         raise JudgeOutputError(
             "ambiguous_tool_calls",
             "Judge raw response did not contain exactly one normalized tool call",
         )
-    tool_call = tool_calls[0]
-    if not isinstance(tool_call, dict):
-        raise JudgeOutputError(
-            "invalid_tool_call",
-            "Judge normalized tool call was not a mapping",
-        )
-    arguments = tool_call.get("args")
+    try:
+        arguments = json.loads(tool_calls[0].input)
+    except (TypeError, ValueError) as exc:
+        raise JudgeOutputError("invalid_tool_call_args", "Judge tool arguments were not JSON") from exc
     if not isinstance(arguments, dict):
         raise JudgeOutputError(
             "invalid_tool_call_args",

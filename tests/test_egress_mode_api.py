@@ -1,6 +1,10 @@
 """Public egress-mode API tests (GET/POST /runs/{run_id}/egress-mode)."""
 
-from types import SimpleNamespace
+import asyncio
+from sqlalchemy.pool import NullPool
+from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+from open_deep_research.agentscope_runtime.run_config import RunConfig
+from open_deep_research.api.native_runs import NativeRuns
 
 from fastapi.testclient import TestClient
 
@@ -27,20 +31,34 @@ def _write_policy(base_dir, document: str) -> str:
     return str(path)
 
 
+_owned_services = []
+
+
+def _clear_native_runs():
+    for service in _owned_services:
+        asyncio.run(service.aclose())
+        asyncio.run(service.store.aclose())
+    _owned_services.clear()
+    server._set_native_research_service(None)
+
+
 def _live_run(run_id: str, tmp_path, policy_path: str, *, fence: int = 1):
-    engine = SimpleNamespace(
-        run_fence_token=fence,
-        config={
-            "configurable": {
-                "runs_dir": str(tmp_path),
-                "sandbox_policy_path": policy_path,
-            },
-            "metadata": {"owner": "local-dev-user"},
-        },
-    )
-    record = server.RunRecord(run_id=run_id, engine=engine, status="running")
-    server._runs[run_id] = record
-    return record
+    service = server._native_research_service
+
+    async def create():
+        run = RunConfig.compile({"configurable": {"runs_dir": str(service.runs_dir), "sandbox_policy_path": policy_path}})
+        state = await service.store.create_from_config("local-dev-user", run_id, run,
+                                                       application={"configuration": run.snapshot(),
+                                                                    "request_configurable": {"sandbox_policy_path": policy_path}})
+        for index in range(fence):
+            lease = await service.store.acquire(run_id, "local-dev-user", ttl=120)
+            if index + 1 < fence:
+                await service.store.release(lease)
+        state.status = "running"
+        await service.store.save(lease, state)
+        return state
+
+    return asyncio.run(create())
 
 
 def _bypass_client(monkeypatch, tmp_path) -> TestClient:
@@ -48,7 +66,12 @@ def _bypass_client(monkeypatch, tmp_path) -> TestClient:
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("LOCAL_DEV_AUTH_BYPASS", "true")
     monkeypatch.delenv("IAM_DATABASE_URL", raising=False)
-    server._runs.clear()
+    _clear_native_runs()
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "egress.db").as_posix(), engine_kwargs={"poolclass": NullPool})
+    asyncio.run(store.create_tables())
+    service = NativeRuns(store, None, None, runs_dir=tmp_path)
+    _owned_services.append(service)
+    server._set_native_research_service(service)
     return TestClient(server.app, raise_server_exceptions=False)
 
 
@@ -59,7 +82,7 @@ def test_get_reports_baseline_and_effective_mode(tmp_path, monkeypatch):
     try:
         response = client.get("/runs/run-mode/egress-mode")
     finally:
-        server._runs.clear()
+        _clear_native_runs()
     assert response.status_code == 200
     body = response.json()
     assert body["baseline_mode"] == "auto"
@@ -83,7 +106,7 @@ def test_post_narrowing_override_applies_and_persists(tmp_path, monkeypatch):
         assert report.json()["override"] == "manual"
         assert report.json()["effective_mode"] == "manual"
     finally:
-        server._runs.clear()
+        _clear_native_runs()
 
 
 def test_post_widening_past_baseline_is_refused(tmp_path, monkeypatch):
@@ -102,7 +125,7 @@ def test_post_widening_past_baseline_is_refused(tmp_path, monkeypatch):
         )
         assert refused_open.status_code == 409
     finally:
-        server._runs.clear()
+        _clear_native_runs()
 
 
 def test_post_requires_live_run(tmp_path, monkeypatch):
@@ -136,5 +159,5 @@ def test_post_rejects_unknown_mode(tmp_path, monkeypatch):
             "/runs/run-mode/egress-mode", json={"mode": "sometimes"}
         )
     finally:
-        server._runs.clear()
+        _clear_native_runs()
     assert response.status_code == 422

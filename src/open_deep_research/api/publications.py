@@ -3,7 +3,8 @@
 import asyncio
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
+from open_deep_research.api.admission import LimitedStreamingResponse
 
 from open_deep_research.agentscope_runtime.recovery import RecoverySession
 from open_deep_research.agentscope_runtime.report import enqueue_report_publication
@@ -149,8 +150,12 @@ def build_publication_router(service):
                 raise HTTPException(409, "historical_artifact_corrupted") from None
             if cursor > (records[-1].sequence if records else 0):
                 raise HTTPException(409, "publication_event_cursor_ahead")
-            return StreamingResponse(
+            token = await service.admission._reserve_sse_connection(
+                principal, Configuration.from_runnable_config(None)
+            )
+            return LimitedStreamingResponse(
                 (_publication_sse(event) for event in records if event.sequence > cursor),
+                admission=service.admission, release_token=token,
                 media_type="text/event-stream",
                 headers=_sse_headers(),
             )
@@ -173,10 +178,14 @@ def build_publication_router(service):
             authorize=authorize,
             publisher_settings=get_publisher_settings(),
         )
-        return StreamingResponse(
+        token = await service.admission._reserve_sse_connection(
+            principal, options.configuration
+        )
+        return LimitedStreamingResponse(
             _publication_event_iterator(
                 store, after=cursor, principal=principal, options=options
             ),
+            admission=service.admission, release_token=token,
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -204,14 +213,16 @@ def build_publication_router(service):
                     dedupe_key=f"{job.publication_id}:retry:{job.attempt}:{job.max_attempts}",
                 )
 
+            recovery = await RecoverySession.open(service.store, run_id, principal.user_id)
             try:
-                return publication_response(
-                    await asyncio.to_thread(
-                        store.retry, publication_id, on_requeued=requeued
+                async with service.store.transaction(recovery.lease):
+                    return publication_response(
+                        await asyncio.to_thread(store.retry, publication_id, on_requeued=requeued)
                     )
-                )
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from None
+            finally:
+                await recovery.close()
 
     @router.get("/runs/{run_id}/publications/{publication_id}/download")
     async def download(run_id: str, publication_id: str, principal=read):

@@ -8,11 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from langchain_core.messages import BaseMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from open_deep_research.documents.contracts import SourceSelection
 
@@ -26,6 +22,56 @@ from open_deep_research.report.coverage import (
 COVERAGE_CONTRACT_SCHEMA_VERSION = 2
 QUALITY_RISK_POLICY_VERSION = "quality-risk-v1"
 MAX_REQUIREMENTS_PER_RESEARCH_TASK = 3
+
+
+def canonicalize_requirement_ids(values, contract):
+    """Repair a model's hash typo only when its ordinal identifies one requirement."""
+    allowed = contract.requirement_ids()
+    by_ordinal = {}
+    for value in allowed:
+        by_ordinal.setdefault(value.rsplit("-", 1)[0], []).append(value)
+    result = []
+    for value in values:
+        candidates = by_ordinal.get(value.rsplit("-", 1)[0], [])
+        result.append(candidates[0] if value not in allowed and len(candidates) == 1 else value)
+    return result
+
+
+def validate_requirement_ids(values, contract, *, required):
+    """Keep one delegation within its factual, atomic requirement scope."""
+    normalized = list(dict.fromkeys(values))
+    known = set(contract.requirement_ids()) if contract is not None else set(normalized)
+    unknown = [value for value in normalized if value not in known]
+    if unknown:
+        raise ValueError("unknown_coverage_requirement_ids:" + ",".join(unknown))
+    if contract is not None and contract.single_research_task:
+        return list(contract.delegable_requirement_ids())
+    delegable = set(contract.delegable_requirement_ids()) if contract is not None else known
+    selected = [value for value in normalized if value in delegable]
+    if len(selected) > MAX_REQUIREMENTS_PER_RESEARCH_TASK:
+        raise ValueError(f"too_many_coverage_requirement_ids:{MAX_REQUIREMENTS_PER_RESEARCH_TASK}")
+    dimensions = {item.dimension_id for item in contract.requirements
+                  if item.requirement_id in selected and item.dimension_id} if contract is not None else set()
+    if len(dimensions) > 1:
+        raise ValueError("cross_dimension_requirement_ids:" + ",".join(sorted(dimensions)))
+    if required and not selected and delegable:
+        raise ValueError("non_delegable_requirement_ids_only" if normalized else "coverage_requirement_ids_required")
+    return selected
+
+
+def coverage_bound_input_schema(base_schema, contract):
+    """Advertise factual IDs and task bounds without replacing runtime validation."""
+    from copy import deepcopy
+
+    ids = list(contract.delegable_requirement_ids()) if contract is not None else []
+    if not ids:
+        return base_schema
+    field = deepcopy(base_schema.model_fields["requirement_ids"])
+    field.json_schema_extra = {
+        "items": {"type": "string", "enum": ids},
+        "maxItems": len(ids) if contract.single_research_task else MAX_REQUIREMENTS_PER_RESEARCH_TASK,
+    }
+    return create_model(base_schema.__name__, __base__=base_schema, requirement_ids=(list[str], field))
 
 RequirementKind = Literal["factual", "process", "deliverable"]
 
@@ -404,12 +450,15 @@ _EXPLICIT_TIME_CONSTRAINT_PATTERNS = (
 def _message_role(message: Any) -> str:
     if isinstance(message, dict):
         return str(message.get("role") or message.get("type") or "").lower()
-    return str(getattr(message, "type", "")).lower()
+    return str(getattr(message, "role", None) or getattr(message, "type", "")).lower()
 
 
 def _message_content(message: Any) -> str:
     if isinstance(message, dict):
         return str(message.get("content") or "")
+    get_text = getattr(message, "get_text_content", None)
+    if get_text is not None:
+        return get_text() or ""
     return str(getattr(message, "content", "") or "")
 
 
@@ -1046,7 +1095,7 @@ def _build_source_requirement_groups(
 
 
 def build_research_coverage_contract(
-    messages: Sequence[BaseMessage | dict[str, Any]],
+    messages: Sequence[Any],
     *,
     advisory_dimensions: Iterable[str] = (),
     max_requirements: int = 48,

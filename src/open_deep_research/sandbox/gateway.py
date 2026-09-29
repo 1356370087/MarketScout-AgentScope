@@ -14,7 +14,6 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, Field
 from open_deep_research.configuration import Configuration
 from open_deep_research.models.protocol_errors import ModelGatewayError
@@ -73,18 +72,13 @@ from open_deep_research.sandbox.schema import (
 )
 from open_deep_research.sandbox.wire import (
     GatewayCatalogToolV1,
-    GatewayModelOutcomeV1,
     GatewayModelOutcomeV2,
-    GatewayModelRequestV1,
     GatewayModelRequestV2,
-    GatewayOperationLookupOutcomeV1,
-    GatewayOperationLookupRequestV1,
     GatewayToolCatalogOutcomeV1,
     GatewayToolCatalogRequestV1,
     GatewayToolOutcomeV1,
     GatewayToolRequestV1,
 )
-from open_deep_research.tasks.team_bridge import TeamWorkerRequest
 
 logger = logging.getLogger(__name__)
 GATEWAY_CREDENTIAL_MAX_TTL_SECONDS = 86_460.0
@@ -589,10 +583,8 @@ class GatewayRuntime:
     def authorize_task(
         self,
         request: (
-            GatewayModelRequestV1
-            | GatewayModelRequestV2
+            GatewayModelRequestV2
             | GatewayToolRequestV1
-            | GatewayOperationLookupRequestV1
             | GatewayToolCatalogRequestV1
         ),
         *,
@@ -620,7 +612,7 @@ class GatewayRuntime:
 
     def authorize_api_model(
         self,
-        request: GatewayModelRequestV1 | GatewayModelRequestV2 | GatewayOperationLookupRequestV1,
+        request: GatewayModelRequestV2,
         *,
         timestamp: float,
         nonce: str,
@@ -650,32 +642,6 @@ class GatewayRuntime:
         )
         return context
 
-    async def lookup_model_operation(
-        self,
-        request: GatewayOperationLookupRequestV1,
-        context: GatewayRunContext,
-    ) -> GatewayOperationLookupOutcomeV1:
-        """Read a journaled model outcome without dispatching a Provider call."""
-        lookup = self.internal.signed(
-            OperationGetRequest,
-            run_id=request.run_id,
-            fence_token=context.fence_token,
-            logical_operation_id=request.logical_operation_id,
-        )
-        existing = await self.internal.post(
-            "/internal/sandbox/operations/get",
-            lookup,
-        )
-        operation = existing.get("operation") if existing.get("found") else None
-        raw_outcome = operation.get("outcome") if isinstance(operation, dict) else None
-        return GatewayOperationLookupOutcomeV1(
-            found=raw_outcome is not None,
-            outcome=(
-                GatewayModelOutcomeV1.model_validate(raw_outcome)
-                if raw_outcome is not None
-                else None
-            ),
-        )
 
     @native_tools_scope
     async def tool_catalog(
@@ -723,13 +689,6 @@ class GatewayRuntime:
                     max_output_chars=tool.max_output_chars,
                 )
             )
-        if configuration.enable_async_research:
-            from open_deep_research.sandbox.internal_api import TeamBridgeRequest
-            extra = await self.internal.post("/internal/sandbox/team", self.internal.signed(
-                TeamBridgeRequest, run_id=request.run_id, task_id=request.task_id,
-                fence_token=context.fence_token, action="catalog", payload={},
-            ))
-            catalog.extend(GatewayCatalogToolV1.model_validate(item) for item in extra["tools"])
         return GatewayToolCatalogOutcomeV1(tools=catalog)
 
     async def _wait_for_approval(
@@ -1204,88 +1163,37 @@ class GatewayRuntime:
         async def invoke(call: EgressModelCall) -> EgressModelReply:
             configuration = Configuration.from_runnable_config(context.config)
             model, _ = self._role_settings(configuration, "egress_classifier")
-            if configuration.model_backend == "litellm":
-                request = GatewayModelRequestV2(
-                    run_id=run_id,
-                    task_id=task_id,
-                    role="egress_classifier",
-                    stage=stage,
-                    logical_operation_id=call.logical_operation_id,
-                    model=model,
-                    messages=call.messages,
-                    structured_schema=call.structured_schema,
-                    max_output_tokens=call.max_output_tokens,
-                    temperature=call.temperature,
-                )
-                outcome = await self.invoke_model_operation_v2(request, context)
-                if outcome.status != "completed":
-                    return EgressModelReply(
-                        status="failed", served_model=outcome.served_model
-                    )
-                # Older V2 journal entries only contain the forced tool call.
-                structured = outcome.structured
-                if structured is None:
-                    structured = _wire_structured_args(outcome.message)
-                if structured is not None:
-                    return EgressModelReply(
-                        status="completed",
-                        structured=structured,
-                        served_model=outcome.served_model,
-                    )
-                return EgressModelReply(
-                    status="completed",
-                    content=_wire_message_text(outcome.message),
-                    served_model=outcome.served_model,
-                )
-            from langchain_core.messages import message_to_dict
-            from open_deep_research.models.codec import decode_message
-
-            tools: list[dict[str, Any]] = []
-            tool_choice: str | dict[str, Any] | bool | None = None
-            if call.structured_schema is not None:
-                tools = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": STRUCTURED_OUTPUT_TOOL_NAME,
-                            "description": (
-                                "Return the response using the required schema."
-                            ),
-                            "parameters": call.structured_schema,
-                            "strict": False,
-                        },
-                    }
-                ]
-                tool_choice = {
-                    "type": "function",
-                    "function": {"name": STRUCTURED_OUTPUT_TOOL_NAME},
-                }
-            request = GatewayModelRequestV1(
+            request = GatewayModelRequestV2(
                 run_id=run_id,
                 task_id=task_id,
                 role="egress_classifier",
                 stage=stage,
                 logical_operation_id=call.logical_operation_id,
-                messages=[message_to_dict(decode_message(message)) for message in call.messages],
-                tools=tools,
-                tool_choice=tool_choice,
+                model=model,
+                messages=call.messages,
+                structured_schema=call.structured_schema,
                 max_output_tokens=call.max_output_tokens,
                 temperature=call.temperature,
             )
-            outcome = await self.invoke_model_operation(request, context)
+            outcome = await self.invoke_model_operation_v2(request, context)
             if outcome.status != "completed":
-                return EgressModelReply(status="failed")
-            structured = _wire_structured_args(outcome.message)
+                return EgressModelReply(
+                    status="failed", served_model=outcome.served_model
+                )
+            # Older V2 journal entries only contain the forced tool call.
+            structured = outcome.structured
+            if structured is None:
+                structured = _wire_structured_args(outcome.message)
             if structured is not None:
                 return EgressModelReply(
                     status="completed",
                     structured=structured,
-                    served_model=getattr(outcome, "model", None),
+                    served_model=outcome.served_model,
                 )
             return EgressModelReply(
                 status="completed",
                 content=_wire_message_text(outcome.message),
-                served_model=getattr(outcome, "model", None),
+                served_model=outcome.served_model,
             )
 
         return invoke
@@ -1444,15 +1352,6 @@ class GatewayRuntime:
             )
         role = AgentRole(request.role)
         tools = await assemble_toolset(role, context.config)
-        if Configuration.from_runnable_config(context.config).enable_async_research and request.tool_name in {
-            "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "SendMessage",
-        }:
-            from open_deep_research.sandbox.internal_api import TeamBridgeRequest
-            result = await self.internal.post("/internal/sandbox/team", self.internal.signed(
-                TeamBridgeRequest, run_id=request.run_id, task_id=request.task_id,
-                fence_token=context.fence_token, action="tool", payload=request.model_dump(mode="json"),
-            ))
-            return GatewayToolOutcomeV1.model_validate(result)
         tools_by_name = {tool.name: tool for tool in tools}
         tool = tools_by_name.get(request.tool_name)
         if tool is None:
@@ -2132,234 +2031,8 @@ class GatewayRuntime:
             raise ValueError(f"sandbox_gateway_unknown_model_role:{role}")
         return str(mapping[role][0]), int(mapping[role][1])
 
-    @staticmethod
-    def _usage(message: Any) -> dict[str, int]:
-        usage = getattr(message, "usage_metadata", None) or {}
-        response_usage = message.response_metadata.get("token_usage", {})
-        return {
-            "input_tokens": int(usage.get("input_tokens", response_usage.get("prompt_tokens", 0)) or 0),
-            "output_tokens": int(usage.get("output_tokens", response_usage.get("completion_tokens", 0)) or 0),
-        }
 
-    async def invoke_model_operation(
-        self,
-        request: GatewayModelRequestV1,
-        context: GatewayRunContext,
-    ) -> GatewayModelOutcomeV1:
-        """Serialize duplicate logical operations before consulting the journal."""
-        key = (request.run_id, request.logical_operation_id)
-        lock = self.operation_locks.setdefault(key, asyncio.Lock())
-        async with lock:
-            return await self._invoke_model_operation_locked(request, context)
 
-    async def _invoke_model_operation_locked(
-        self,
-        request: GatewayModelRequestV1,
-        context: GatewayRunContext,
-    ) -> GatewayModelOutcomeV1:
-        """Execute or recover one idempotent logical model operation."""
-        from langchain_core.messages import AIMessage, message_to_dict, messages_from_dict
-        from open_deep_research.models.fallback import ModelErrorKind, classify_model_error, invoke_with_model_fallback
-        from open_deep_research.models.resolution import build_model_config, get_configurable_model_template
-        from open_deep_research.observability import apply_helicone_config, invoke_model_with_retry_observability
-        lookup = self.internal.signed(
-            OperationGetRequest,
-            run_id=request.run_id,
-            fence_token=context.fence_token,
-            logical_operation_id=request.logical_operation_id,
-        )
-        existing = await self.internal.post("/internal/sandbox/operations/get", lookup)
-        prior_attempt_count = 0
-        if existing.get("found"):
-            operation = existing["operation"]
-            prior_attempt_count = len(operation.get("physical_attempts") or [])
-            if operation.get("status") == "completed" and operation.get("outcome"):
-                return GatewayModelOutcomeV1.model_validate(operation["outcome"])
-            if operation.get("status") == "uncertain" and operation.get("outcome"):
-                return GatewayModelOutcomeV1.model_validate(operation["outcome"])
-            if operation.get("status") == "failed" and operation.get("outcome"):
-                failed = GatewayModelOutcomeV1.model_validate(operation["outcome"])
-                if failed.error_type not in {
-                    ModelErrorKind.RATE_LIMITED.value,
-                    ModelErrorKind.TRANSIENT.value,
-                    ModelErrorKind.MODEL_UNAVAILABLE.value,
-                }:
-                    return failed
-            if operation.get("status") == "dispatched":
-                return GatewayModelOutcomeV1(
-                    logical_operation_id=request.logical_operation_id,
-                    physical_attempt_id=str(operation.get("physical_attempt_id") or "unknown"),
-                    status="uncertain",
-                    error_type="model_operation_uncertain",
-                    error_message="A prior physical dispatch has no terminal outcome.",
-                )
-        configuration = Configuration.from_runnable_config(context.config)
-        primary_model, max_tokens = self._role_settings(configuration, request.role)
-        if request.role == "egress_classifier" and request.max_output_tokens is not None:
-            max_tokens = min(max_tokens, request.max_output_tokens)
-        messages = messages_from_dict(request.messages)
-        fallback_events: list[dict[str, Any]] = []
-        # Last candidate the fallback chain attempted; on success this is the
-        # model that actually served the call and is echoed for usage backfill.
-        selected_model: list[str] = []
-        budget = RemoteBudgetGate(
-            internal=self.internal,
-            run_id=request.run_id,
-            task_id=request.task_id,
-            fence_token=context.fence_token,
-            stage=request.stage,
-            logical_operation_id=request.logical_operation_id,
-            initial_attempt_count=prior_attempt_count,
-            agent_role=request.role,
-        )
-
-        async def call(model_id: str, call_messages: list[Any]) -> AIMessage:
-            selected_model.clear()
-            selected_model.append(model_id)
-            fake_provider = os.getenv(
-                "SANDBOX_GATEWAY_FAKE_PROVIDER", "false"
-            ).lower() in {"1", "true", "yes", "on"}
-            if fake_provider:
-                from open_deep_research.sandbox.fake_provider import (
-                    DeterministicGatewayModel,
-                )
-
-                model = DeterministicGatewayModel(role=request.role)
-            else:
-                model = get_configurable_model_template()
-            if request.tools and hasattr(model, "bind_tools"):
-                model = model.bind_tools(
-                    request.tools,
-                    tool_choice=request.tool_choice,
-                )
-            if request.model_kwargs and hasattr(model, "bind"):
-                model = model.bind(**request.model_kwargs)
-            model_config = (
-                {}
-                if fake_provider
-                else apply_helicone_config(
-                    build_model_config(
-                        model_id,
-                        max_tokens,
-                        context.config,
-                        role=request.role,
-                        temperature=(request.temperature if request.role == "egress_classifier" else
-                            configuration.quality_evaluation_temperature
-                            if request.role
-                            in {"quality_evaluation", "quality_evaluator"}
-                            else (
-                                configuration.report_review_temperature
-                                if request.role
-                                in {"report_review", "report_reviewer", "report_revisor"}
-                                else None
-                            )
-                        ),
-                    ),
-                    context.config,
-                    span_name=f"gateway.{request.role}.model",
-                    agent_role=request.role,
-                )
-            )
-            if hasattr(model, "with_config"):
-                model = model.with_config(model_config)
-            response = await invoke_model_with_retry_observability(
-                model,
-                call_messages,
-                context.config,
-                span_name=f"gateway.{request.role}.model",
-                agent_role=request.role,
-                model_name=model_id,
-                stage=request.stage,
-                attributes={"gateway": True, "logical_operation_id": request.logical_operation_id},
-                budget_gate=budget,
-            )
-            if not isinstance(response, AIMessage):
-                raise RuntimeError("sandbox_gateway_provider_returned_non_ai_message")
-            return response
-
-        try:
-            response = await invoke_with_model_fallback(
-                call,
-                messages,
-                primary_model=primary_model,
-                model_fallbacks=configuration.model_fallbacks,
-                role=request.role,
-                config=context.config,
-                on_fallback=lambda event: fallback_events.append(dict(event)),
-            )
-            usage = self._usage(response)
-            outcome = GatewayModelOutcomeV1(
-                logical_operation_id=request.logical_operation_id,
-                physical_attempt_id=budget.last_physical_attempt_id,
-                status="completed",
-                message=message_to_dict(response),
-                usage=usage,
-                fallback_events=fallback_events,
-                role=request.role,
-                model=selected_model[-1] if selected_model else None,
-                provider_ttft_ms=(
-                    float(response.response_metadata["provider_ttft_ms"])
-                    if response.response_metadata.get("provider_ttft_ms") is not None
-                    else None
-                ),
-            )
-            transition = self.internal.signed(
-                OperationTransitionRequest,
-                run_id=request.run_id,
-                fence_token=context.fence_token,
-                logical_operation_id=request.logical_operation_id,
-                status="completed",
-                outcome=outcome.model_dump(mode="json"),
-                error_type=None,
-            )
-            await self.internal.post("/internal/sandbox/operations/transition", transition)
-            return outcome
-        except Exception as exc:
-            kind = classify_model_error(exc, primary_model)
-            uncertain = kind in {ModelErrorKind.CANCELLED, ModelErrorKind.UNKNOWN}
-            logger.warning(
-                "Gateway provider operation failed run_id=%s operation_id=%s "
-                "error_type=%s exception_type=%s",
-                request.run_id,
-                request.logical_operation_id,
-                kind.value,
-                type(exc).__name__,
-            )
-            error_detail = " ".join(
-                part
-                for part in (
-                    type(exc).__name__,
-                    str(exc)[:200],
-                )
-                if part
-            ).strip()
-            outcome = GatewayModelOutcomeV1(
-                logical_operation_id=request.logical_operation_id,
-                physical_attempt_id=budget.last_physical_attempt_id or "unreserved",
-                status="uncertain" if uncertain else "failed",
-                usage=self._failure_usage(exc),
-                fallback_events=fallback_events,
-                role=request.role,
-                model=selected_model[-1] if selected_model else None,
-                error_type=kind.value,
-                error_message=(
-                    f"Provider operation failed. {error_detail}"[:400]
-                    if error_detail
-                    else "Provider operation failed."
-                ),
-            )
-            transition = self.internal.signed(
-                OperationTransitionRequest,
-                run_id=request.run_id,
-                fence_token=context.fence_token,
-                logical_operation_id=request.logical_operation_id,
-                status="uncertain" if uncertain else "failed",
-                outcome=outcome.model_dump(mode="json"),
-                error_type=kind.value,
-            )
-            with suppress(httpx.HTTPError, ValueError, KeyError):
-                await self.internal.post("/internal/sandbox/operations/transition", transition)
-            return outcome
 
     async def invoke_model_operation_v2(
         self,
@@ -2646,42 +2319,6 @@ def create_gateway_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"status": "unregistered"}
 
-    @app.post("/v1/models/invoke", response_model=GatewayModelOutcomeV1)
-    async def invoke_model(
-        request: GatewayModelRequestV1,
-        authorization: str = Header(default="", alias="Authorization"),
-        timestamp: float = Header(alias="X-Sandbox-Timestamp"),
-        nonce: str = Header(alias="X-Sandbox-Nonce"),
-        service_signature: str = Header(
-            default="",
-            alias="X-Sandbox-Service-Signature",
-        ),
-        fence_token: int | None = Header(
-            default=None,
-            alias="X-Sandbox-Fence-Token",
-        ),
-    ) -> GatewayModelOutcomeV1:
-        try:
-            if authorization.startswith("Bearer "):
-                _claims, context = runtime.authorize_task(
-                    request,
-                    authorization=authorization,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                )
-            else:
-                if fence_token is None or not service_signature:
-                    raise ValueError("sandbox_model_auth_missing")
-                context = runtime.authorize_api_model(
-                    request,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                    fence_token=fence_token,
-                    signature=service_signature,
-                )
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        return await runtime.invoke_model_operation(request, context)
 
     @app.post("/v2/models/lookup", response_model=GatewayModelOutcomeV2 | None)
     @app.post("/v2/models/complete", response_model=GatewayModelOutcomeV2)
@@ -2725,94 +2362,7 @@ def create_gateway_app(
             return await runtime.lookup_model_operation_v2(request, context)
         return await runtime.invoke_model_operation_v2(request, context)
 
-    @app.post("/v1/models/stream")
-    async def stream_model(
-        request: GatewayModelRequestV1,
-        authorization: str = Header(default="", alias="Authorization"),
-        timestamp: float = Header(alias="X-Sandbox-Timestamp"),
-        nonce: str = Header(alias="X-Sandbox-Nonce"),
-        service_signature: str = Header(
-            default="",
-            alias="X-Sandbox-Service-Signature",
-        ),
-        fence_token: int | None = Header(
-            default=None,
-            alias="X-Sandbox-Fence-Token",
-        ),
-    ) -> StreamingResponse:
-        try:
-            if authorization.startswith("Bearer "):
-                _claims, context = runtime.authorize_task(
-                    request,
-                    authorization=authorization,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                )
-            else:
-                if fence_token is None or not service_signature:
-                    raise ValueError("sandbox_model_auth_missing")
-                context = runtime.authorize_api_model(
-                    request,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                    fence_token=fence_token,
-                    signature=service_signature,
-                )
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
 
-        async def events():
-            yield json.dumps({"type": "started"}, separators=(",", ":")) + "\n"
-            outcome = await runtime.invoke_model_operation(request, context)
-            yield json.dumps(
-                {
-                    "type": "result",
-                    "outcome": outcome.model_dump(mode="json"),
-                },
-                separators=(",", ":"),
-            ) + "\n"
-
-        return StreamingResponse(events(), media_type="application/x-ndjson")
-
-    @app.post(
-        "/v1/models/lookup",
-        response_model=GatewayOperationLookupOutcomeV1,
-    )
-    async def lookup_model(
-        request: GatewayOperationLookupRequestV1,
-        authorization: str = Header(default="", alias="Authorization"),
-        timestamp: float = Header(alias="X-Sandbox-Timestamp"),
-        nonce: str = Header(alias="X-Sandbox-Nonce"),
-        service_signature: str = Header(
-            default="",
-            alias="X-Sandbox-Service-Signature",
-        ),
-        fence_token: int | None = Header(
-            default=None,
-            alias="X-Sandbox-Fence-Token",
-        ),
-    ) -> GatewayOperationLookupOutcomeV1:
-        try:
-            if authorization.startswith("Bearer "):
-                _claims, context = runtime.authorize_task(
-                    request,
-                    authorization=authorization,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                )
-            else:
-                if fence_token is None or not service_signature:
-                    raise ValueError("sandbox_model_auth_missing")
-                context = runtime.authorize_api_model(
-                    request,
-                    timestamp=timestamp,
-                    nonce=nonce,
-                    fence_token=fence_token,
-                    signature=service_signature,
-                )
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        return await runtime.lookup_model_operation(request, context)
 
     @app.post(
         "/v1/tools/catalog",
@@ -2834,27 +2384,6 @@ def create_gateway_app(
         except ValueError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return await runtime.tool_catalog(request, context)
-
-    @app.post("/v1/team")
-    async def team_input(
-        request: TeamWorkerRequest,
-        authorization: str = Header(default="", alias="Authorization"),
-        timestamp: float = Header(alias="X-Sandbox-Timestamp"),
-        nonce: str = Header(alias="X-Sandbox-Nonce"),
-    ) -> dict[str, Any]:
-        try:
-            _claims, context = runtime.authorize_task(
-                request, authorization=authorization, timestamp=timestamp, nonce=nonce,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        if request.action not in {"input", "checkpoint"}:
-            raise HTTPException(status_code=400, detail="unsupported_worker_team_action")
-        from open_deep_research.sandbox.internal_api import TeamBridgeRequest
-        return await runtime.internal.post("/internal/sandbox/team", runtime.internal.signed(
-            TeamBridgeRequest, run_id=request.run_id, task_id=request.task_id,
-            fence_token=context.fence_token, action=request.action, payload=request.payload,
-        ))
 
     @app.post("/v1/tools/call", response_model=GatewayToolOutcomeV1)
     async def invoke_tool(

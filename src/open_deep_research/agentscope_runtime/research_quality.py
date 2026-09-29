@@ -1,6 +1,7 @@
 """AgentScope model adapter for the existing deterministic quality gates."""
 
 import json
+from agentscope.message import SystemMsg, UserMsg
 
 from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
 from open_deep_research.evidence import source_scoped_evidence_records
@@ -33,17 +34,14 @@ class NativeResearchQuality:
         protocol_validator=None,
     ):
         cfg = Configuration.from_runnable_config(config)
-        prompt = (
-            system_prompt
-            + "\nEvaluate this JSON research payload:\n"
-            + json.dumps(payload, ensure_ascii=False)
-        )
+        messages = [SystemMsg("quality_rules", system_prompt),
+                    UserMsg("research_evidence", "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False))]
         errors = []
         for attempt in range(max(1, cfg.max_structured_output_retries)):
             from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
             try:
                 result = await self.models.structured(
-                    "quality_evaluation", prompt, schema, {}
+                    "quality_evaluation", "", schema, {}, messages=messages
                 )
             except ModelOutputProtocolError as exc:
                 # Gateway already exhausted format repair. Let the domain's
@@ -60,10 +58,7 @@ class NativeResearchQuality:
                 result.protocol_errors = list(dict.fromkeys(errors))
                 return result
             errors.extend(current)
-            prompt += (
-                "\nCorrect these protocol errors and return a replacement JSON object:\n"
-                + json.dumps(current)
-            )
+            messages.append(UserMsg("protocol_feedback", "Correct these protocol errors and return a replacement JSON object:\n" + json.dumps(current)))
         raise QualityProtocolError(list(dict.fromkeys(errors)))
 
     async def batch(self, assignment, contract, rows, evidence):

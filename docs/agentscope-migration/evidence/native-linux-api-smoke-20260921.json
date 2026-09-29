@@ -1,0 +1,22 @@
+{
+  "image_id": "sha256:52f76a671963a372d0cdc4a8e72e719225c164579ac6bf65a71cb02a155b686c",
+  "health_status": 200,
+  "readiness_status": 200,
+  "readiness_components": {
+    "server": "ok",
+    "runs_dir": "ok",
+    "trace_store": "ok",
+    "iam_database": "disabled",
+    "sandbox": "disabled",
+    "litellm": "disabled",
+    "search": "disabled"
+  },
+  "runs_status": 200,
+  "openapi_status": 200,
+  "capabilities_status": 200,
+  "run_count": 0,
+  "schema_paths": 125,
+  "python": "3.14.7",
+  "scope": "Real Linux native API startup/readiness/run listing/capabilities/schema; no external models or browser research.",
+  "container_removed": true
+}

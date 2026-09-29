@@ -1,6 +1,46 @@
 # 07 工作进度台账
 
-[目录](README.md) · 最后更新：2026-09-20。**本页是状态和实际工时的唯一维护入口。**
+[目录](README.md) · 最后更新：2026-09-21。**本页是状态和实际工时的唯一维护入口。**
+
+## 质量、评估轨迹与出网能力补齐（2026-09-21）
+
+继续迁移业务测试并修复实际缺口：评估快照识别原生工具调用/结果块并读取 SQL 持久状态，保留脱敏参数与结果状态；groundedness/citation_accuracy 复用同一份证据判定，减少重复 Judge 调用。原生质量规则与研究 JSON 使用独立 system/user 消息；任务认领恢复唯一 ordinal 的哈希修正、最多三个事实需求及单父维度约束，并在模型 schema 中展示有效 ID。出网审查意图仅来自有长度上限的用户消息；外部提取器单独检查 external.extract 授权，普通网页读取许可不外溢。
+
+质量/评估联合 **224 passed**，出网/OAuth/凭据 **34 passed**，工具模式 **47 passed**，出网与 API 安全 **78 passed**（批次重叠）。共享业务断言继续保留，另退出 3 个旧查询/工具包装专用测试文件；全量收集已到 **1908 collected / 30 errors**。尚未全量运行通过，本轮新增运行时改动也尚未重建完整部署/浏览器验收，整体仍 **67/81**。见 [实现与证据](implementation/native-quality-egress-20260921.md)。
+
+## 业务回归迁移与 Linux 原生镜像验证（2026-09-21）
+
+继续保留业务断言迁移测试：报告 **95 passed**、模型解析/共享熔断/历史事件 **53 passed**、企业资料 **24 passed**、来源排除/Run Key 回退范围 **11 passed**。退出 17 个已删除旧循环、旧模型适配或旧 MCP 客户端专用测试文件，并记录对应原生覆盖范围。全量收集从本批起始 **1471 collected / 75 errors** 推进至 **1654 collected / 45 errors**，尚不能登记全量测试通过。
+
+API 原生镜像已构建。真实 Linux 容器发现默认追踪库落在不可写目录、就绪返回 503，已将默认 TRACE_STORE_PATH 修正为可写的 `/data/runs/traces.sqlite3`；修复后 health/ready、运行列表、能力与 OpenAPI 均为 200，镜像未安装 LangChain/LangGraph，专用容器已回收。本轮不含真实模型、完整认证或浏览器报告交付，整体仍 **67/81**。见 [迁移及容器验证记录](implementation/native-tests-linux-20260921.md)。
+
+## 源码与基础依赖退出 LangChain/LangGraph（2026-09-21）
+
+业务源码的 LangChain 与旧引擎导入均已归零，另删除 11 个旧模型/回调/沙箱模型模块；移除 legacy-bridge 和两个镜像中的桥接安装项，锁文件退出 LangChain/LangGraph 及相关 11 个包。独立 `.venv-native-verify` 成功安装 **171 个基础包**，确认无 LangChain/LangGraph。认证邮件模块缺失的 aiosmtplib 已补为显式依赖。
+
+记忆策略、独立 Judge 和质量门禁只通过原生模型边界执行；历史 Query 回放及消息反序列化入口退出，原始历史数据契约保留。迁移测试补齐了原生记忆的分类提示/缺失画像指标，以及 Native Msg 的覆盖契约提取；公共发现模型的共享 DTO 在全模块导入检查中补回。原生边界 **130 passed**，记忆/Judge **86 passed**，独立环境联合 **149 passed**，来源与契约专项 **5 passed**（批次有重叠），Ruff F 与静态全项检查通过。
+
+全量旧测试仍需迁移：首次收集为 **1344 collected / 78 errors**，其中共享 DTO、缺失依赖及部分入口测试已修复，其余主要依赖已删除框架实现。该结果不算完整测试通过；完整部署/浏览器 E2E 也未重验，整体保持 **67/81**。见 [本批实现、验证与剩余范围](implementation/native-model-retirement-20260921.md)。
+
+## QueryEngine 与旧工具执行代码物理清退（2026-09-21）
+
+已删除 QueryEngine/ResearcherQueryEngine、手写查询循环、旧 Supervisor/团队工具、文件任务池及旧 Web/MCP 包装，共 **112 个源码文件**（另于前批删除 11 个 HTTP 宿主模块）。报告写作/评审/修订统一使用原生端口，删除旧模型分支和逐字段字符截断；Gateway 退出旧模型 V1 与旧团队 RPC。补齐原生 Researcher 的领域技能指导，完整来源限制继续由治理与覆盖契约负责。
+
+最终原生联合 **236 passed**，Gateway 专项 **71 passed**，报告预算与评估专项 **51 passed**（批次重叠）；stdio/HTTP/SSE MCP 及报告格式/恢复验证包含在联合批次中。本机 MCP 夹具继承 SOCKS 环境导致的两项失败已通过仅隔离夹具代理修正。旧引擎导入为 **0**，静态源码模块链接无缺失；剩余 **33 处 LangChain 导入**仍需收口，旧框架专用测试、依赖和完整部署/浏览器 E2E 尚未完成，整体保持 **67/81**。详见 [清退清单与验证边界](implementation/query-engine-retirement-20260921.md)。
+
+## 默认 HTTP 入口与原生生命周期清退推进（2026-09-21）
+
+正式 `server:app` 已只装配 AgentScope NativeRuns，`RESEARCH_ENGINE` 默认且仅支持 native；删除原 `api_host` 的 11 个模块。原生删除与保留策略接入 SQL 租约、团队/框架会话、资料引用、发布占用及工件清理；历史归档保持只读。审批改由原生 SQL 所有权和 fence 校验，补回原生运行的请求 ID 持久化。静态盘点仍有 **72 处 LangChain、11 处旧引擎导入**，旧循环与模型/工具桥接尚未物理清退。
+
+最终联合 **92 passed**；真实 PostgreSQL 团队与框架记录清理 **1 passed**；隔离宿主和正式应用入口的真实 HTTP/SSE/审批/重启/删除进程测试 **2 passed**。原有 **170/170** 方法及路径保留，另有 5 个原生接口；独立进程导入正式入口不加载 LangChain/旧引擎。测试进程和专用数据库容器已回收。真实模型/Gateway/浏览器的新版联合验证与旧源码清退仍待继续，整体保持 **67/81**。见 [实现、测试迁移与剩余边界](implementation/native-server-retirement-20260921.md)。
+
+## 旧入口清退前的能力补齐（2026-09-21）
+
+继续推进移除 QueryEngine 的完整目标。当前源码盘点仍有 **72 处 LangChain 导入、13 处旧引擎导入**；默认 HTTP 宿主仍装配旧引擎，不能将原生路由优先匹配视作清退完成。
+
+本轮已将 LangSmith 研究与评分入口迁到 NativeRuns/原生 Judge，声明独立可选依赖；从旧宿主抽取共享限流策略，补齐原生创建频率、SQL 非终态并发计数以及研究/发布 SSE 连接限制。并发创建在单 Worker 内串行准入，等待审批的运行不会因为执行 Task 已结束而被漏计；幂等重试复用原运行。原生启动改为扫描 SQL 中已释放租约的中断运行及已持久化审批，保留有效租约、人工等待和未知调用隔离。
+
+最终联合 **66 passed**，旧接口兼容 **23 passed**；另有真实 Uvicorn HTTP/SSE 与进程停止、重启恢复 **1 passed**。两个验证进程均已退出，未启动 Docker 或前端。上述测试使用隔离 SQLite 和确定性研究阶段，不替代真实模型、PostgreSQL、浏览器及完整默认入口清退验收。T076/T077/T079/T080/T081 继续进行，整体仍 **67/81**。见 [实现与验证记录](implementation/native-retirement-prerequisites-20260921.md)。
 
 ## 来源契约、资料研究与四来源交互修复完成（2026-09-20）
 

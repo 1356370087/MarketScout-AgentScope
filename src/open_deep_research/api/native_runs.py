@@ -17,7 +17,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from agentscope.message import AssistantMsg, UserMsg
-from sqlalchemy import select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from open_deep_research.agentscope_runtime.recovery import RecoverySession
@@ -29,6 +29,7 @@ from open_deep_research.agentscope_runtime.recovery_store import (
 )
 from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.api.history import HistoricalRunReader
+from open_deep_research.api.admission import ApiAdmission
 from open_deep_research.api.projections import _stable_output
 from open_deep_research.events.public import PublicEvent, project_public_events
 from open_deep_research.security.inputs import (
@@ -61,13 +62,19 @@ class NativeRuns:
     ``prepare_config(request, principal)`` performs source and live IAM checks.
     """
 
-    def __init__(self, store, pipeline_factory, prepare_config, *, runs_dir=None):
+    def __init__(self, store, pipeline_factory, prepare_config, *, runs_dir=None, admission=None):
         self.store = store
         self.pipeline_factory = pipeline_factory
         self.prepare_config = prepare_config
         self.tasks = {}
         self.closed = False
         self.runs_dir = Path(runs_dir) if runs_dir is not None else None
+        self.admission = admission or ApiAdmission()
+        # The supported single-worker deployment serializes admission through
+        # the durable insert; simultaneous requests cannot overbook one slot.
+        self.creation_lock = asyncio.Lock()
+        from open_deep_research.api.retention import NativeRunRetention
+        self.retention = NativeRunRetention(self)
 
     def history(self, run_id, owner):
         if self.runs_dir is None:
@@ -98,6 +105,10 @@ class NativeRuns:
         await self.start(run_id, owner)
 
     async def create(self, request, principal, *, idempotency_key=None):
+        async with self.creation_lock:
+            return await self._create(request, principal, idempotency_key=idempotency_key)
+
+    async def _create(self, request, principal, *, idempotency_key=None):
         if self.closed:
             raise RecoveryConflict("runtime_shutting_down")
         validate_http_configurable(request.configurable)
@@ -127,7 +138,22 @@ class NativeRuns:
                 with suppress(FenceLost):
                     await self.start(run_id, owner)
             return run_id
+        from open_deep_research.configuration import Configuration
+
+        # Admission is deployment policy, not a client-overridable run option.
+        cfg = Configuration.from_runnable_config(None)
+        async with self.store.engine.connect() as connection:
+            active = await connection.scalar(select(func.count()).select_from(self.store.runs).where(
+                self.store.runs.c.user_id == owner,
+                self.store.runs.c.snapshot["status"].as_string().not_in({"completed", "failed", "cancelled"}),
+            ))
+        self.admission.enforce_creation(principal, cfg, active)
         prepared = await self.prepare_config(request, principal)
+        from open_deep_research.logging_config import current_request_id
+        prepared["metadata"] = {
+            **request.metadata, **prepared.get("metadata", {}),
+            "request_id": current_request_id(),
+        }
         config = RunConfig.compile(prepared)
         messages = [
             (
@@ -152,6 +178,7 @@ class NativeRuns:
                     "evaluation_capture": prepared.get("evaluation_capture") is True,
                     "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
+                    "request_metadata": {**request.metadata, "request_id": current_request_id()},
                     "identity": {
                         "session_id": principal.session_id,
                         "authz_version": principal.authz_version,
@@ -180,7 +207,7 @@ class NativeRuns:
             await self.start(run_id, owner)
         return run_id
 
-    async def start(self, run_id, owner):
+    async def start(self, run_id, owner, *, automatic=False):
         if self.closed:
             raise RecoveryConflict("runtime_shutting_down")
         state, _ = await self.store.load(run_id, owner)
@@ -188,8 +215,11 @@ class NativeRuns:
             raise RecoveryConflict("run_not_recoverable")
         previous = self.tasks.get(run_id)
         if previous is not None and not previous.done():
-            return
+            return False
         recovery = await RecoverySession.open(self.store, run_id, owner)
+        if automatic and recovery.snapshot.status not in {"ready", "running", "waiting"}:
+            await recovery.close()
+            return False
         task = asyncio.create_task(self._execute(recovery))
         self.tasks[run_id] = task
 
@@ -203,6 +233,40 @@ class NativeRuns:
                 )
 
         task.add_done_callback(completed)
+        return True
+
+    async def recover_interrupted(self):
+        """Restart unowned native work and acknowledged decisions after shutdown.
+
+        Waiting without an answer and terminal failures require explicit user
+        action. RecoverySession keeps unknown model/tool outcomes quarantined;
+        discovery never overrides those operation receipts or another lease.
+        """
+        if self.closed:
+            return 0
+        runs, decisions = self.store.runs, self.store.decisions
+        async with self.store.engine.connect() as connection:
+            rows = (await connection.execute(select(runs.c.run_id, runs.c.user_id).where(
+                runs.c.expires <= self.store._clock(connection),
+                or_(
+                    runs.c.snapshot["status"].as_string().in_({"ready", "running"}),
+                    (runs.c.snapshot["status"].as_string() == "waiting") & exists(
+                        select(1).where(decisions.c.run_id == runs.c.run_id, decisions.c.state == "pending")
+                    ),
+                ),
+            ))).all()
+        started = 0
+        for run_id, owner in rows:
+            try:
+                admitted = await self.start(run_id, owner, automatic=True)
+            except (FenceLost, KeyError):
+                continue
+            except RecoveryConflict as error:
+                if str(error) == "run_not_recoverable":
+                    continue
+                raise
+            started += int(admitted)
+        return started
 
     async def _execute(self, recovery):
         try:

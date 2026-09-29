@@ -1,15 +1,8 @@
-"""RESEARCH_ENGINE=native 的宿主组合：新研究运行改走原生运行时。
+"""AgentScope-only research composition over SQL and governed resource providers.
 
-本模块是旧执行路径的退出缝：默认（legacy）不导入、不改变任何旧行为；
-显式设置 ``RESEARCH_ENGINE=native`` 时，研究运行族路由到 ``NativeRuns``
-（SQL 恢复权威、持久决策、原生事件投影），旧引擎仅继续服务其历史运行。
-
-边界（诚实声明）：
-- 宿主直连提供商模型（sandbox_enabled=false）与宿主区工具可用；
-- AS_NATIVE_RESOURCES=gateway 显式接入生产资源提供器（Run Key、Gateway
-  注册与任务代理），要求 PostgreSQL；host 模式仍拒绝网关区工具；
-- 可信团队 Worker 不执行沙箱本地 shell/file 工具；完整出网审批需联合验收；
-- 默认入口切换属 T080 切换演练决策，本缝只提供机制。
+Host mode supports local tools and direct models; Web/Gateway operations use
+AS_NATIVE_RESOURCES=gateway with PostgreSQL and the sandbox control plane.
+Historical QueryEngine artifacts can be read, but never resumed or executed.
 """
 
 from __future__ import annotations
@@ -26,14 +19,13 @@ from open_deep_research.agentscope_runtime.production import (
 )
 from open_deep_research.tools.base import ToolExecutionZone
 
-LEGACY_ENGINE = "legacy"
 NATIVE_ENGINE = "native"
 
 
 def research_engine() -> str:
-    """部署级引擎选择；默认保持旧引擎，切换由 T080 切换演练决策。"""
-    value = os.environ.get("RESEARCH_ENGINE", LEGACY_ENGINE).strip().lower()
-    if value not in {LEGACY_ENGINE, NATIVE_ENGINE}:
+    """Only AgentScope executes research; archived engines remain read-only."""
+    value = os.environ.get("RESEARCH_ENGINE", NATIVE_ENGINE).strip().lower()
+    if value != NATIVE_ENGINE:
         raise RuntimeError(f"unsupported RESEARCH_ENGINE: {value}")
     return value
 
@@ -43,19 +35,17 @@ def native_engine_enabled() -> bool:
 
 
 def mount_native_research(app, service) -> None:
-    """RESEARCH_ENGINE=native：原生研究路由置于旧路由之前（切换模式语义）。
-
-    先注册者优先匹配：/runs 创建、生命周期、审批、SSE、团队与发布路由由
-    原生运行时服务；旧引擎的历史运行退为只读归档视图（恢复/审批返回
-    409 legacy_checkpoint_read_only）。该模式要求旧在途运行已排空或接受
-    只读化，是 T080 切换演练的部署形态。
-    """
+    """Bind native routes once, replacing a previous lifespan's service binding."""
     from open_deep_research.api.research_router import build_research_router
 
+    previous = getattr(app.state, "native_research_routes", [])
+    app.router.routes[:] = [route for route in app.router.routes if route not in previous]
     before = len(app.router.routes)
     app.include_router(build_research_router(service))
     mounted = app.router.routes[before:]
     app.router.routes[:] = mounted + app.router.routes[:before]
+    app.state.native_research_routes = mounted
+    app.openapi_schema = None
 
 
 def _host_local_zones() -> frozenset[ToolExecutionZone]:
@@ -97,8 +87,7 @@ def _host_resources(runs_dir: Path):
         if cfg.search_api != "none" or cfg.web_pipeline_mode != "legacy":
             raise ValueError(
                 "native_host_requires_gateway_resources: web research tools "
-                "execute in the sandbox gateway; configure RESEARCH_ENGINE=legacy "
-                "until the resource provider is deployed"
+                "execute in the sandbox gateway; configure AS_NATIVE_RESOURCES=gateway"
             )
         owner = recovery.lease.user_id
         run_id = recovery.lease.run_id
@@ -129,7 +118,7 @@ def _host_resources(runs_dir: Path):
     return open_resources
 
 
-async def build_native_research_service(*, runs_dir, database_url=None, resource_provider=None, external_workers=True):
+async def build_native_research_service(*, runs_dir, database_url=None, admission=None, resource_provider=None, external_workers=True):
     """组装 NativeRuns 服务；恢复权威建表，工厂持有宿主资源生命周期。"""
     from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
     from open_deep_research.api.native_runs import NativeRuns
@@ -189,7 +178,7 @@ async def build_native_research_service(*, runs_dir, database_url=None, resource
                 },
             }
 
-    service = NativeRuns(store, factory, prepare_config, runs_dir=runs_dir)
+    service = NativeRuns(store, factory, prepare_config, runs_dir=runs_dir, admission=admission)
 
     reconciliation = None
     if production:

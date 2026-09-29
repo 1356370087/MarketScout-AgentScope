@@ -401,6 +401,8 @@ class NativeEvidenceExtractor:
 
 
 async def _tavily_extract(url: str, client_factory: Callable) -> ExtractedDocument | None:
+    if egress_authorizer.get() is not None and await authorize_url(url, "external.extract", consume=True) != "allow":
+        return None
     try:
         client = client_factory({})
         result = await client.extract(urls=[url], format="markdown")
@@ -431,6 +433,8 @@ async def _firecrawl_extract(url: str, api_key: str | None) -> ExtractedDocument
     import httpx
 
     if not api_key:
+        return None
+    if egress_authorizer.get() is not None and await authorize_url(url, "external.extract", consume=True) != "allow":
         return None
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -935,7 +939,8 @@ def fetch_url_tool(
             "Use fetch_url to inspect one specific URL already surfaced by "
             "web_research or explicitly allowed by the run's source contract."
         ),
-        is_enabled=lambda config: _pipeline_enabled(config),
+        is_enabled=lambda config: network_policy_mode(Configuration.from_runnable_config(config)) != "offline"
+                                  and selection_from_config(config).web_enabled,
     )
 
 
@@ -951,7 +956,7 @@ def _direct_search(url: str):
 
 def _pipeline_enabled(config: dict[str, Any]) -> bool:
     configurable = Configuration.from_runnable_config(config)
-    if configurable.web_pipeline_mode == "legacy":
+    if configurable.web_pipeline_mode != "enforced":
         return False
     return network_policy_mode(configurable) != "offline"
 

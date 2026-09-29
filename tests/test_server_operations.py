@@ -10,22 +10,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from open_deep_research import server
-from open_deep_research.api_host import operations
-from open_deep_research.configuration import Configuration
-from open_deep_research.events.public import RunEventStore
-from open_deep_research.run_context import RunContextStore
-from open_deep_research.tasks.lease import LeaderLeaseManager
+from open_deep_research.api import operations
+from open_deep_research.api.projections import _stable_output
 
 
 @pytest.fixture(autouse=True)
 def _reset_server_lifecycle_state():
-    server._shutting_down.clear()
-    server._sse_shutdown.clear()
-    server._runs.clear()
+    server._lifecycle.shutting_down.clear()
+    server._lifecycle.sse_shutdown.clear()
     yield
-    server._shutting_down.clear()
-    server._sse_shutdown.clear()
-    server._runs.clear()
+    server._lifecycle.shutting_down.clear()
+    server._lifecycle.sse_shutdown.clear()
 
 
 def test_healthz_is_public_and_dependency_free() -> None:
@@ -38,28 +33,34 @@ def test_healthz_is_public_and_dependency_free() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("old_result", [None, {"final_report": "stale partial report"}])
-async def test_terminal_snapshot_reads_report_before_background_consumer_finishes(
-    tmp_path, monkeypatch, old_result,
-):
-    final = {"final_report": "# Completed report", "result": {"status": "success"}}
-    engine = SimpleNamespace(
-        config={"configurable": {"runs_dir": str(tmp_path)}, "metadata": {}},
-        status="completed", final_state=final, started_at=0,
-    )
-    server._runs["terminal-race"] = server.RunRecord(
-        run_id="terminal-race", engine=engine, status="running", result=old_result,
-    )
-    monkeypatch.setattr(server, "_require_record_owner", lambda *args: None)
-    snapshot = await server.get_run("terminal-race", user=None)
-    assert snapshot["status"] == "completed"
-    assert snapshot["output"]["markdown"] == "# Completed report"
-    assert snapshot["output"]["status"] == "success"
-    assert snapshot["result"] == final
+async def test_terminal_snapshot_uses_sql_before_executor_callback_finishes(tmp_path):
+    from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
+    from open_deep_research.api.native_runs import NativeRuns
+
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "runs.db").as_posix())
+    await store.create_tables()
+    service = NativeRuns(store, None, None)
+    consumer = asyncio.create_task(asyncio.Event().wait())
+    service.tasks["terminal-race"] = consumer
+    try:
+        await store.create_run("owner", ResearchSnapshot(
+            run_id="terminal-race", config_fingerprint="fixture", status="completed",
+            final_report="# Completed report",
+            report_product={"final_report": "# Completed report", "result": {"status": "success"}},
+        ))
+        snapshot = await service.snapshot("terminal-race", "owner")
+        assert not consumer.done()
+        assert snapshot["status"] == "completed"
+        assert snapshot["output"]["markdown"] == "# Completed report"
+        assert snapshot["output"]["status"] == "success"
+    finally:
+        await service.aclose()
+        await store.aclose()
 
 
 def test_report_review_output_projection_is_bounded_and_redacted() -> None:
-    output = server._stable_output(
+    output = _stable_output(
         {
             "final_report": "# Final",
             "report_review": {
@@ -113,7 +114,7 @@ async def test_readyz_reports_degraded_search_without_failing(monkeypatch) -> No
         lambda: SimpleNamespace(database_url=""),
     )
 
-    report, ready = await server._readiness_report()
+    report, ready = await server._operational_routes._readiness_report()
 
     assert ready is True
     assert report["status"] == "degraded"
@@ -134,7 +135,7 @@ async def test_readyz_fails_when_runs_directory_is_not_writable(monkeypatch) -> 
         lambda: SimpleNamespace(database_url=""),
     )
 
-    report, ready = await server._readiness_report()
+    report, ready = await server._operational_routes._readiness_report()
 
     assert ready is False
     assert report["status"] == "failed"
@@ -153,121 +154,9 @@ async def test_readyz_immediately_fails_while_shutting_down(monkeypatch) -> None
         "get_iam_settings",
         lambda: SimpleNamespace(database_url=""),
     )
-    server._shutting_down.set()
+    server._lifecycle.shutting_down.set()
 
-    response = await server.readyz()
+    response = await server._operational_routes.readyz()
 
     assert response.status_code == 503
     assert json.loads(response.body)["components"]["server"]["reason"] == "shutting_down"
-
-
-@pytest.mark.asyncio
-async def test_shutdown_drain_persists_trace_and_cancels_run(tmp_path, monkeypatch) -> None:
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text("{}", encoding="utf-8")
-    manifest_updates = []
-    trace_finishes = []
-    public_events = []
-
-    class FakeStore:
-        def __init__(self):
-            self.manifest_path = manifest_path
-
-        def _update_manifest(self, **updates):
-            manifest_updates.append(updates)
-
-    class FakeRecorder:
-        def finish_run(self, run_id, status):
-            trace_finishes.append((run_id, status))
-
-    class FakePublisher:
-        async def publish(self, event_type, **kwargs):
-            public_events.append((event_type, kwargs["payload"]["status"]))
-
-    cancelled = asyncio.Event()
-
-    async def live_task():
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.set()
-
-    config = {
-        "configurable": {"observability_enabled": False},
-        "metadata": {"run_id": "drain-run"},
-    }
-    engine = SimpleNamespace(config=config, context_store=FakeStore())
-    record = server._new_run_record(
-        run_id="drain-run",
-        engine=engine,
-        status="running",
-        config=config,
-    )
-    record.task = asyncio.create_task(live_task())
-    server._remember_run(record, config)
-    from open_deep_research.api_host import run_registry
-    monkeypatch.setattr(run_registry, "get_trace_recorder", lambda _config: FakeRecorder())
-    monkeypatch.setattr(
-        run_registry,
-        "event_publisher_from_config",
-        lambda _config: FakePublisher(),
-    )
-
-    await server._drain_inflight_runs(1)
-
-    assert record.status == "interrupted"
-    assert manifest_updates == [{"status": "interrupted"}]
-    assert trace_finishes == [("drain-run", "interrupted")]
-    assert public_events == [("run.interrupted", "interrupted")]
-    assert record.task.cancelled()
-    assert cancelled.is_set()
-
-
-@pytest.mark.asyncio
-async def test_startup_sweep_interrupts_expired_but_not_live_lease(tmp_path) -> None:
-    config = {
-        "configurable": {
-            "runs_dir": str(tmp_path),
-            "observability_enabled": False,
-        },
-        "metadata": {},
-    }
-    for run_id in ("orphan-run", "active-run"):
-        store = RunContextStore(run_id, runs_dir=str(tmp_path))
-        store.initialize("user-1", {**config, "metadata": {"run_id": run_id}})
-        store._update_manifest(status="running")
-
-    expired = LeaderLeaseManager(
-        runs_dir=str(tmp_path),
-        run_id="orphan-run",
-        owner_id="expired-owner",
-    )
-    expired_lease = await expired.acquire()
-    await expired.release(expected_fence_token=expired_lease.fence_token)
-    active = LeaderLeaseManager(
-        runs_dir=str(tmp_path),
-        run_id="active-run",
-        owner_id="active-owner",
-    )
-    active_lease = await active.acquire()
-
-    configurable = Configuration(
-        runs_dir=str(tmp_path),
-        observability_enabled=False,
-    )
-    try:
-        interrupted = await server._run_recovery_sweep(configurable)
-    finally:
-        await active.release(expected_fence_token=active_lease.fence_token)
-
-    assert interrupted == 1
-    assert RunContextStore(
-        "orphan-run", runs_dir=str(tmp_path)
-    ).load_manifest().status == "interrupted"
-    assert RunContextStore(
-        "active-run", runs_dir=str(tmp_path)
-    ).load_manifest().status == "running"
-    assert [
-        event.type
-        for event in RunEventStore("orphan-run", runs_dir=str(tmp_path)).read()
-    ] == ["run.interrupted"]

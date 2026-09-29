@@ -1,78 +1,43 @@
-"""Researcher tool assembly tests for source-mode evidence boundaries."""
-
-from __future__ import annotations
+"""Source modes filter the actual native researcher's model-visible toolkit."""
 
 import pytest
+from agentscope.message import TextBlock
+from pydantic import BaseModel
 
-from open_deep_research.tools.base import ToolOrigin
-from open_deep_research.tools.governance import AgentRole
-from open_deep_research.tools.registry import assemble_toolset
+from open_deep_research.agentscope_runtime.research_agents import Researcher, ResearchAssignment
+from open_deep_research.tools.base import ToolOrigin, ToolResult, build_tool
+from open_deep_research.tools.search_documents import search_documents
+from tests.as_runtime.test_research_migration import Models, cfg, contract
 
 
-def _config(mode: str, sources: list[dict]) -> dict:
-    return {"metadata": {"source_selection": {"mode": mode, "sources": sources}}}
-
-
-@pytest.mark.asyncio
-async def test_web_mode_preserves_web_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "false")
-    tools = await assemble_toolset(AgentRole.RESEARCHER, _config("web", []))
-    names = {tool.name for tool in tools}
-    assert "web_research" in names
-    assert "fetch_url" in names
-    assert "search_documents" not in names
+class Empty(BaseModel):
+    pass
 
 
 @pytest.mark.asyncio
-async def test_documents_mode_exposes_no_external_evidence_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
+@pytest.mark.parametrize("mode,sources,documents,expected", [
+    ("web", [], False, {"web_research", "fetch_url", "mcp_read", "browser_read"}),
+    ("documents", [{"type": "document", "id": "doc-1"}], True, {"search_documents"}),
+    ("specific", [{"type": "domain", "domain": "example.com"}], False, {"web_research", "fetch_url"}),
+    ("specific", [{"type": "document", "id": "doc-1"}], True, {"search_documents"}),
+])
+async def test_source_modes_filter_native_research_toolkit(monkeypatch, mode, sources, documents, expected):
+    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", str(documents).lower())
     monkeypatch.setenv("DOCUMENT_DATABASE_URL", "postgresql://unused/test")
-    tools = await assemble_toolset(
-        AgentRole.RESEARCHER,
-        _config("documents", [{"type": "document", "id": "doc-1"}]),
-    )
-    assert {tool.name for tool in tools} == {
-        "ResearchComplete",
-        "think_tool",
-        "search_documents",
-    }
-    assert not any(
-        tool.origin in {ToolOrigin.SEARCH, ToolOrigin.MCP, ToolOrigin.BROWSER}
-        for tool in tools
-    )
+    config = cfg()
+    config["metadata"]["source_selection"] = {"mode": mode, "sources": sources}
 
+    async def call(*args):
+        return ToolResult(output="fixture")
 
-@pytest.mark.asyncio
-async def test_specific_mode_keeps_only_bounded_web_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "false")
-    tools = await assemble_toolset(
-        AgentRole.RESEARCHER,
-        _config("specific", [{"type": "domain", "domain": "example.com"}]),
-    )
-    assert {tool.name for tool in tools} == {
-        "ResearchComplete",
-        "think_tool",
-        "web_research",
-        "fetch_url",
-    }
+    async def tools_for(assignment):
+        return [search_documents, *[
+            build_tool(name=name, input_schema=Empty, description=name, origin=origin, call=call)
+            for name, origin in (("web_research", ToolOrigin.SEARCH), ("fetch_url", ToolOrigin.SEARCH),
+                                 ("mcp_read", ToolOrigin.MCP), ("browser_read", ToolOrigin.BROWSER))
+        ]]
 
-
-@pytest.mark.asyncio
-async def test_specific_document_only_mode_does_not_expose_web_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
-    monkeypatch.setenv("DOCUMENT_DATABASE_URL", "postgresql://unused/test")
-    tools = await assemble_toolset(
-        AgentRole.RESEARCHER,
-        _config("specific", [{"type": "document", "id": "doc-1"}]),
-    )
-    assert {tool.name for tool in tools} == {
-        "ResearchComplete",
-        "think_tool",
-        "search_documents",
-    }
+    models = Models({"researcher": [[TextBlock(text="completed")]]})
+    await Researcher(models, lambda: config, tools_for, run_id="run").run(ResearchAssignment(research_topic="q"), contract())
+    names = {item["function"]["name"] for item in models.created[0][2].calls[0]["tools"]}
+    assert names - {"ResearchComplete", "think_tool", "CompressContext"} == expected

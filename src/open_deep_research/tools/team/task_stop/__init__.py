@@ -1,1 +1,0 @@
-"""Task stop tool."""

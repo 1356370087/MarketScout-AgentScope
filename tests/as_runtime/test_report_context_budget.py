@@ -142,3 +142,16 @@ async def test_review_fail_open_does_not_swallow_control_errors(native_port, kin
         await review_report(ReportDraft(markdown="正文"), {"evidence_registry": records()},
                             {"configurable": {"report_review_fail_open": True}})
     assert captured.value is error
+
+
+@pytest.mark.asyncio
+async def test_missing_native_runtime_cannot_become_fail_open_review():
+    from open_deep_research.report.runtime import NativeReportRuntimeMissing
+
+    token = native_report.set(None)
+    try:
+        with pytest.raises(NativeReportRuntimeMissing, match="native_report_runtime_required"):
+            await review_report(ReportDraft(markdown="完整草稿"), {"evidence_registry": records()},
+                                {"configurable": {"report_review_fail_open": True}})
+    finally:
+        native_report.reset(token)

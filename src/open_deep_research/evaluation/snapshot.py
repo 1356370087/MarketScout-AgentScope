@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -89,6 +90,34 @@ def _message_value(message: object, key: str, default: Any = None) -> Any:
     return getattr(message, key, default)
 
 
+def _trace_messages(messages: Sequence[object]):
+    """Project native message blocks and archived wire messages into trace rows."""
+    for message in messages:
+        if hasattr(message, "model_dump"):
+            message = message.model_dump(mode="json")
+        message = _artifact_message_data(message)
+        content = _message_value(message, "content", [])
+        blocks = content if isinstance(content, list) else []
+        native = [block for block in blocks if isinstance(block, Mapping)
+                  and block.get("type") in {"tool_call", "tool_result"}]
+        if not native:
+            yield message
+            continue
+        for block in native:
+            if block["type"] == "tool_call":
+                try:
+                    args = json.loads(block.get("input") or "{}")
+                except (TypeError, ValueError):
+                    args = {}
+                yield {"type": "ai", "tool_calls": [{"id": block.get("id"), "name": block.get("name"),
+                                                       "args": args if isinstance(args, Mapping) else {}}]}
+            else:
+                output = _bounded_json_value(block.get("output", ""))
+                yield {"type": "tool", "name": block.get("name"), "tool_call_id": block.get("id"),
+                       "status": block.get("state"),
+                       "content": output if isinstance(output, str) else json.dumps(output, ensure_ascii=False)}
+
+
 def _is_sensitive_key(key: object) -> bool:
     normalized = str(key).lower()
     return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
@@ -169,7 +198,7 @@ def _project_supervisor_trace(
         return [], []
     calls: list[SupervisorToolCall] = []
     results: list[SupervisorToolResult] = []
-    for message in messages:
+    for message in _trace_messages(messages):
         raw_calls = _message_value(message, "tool_calls", [])
         if isinstance(raw_calls, list):
             for call in raw_calls:
@@ -232,8 +261,7 @@ def _project_researcher_trace(
         messages = artifact.get("researcher_messages", [])
         if not isinstance(messages, list):
             continue
-        for raw_message in messages:
-            message = _artifact_message_data(raw_message)
+        for message in _trace_messages(messages):
             raw_calls = _message_value(message, "tool_calls", [])
             if isinstance(raw_calls, list):
                 for call in raw_calls:
@@ -296,10 +324,15 @@ def build_evaluation_snapshot(
 ) -> EvaluationSnapshot:
     """Project mutable runtime state into the versioned evaluation contract."""
     calls, results = _project_supervisor_trace(state)
-    researcher_calls, researcher_results = _project_researcher_trace(
-        researcher_task_artifacts
-    )
     task_outputs = _unwrap_override(state.get("completed_task_outputs", []))
+    native_artifacts = [
+        {"task_id": task.get("task_id"), "researcher_messages": task["agent_state"].get("context", [])}
+        for task in task_outputs if isinstance(task, Mapping) and isinstance(task.get("agent_state"), Mapping)
+    ] if isinstance(task_outputs, list) else []
+    trace_artifacts = [*(researcher_task_artifacts or []), *native_artifacts]
+    researcher_calls, researcher_results = _project_researcher_trace(
+        trace_artifacts
+    )
     messages = _unwrap_override(state.get("supervisor_messages", []))
     result = state.get("result", {})
     run_metrics = result.get("metrics", {}) if isinstance(result, Mapping) else {}
@@ -334,9 +367,12 @@ def build_evaluation_snapshot(
             availability=ToolTraceAvailability(
                 supervisor_messages_present=bool(messages),
                 completed_task_outputs_present=bool(task_outputs),
-                researcher_tool_names_retained=bool(researcher_task_artifacts),
+                researcher_tool_names_retained=bool(researcher_calls or researcher_results),
             ),
             scope_note=(
+                "Only retained native context is observable; offloaded history is not expanded. "
+                "Tool names, bounded redacted arguments and statuses come from SQL handoffs."
+                if native_artifacts else
                 "Researcher tool names, bounded redacted arguments, and outcome "
                 "statuses were recovered from integrity-checked task artifacts."
                 if researcher_task_artifacts

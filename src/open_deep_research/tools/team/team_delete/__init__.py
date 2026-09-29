@@ -1,1 +1,0 @@
-"""Team delete tool."""

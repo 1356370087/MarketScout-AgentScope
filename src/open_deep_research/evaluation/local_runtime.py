@@ -45,11 +45,8 @@ def evaluation_state(snapshot):
         "coverage_contract": snapshot.coverage_contract,
         "coverage_ledger": snapshot.coverage_ledger,
         "completed_task_outputs": snapshot.findings,
-        "evidence_registry": [
-            record
-            for task in snapshot.findings
-            for record in task.get("evidence_registry", [])
-        ],
+        "supervisor_messages": snapshot.agent_states.get("supervisor", {}).get("context", []),
+        "evidence_registry": [record for task in snapshot.findings for record in task.get("evidence_registry", [])],
         "evaluation_snapshot": product.get("evaluation_snapshot"),
         "coverage_checklist": product.get("coverage_checklist", []),
         "quality_gate": product.get("quality_gate"),

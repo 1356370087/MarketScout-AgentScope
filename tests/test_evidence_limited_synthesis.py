@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from types import SimpleNamespace
+from open_deep_research.report.runtime import AIMessage, HumanMessage
 
 from open_deep_research.quality.contract import build_research_coverage_contract
 from open_deep_research.report import evidence_synthesis
@@ -50,14 +51,9 @@ def _evidence() -> list[dict]:
 async def test_draft_invocation_includes_complete_json_schema(
     monkeypatch,
 ) -> None:
-    from open_deep_research.agents import deep_researcher
 
     captured: dict = {}
 
-    class FakeConfigurableModel:
-        def with_config(self, model_config):
-            captured["model_config"] = model_config
-            return object()
 
     async def fake_invoke(
         _model,
@@ -79,16 +75,11 @@ async def test_draft_invocation_includes_complete_json_schema(
             )
         )
 
-    monkeypatch.setattr(
-        deep_researcher,
-        "configurable_model",
-        FakeConfigurableModel(),
-    )
-    monkeypatch.setattr(
-        evidence_synthesis,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    async def native_invoke(role, messages, cfg, *, schema, **kwargs):
+        response = await fake_invoke(None, messages, cfg, **kwargs)
+        return schema.model_validate_json(response.content)
+
+    monkeypatch.setattr(evidence_synthesis, "require_report_runtime", lambda: SimpleNamespace(invoke=native_invoke))
 
     draft = await evidence_synthesis._invoke_draft(
         {
@@ -461,11 +452,7 @@ async def test_unknown_evidence_id_forces_deterministic_fallback(
 async def test_claim_without_evidence_forces_deterministic_fallback(
     monkeypatch,
 ) -> None:
-    from open_deep_research.agents import deep_researcher
 
-    class FakeConfigurableModel:
-        def with_config(self, _model_config):
-            return object()
 
     async def fake_invoke(
         _model,
@@ -500,16 +487,11 @@ async def test_claim_without_evidence_forces_deterministic_fallback(
     async def grounding_must_not_run(*_args):
         raise AssertionError("invalid draft reached grounding judge")
 
-    monkeypatch.setattr(
-        deep_researcher,
-        "configurable_model",
-        FakeConfigurableModel(),
-    )
-    monkeypatch.setattr(
-        evidence_synthesis,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    async def native_invoke(role, messages, cfg, *, schema, **kwargs):
+        response = await fake_invoke(None, messages, cfg, **kwargs)
+        return schema.model_validate_json(response.content)
+
+    monkeypatch.setattr(evidence_synthesis, "require_report_runtime", lambda: SimpleNamespace(invoke=native_invoke))
     monkeypatch.setattr(
         evidence_synthesis,
         "_invoke_grounding_judge",

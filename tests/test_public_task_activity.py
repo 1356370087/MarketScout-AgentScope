@@ -9,7 +9,10 @@ from open_deep_research.events.task_activity import (
     derive_trace_activity,
     publish_task_activity,
 )
-from open_deep_research.server import _task_activity_iterator
+from open_deep_research.api.stream_host import ApplicationStreams
+
+def _task_activity_iterator(*args, **kwargs):
+    return ApplicationStreams(asyncio.Event())._task_activity_iterator(*args, **kwargs)
 
 
 def _append(store: TaskActivityStore, event_type: str, dedupe_key: str, **overrides):

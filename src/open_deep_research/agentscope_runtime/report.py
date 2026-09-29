@@ -67,6 +67,7 @@ class NativeReportWriter:
                 "research_brief": snapshot.research_brief,
                 "notes": [f.get("compressed_research", "") for f in snapshot.findings],
                 "completed_task_outputs": snapshot.findings,
+                "supervisor_messages": snapshot.agent_states.get("supervisor", {}).get("context", []),
                 "evidence_registry": [
                     e for f in snapshot.findings for e in f.get("evidence_registry", [])
                 ],

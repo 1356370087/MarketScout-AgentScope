@@ -1,7 +1,7 @@
 """Tool governance: permission control, validation, egress policy, and retry.
 
 This module centralizes all cross-cutting concerns for *how* tools are invoked
-by the LangGraph agents in this project:
+by the AgentScope runtime in this project:
 
 * **Origin policy** -- using origin declared on the project ``Tool`` Interface.
 * **Permission control** -- a per-role gate combining a tool-name whitelist with
@@ -22,7 +22,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import sys
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Optional
@@ -30,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 import aiohttp
 
 if TYPE_CHECKING:
-    from langchain_core.messages import ToolMessage
     from open_deep_research.config_types import RuntimeConfig
 else:
     RuntimeConfig = dict[str, Any]
@@ -80,10 +78,6 @@ def get_trace_recorder(config: RuntimeConfig):
     return get_recorder(config)
 
 
-def _legacy_exception(exc: BaseException, module: str, name: str) -> bool:
-    """Recognize already loaded legacy exceptions without importing LangChain."""
-    exception_type = getattr(sys.modules.get(module), name, None)
-    return exception_type is not None and isinstance(exc, exception_type)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,11 +174,10 @@ class ToolError(BaseModel):
     detail: dict[str, Any] = Field(default_factory=dict)
     """Machine-readable context, e.g. ``{"status": 503}`` or ``{"missing": ["queries"]}``."""
 
-    def to_tool_message(self, tool_call_id: str) -> ToolMessage:
+    def to_tool_message(self, tool_call_id: str) -> ToolOutcomeMessage:
         """Render this error as a ``ToolMessage`` whose content is the JSON payload."""
-        from langchain_core.messages import ToolMessage
 
-        return ToolMessage(
+        return ToolOutcomeMessage(
             content=self.model_dump_json(),
             name=self.tool_name,
             tool_call_id=tool_call_id,
@@ -195,7 +188,7 @@ class ToolError(BaseModel):
 class GovernedToolCallResult:
     """Transport message plus the original typed result of one invocation."""
 
-    message: ToolOutcomeMessage | ToolMessage
+    message: ToolOutcomeMessage
     result: Optional[ToolResult[Any]] = None
     error: Optional[ToolError] = None
 
@@ -294,22 +287,11 @@ def classify_retryable_error(exc: BaseException) -> tuple[ToolErrorType, bool]:
     if isinstance(exc, aiohttp.ClientError | ConnectionError | OSError):
         return ToolErrorType.network_error, True
 
-    # 4. Interaction requests (legacy ToolException or the native MCP adapter's
-    # project-owned exception) carry a validated URL for the approval layer;
+    # 4. Interaction requests from the native MCP adapter carry a validated URL for the approval layer;
     # they are never retried in-process.
     if getattr(exc, "interaction_url", None):
         return ToolErrorType.interaction_required, False
 
-    # 5. LangChain ToolException carrying HTTP hints in its message.
-    if _legacy_exception(exc, "langchain_core.tools", "ToolException"):
-        msg = str(exc).lower()
-        if "429" in msg or "rate" in msg:
-            return ToolErrorType.rate_limited, True
-        if "503" in msg or "service unavailable" in msg or "service unavailable" in msg:
-            return ToolErrorType.service_unavailable, True
-        if "timeout" in msg or "timed out" in msg:
-            return ToolErrorType.timeout, True
-        return ToolErrorType.unknown, False
 
     # 6. Recurse into the cause chain (errors wrapped by libraries).
     cause = exc.__cause__ or exc.__context__
@@ -342,8 +324,6 @@ def _classify_http_status(status: Any) -> Optional[tuple[ToolErrorType, bool]]:
 def _is_llm_parse_failure(exc: BaseException) -> bool:
     """Return whether a non-transient schema or parse failure occurred."""
     if isinstance(exc, ValidationError):
-        return True
-    if _legacy_exception(exc, "langchain_core.exceptions", "OutputParserException"):
         return True
     return False
 
@@ -1248,24 +1228,9 @@ async def execute_governed_tool_call_native(
         ), tool_call_id)
 
 
-async def check_egress_domain(*args: Any, **kwargs: Any) -> Optional[ToolMessage]:
-    """Preserve the legacy egress result transport."""
-    from langchain_core.messages import ToolMessage
-
-    message = await check_egress_domain_native(*args, **kwargs)
-    if message is None:
-        return None
-    return ToolMessage(content=message.content, name=message.name, tool_call_id=message.tool_call_id)
 
 
-async def execute_governed_tool_call(*args: Any, **kwargs: Any) -> GovernedToolCallResult:
-    """Preserve the legacy transport while sharing the native governance core."""
-    from langchain_core.messages import ToolMessage
 
-    outcome = await execute_governed_tool_call_native(*args, **kwargs)
-    message = outcome.message
-    return GovernedToolCallResult(
-        message=ToolMessage(content=message.content, name=message.name, tool_call_id=message.tool_call_id),
-        result=outcome.result,
-        error=outcome.error,
-    )
+
+check_egress_domain = check_egress_domain_native
+execute_governed_tool_call = execute_governed_tool_call_native

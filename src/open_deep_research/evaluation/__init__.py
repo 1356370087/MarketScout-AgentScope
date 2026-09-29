@@ -21,7 +21,6 @@ __all__ = [
     "JudgeConfig",
     "MetricStatus",
     "build_evaluation_snapshot",
-    "build_judge_model",
     "invoke_judge_structured",
     "invoke_judge_structured_sync",
     "langsmith_metric",
@@ -33,8 +32,7 @@ def __getattr__(name):
     if name not in {
         "JUDGE_SECURITY_PROTOCOL",
         "JudgeConfig",
-        "build_judge_model",
-        "invoke_judge_structured",
+            "invoke_judge_structured",
         "invoke_judge_structured_sync",
     }:
         raise AttributeError(name)

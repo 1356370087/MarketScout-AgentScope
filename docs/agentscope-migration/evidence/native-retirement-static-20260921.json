@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "check": "all",
+  "passed": true,
+  "findings": [],
+  "scope": "static_only_not_cutover_acceptance"
+}

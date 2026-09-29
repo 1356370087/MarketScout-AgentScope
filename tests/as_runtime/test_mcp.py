@@ -41,6 +41,13 @@ pytestmark = pytest.mark.asyncio
 TESTS_DIR = Path(__file__).parent
 
 
+@pytest.fixture(autouse=True)
+def local_mcp_transports_ignore_shell_proxy(monkeypatch):
+    """Fixture servers run on loopback and must not use the desktop's proxy."""
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def _stdio_connection() -> dict:
     return {
         "transport": "stdio",

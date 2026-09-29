@@ -1,20 +1,15 @@
-"""LiteLLM-backed construction and security protocol for evaluation Judges."""
+"""Native model execution and security protocol for evaluation Judges."""
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import os
 from dataclasses import dataclass, field
 from threading import Thread
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel
-
-if TYPE_CHECKING:
-    from open_deep_research.models.gateway import LiteLLMModelGateway
 
 T = TypeVar("T", bound=BaseModel)
 JudgeProvider = str
@@ -67,63 +62,33 @@ class JudgeConfig:
         )
 
 
-def build_judge_model(config: JudgeConfig) -> LiteLLMModelGateway:
-    """Build the shared ModelGateway with SDK retries disabled."""
-    from open_deep_research.models.gateway import LiteLLMModelGateway
-    from open_deep_research.models.resolution import resolve_compatibility_kwargs
-    if not config.base_url:
-        raise ValueError("LITELLM_BASE_URL is required for evaluation")
-    if not config.api_key:
-        raise ValueError("LITELLM_SERVICE_KEY is required for evaluation")
-    if config.max_retries != 0:
-        raise ValueError("evaluation SDK retries must be zero")
-    compatibility = resolve_compatibility_kwargs(config.model, config.base_url)
-    return LiteLLMModelGateway(
-        base_url=config.base_url,
-        api_key=config.api_key,
-        timeout_seconds=180,
-        extra_body=compatibility.get("extra_body"),
-    )
 
 
 async def invoke_judge_structured(
-    schema: type[T],
-    messages: list[dict[str, Any]],
-    *,
-    operation: str,
+    schema: type[T], messages: list[dict[str, Any]], *, operation: str,
     config: JudgeConfig | None = None,
 ) -> T:
-    """Execute one structured Judge operation through the shared gateway."""
-    from open_deep_research.models.codec import decode_message
-    from open_deep_research.models.gateway import ModelRequest
+    """Run an independent structured evaluation with a native SQL budget ledger."""
+    from uuid import uuid4
+    from agentscope.message import SystemMsg, UserMsg
+    from open_deep_research.agentscope_runtime.storage import runtime_data_dir
+    from open_deep_research.evaluation.session import native_judge_session
 
     resolved = config or JudgeConfig.from_env()
-    gateway = build_judge_model(resolved)
-    encoded = json.dumps(messages, sort_keys=True, ensure_ascii=False, default=str)
-    logical_id = "evaluation:" + hashlib.sha256(
-        f"{operation}:{encoded}".encode()
-    ).hexdigest()
-    try:
-        result = await gateway.complete(
-            ModelRequest(
-                run_id="offline-evaluation",
-                task_id=operation,
-                logical_operation_id=logical_id,
-                role="evaluation",
-                stage="evaluation",
-                model=resolved.model,
-                messages=[decode_message(message) for message in messages],
-                output_schema=schema,
-                max_output_tokens=resolved.max_tokens,
-                temperature=0,
-                trace_metadata={"evaluation_operation": operation},
+    if resolved.max_retries != 0:
+        raise ValueError("evaluation SDK retries must be zero")
+    native_messages = []
+    for message in messages:
+        if message["role"] not in {"system", "user"}:
+            raise ValueError("unsupported_evaluation_message_role")
+        cls = SystemMsg if message["role"] == "system" else UserMsg
+        native_messages.append(cls(message["role"], message["content"]))
+    directory = runtime_data_dir() / "evaluations" / ("single-" + uuid4().hex)
+    async with native_judge_session(directory, judge=resolved) as session:
+        with session.recovery.task("evaluation:" + operation):
+            return await session.models.structured(
+                "quality_evaluation", "", schema, {}, messages=native_messages,
             )
-        )
-    finally:
-        await gateway.aclose()
-    if result.structured is None:
-        raise RuntimeError("evaluation_structured_result_missing")
-    return result.structured
 
 
 def invoke_judge_structured_sync(
@@ -133,7 +98,7 @@ def invoke_judge_structured_sync(
     operation: str,
     config: JudgeConfig | None = None,
 ) -> T:
-    """Bridge synchronous LangSmith evaluator hooks to the async ModelGateway."""
+    """Bridge synchronous evaluators to the governed native Judge."""
     adapter = native_judge.get()
     if adapter is not None:
         return adapter(schema, messages, operation=operation)
@@ -168,7 +133,6 @@ def invoke_judge_structured_sync(
 __all__ = [
     "JUDGE_SECURITY_PROTOCOL",
     "JudgeConfig",
-    "build_judge_model",
     "invoke_judge_structured",
     "invoke_judge_structured_sync",
 ]

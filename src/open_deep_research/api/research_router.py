@@ -6,7 +6,7 @@ import asyncio
 from contextlib import contextmanager
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from fastapi.responses import StreamingResponse
+from open_deep_research.api.admission import LimitedStreamingResponse
 
 from open_deep_research.agentscope_runtime.recovery_store import (
     FenceLost,
@@ -120,6 +120,11 @@ def build_research_router(service):
         with http_errors():
             return await service.cancel(run_id, principal.user_id)
 
+    @router.delete("/runs/{run_id}")
+    async def delete_run(run_id: str, force: bool = False, dry_run: bool = False, principal=control):
+        with http_errors():
+            return await service.retention.delete(run_id, principal, force=force, dry_run=dry_run)
+
     async def stream(run_id, principal, cursor):
         config = Configuration.from_runnable_config(None)
         loop = asyncio.get_running_loop()
@@ -169,20 +174,34 @@ def build_research_router(service):
             raise HTTPException(400, "invalid_event_cursor")
         if cursor > (records[-1].sequence if records else 0):
             raise HTTPException(409, "event_cursor_ahead")
-        return StreamingResponse(
+        token = await service.admission._reserve_sse_connection(
+            principal, Configuration.from_runnable_config(None)
+        )
+        return LimitedStreamingResponse(
             (_sse(event) for event in records if event.sequence > cursor)
             if snapshot.get("read_only")
             else stream(run_id, principal, cursor),
+            admission=service.admission,
+            release_token=token,
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
 
     @router.post("/runs/stream")
     async def create_stream(request: RunRequest, principal=create):
-        with http_errors():
-            run_id = await service.create(request, principal)
-        return StreamingResponse(
+        token = await service.admission._reserve_sse_connection(
+            principal, Configuration.from_runnable_config(None)
+        )
+        try:
+            with http_errors():
+                run_id = await service.create(request, principal)
+        except BaseException:
+            await service.admission.connection_limiter.release(token)
+            raise
+        return LimitedStreamingResponse(
             stream(run_id, principal, 0),
+            admission=service.admission,
+            release_token=token,
             media_type="text/event-stream",
             headers=_sse_headers(),
         )

@@ -697,10 +697,6 @@ def test_daily_command_forwards_dry_run_without_writes(monkeypatch: pytest.Monke
     monkeypatch.setattr("open_deep_research.memory.maintenance.create_memory_store", lambda _config: store)
     monkeypatch.setattr("open_deep_research.memory.maintenance.configure_advanced_store", fake_configure)
     monkeypatch.setattr("open_deep_research.memory.maintenance.maintain_user_memories", fake_maintain)
-    monkeypatch.setattr(
-        "open_deep_research.models.resolution.get_configurable_model_template",
-        lambda **_kwargs: object(),
-    )
     result = asyncio.run(_run_daily(SimpleNamespace(user_id="user-a", dry_run=True), config))
     assert observed["daily"] is True
     assert observed["dry_run"] is True
@@ -846,19 +842,19 @@ def test_per_user_memory_lock_rejects_concurrent_mutation() -> None:
 def test_advanced_recall_uses_latest_user_message_and_skips_legacy_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from langchain_core.messages import AIMessage, HumanMessage
+    from agentscope.message import AssistantMsg, UserMsg
 
-    from open_deep_research.agents import deep_researcher
+    from open_deep_research.agentscope_runtime import memory as native_memory
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
 
     store = FakeStore()
     search_calls: list[dict[str, Any]] = []
 
-    async def search(*_args: Any, **kwargs: Any) -> list[dict[str, Any]]:
-        search_calls.append(kwargs)
+    async def search(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        search_calls.append({"query": args[0], **kwargs})
         return []
 
     store.search = search  # type: ignore[method-assign]
-    monkeypatch.setattr(deep_researcher, "create_memory_store", lambda _config: store)
     runnable_config = {
         "configurable": {
             "enable_memory": True,
@@ -868,14 +864,10 @@ def test_advanced_recall_uses_latest_user_message_and_skips_legacy_by_default(
         },
         "metadata": {"user_id": "user-a", "run_id": "run-recall"},
     }
-    asyncio.run(deep_researcher.memory_recall(
-        {
-            "messages": [
-                HumanMessage(content="old topic"),
-                AIMessage(content="old answer"),
-                HumanMessage(content="latest topic"),
-            ],
-        },
+    asyncio.run(native_memory.ResearchMemory("user-a", None, store_factory=lambda _: store).recall(
+        ResearchSnapshot(run_id="run-recall", config_fingerprint="fixture", messages=[
+            UserMsg("user", "old topic"), AssistantMsg("assistant", "old answer"), UserMsg("user", "latest topic"),
+        ]),
         runnable_config,
     ))
     assert len(search_calls) == 1
@@ -887,9 +879,10 @@ def test_advanced_recall_uses_latest_user_message_and_skips_legacy_by_default(
 def test_recall_reports_missing_profile_when_observations_exist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from langchain_core.messages import HumanMessage
+    from agentscope.message import UserMsg
 
-    from open_deep_research.agents import deep_researcher
+    from open_deep_research.agentscope_runtime import memory as native_memory
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
 
     store = FakeStore([observation("observation")])
     scores: list[tuple[str, Any]] = []
@@ -902,10 +895,9 @@ def test_recall_reports_missing_profile_when_observations_exist(
         def active_span(self) -> FakeSpan:
             return FakeSpan()
 
-    monkeypatch.setattr(deep_researcher, "create_memory_store", lambda _config: store)
-    monkeypatch.setattr(deep_researcher, "get_trace_recorder", lambda _config: FakeRecorder())
-    asyncio.run(deep_researcher.memory_recall(
-        {"messages": [HumanMessage(content="latest topic")]},
+    monkeypatch.setattr(native_memory, "get_trace_recorder", lambda _config: FakeRecorder())
+    asyncio.run(native_memory.ResearchMemory("user-a", None, store_factory=lambda _: store).recall(
+        ResearchSnapshot(run_id="run-profile-warning", config_fingerprint="fixture", messages=[UserMsg("user", "latest topic")]),
         {
             "configurable": {
                 "enable_memory": True,
@@ -922,9 +914,10 @@ def test_recall_reports_missing_profile_when_observations_exist(
 def test_run_end_write_reuses_one_lifecycle_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from langchain_core.messages import HumanMessage
+    from agentscope.message import UserMsg
 
-    from open_deep_research.agents import deep_researcher
+    from open_deep_research.agentscope_runtime import memory as native_memory
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
 
     store = FakeStore()
     candidates = [
@@ -955,11 +948,10 @@ def test_run_end_write_reuses_one_lifecycle_snapshot(
         lock_timeouts.append(timeout)
         yield True
 
-    monkeypatch.setattr(deep_researcher, "extract_memory_candidates", extract)
-    monkeypatch.setattr(deep_researcher, "create_memory_store", lambda _config: store)
-    monkeypatch.setattr(deep_researcher, "memory_user_lock", fake_memory_lock)
-    asyncio.run(deep_researcher.memory_extract_and_write(
-        {"messages": [HumanMessage(content="Remember my preferences")]},
+    monkeypatch.setattr(native_memory, "extract_memory_candidates", extract)
+    monkeypatch.setattr(native_memory, "memory_user_lock", fake_memory_lock)
+    asyncio.run(native_memory.ResearchMemory("user-a", None, store_factory=lambda _: store).write(
+        ResearchSnapshot(run_id="run-write", config_fingerprint="fixture", final_report="Completed report", messages=[UserMsg("user", "Remember my preferences")]),
         {
             "configurable": {
                 "enable_memory": True,

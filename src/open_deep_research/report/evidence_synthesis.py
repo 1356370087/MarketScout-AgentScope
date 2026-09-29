@@ -24,23 +24,11 @@ from open_deep_research.report.recovery import (
 from open_deep_research.security.content import sanitize_report_markdown
 
 from .runtime import (
-    HumanMessage,
-    RunnableConfig,
-    SystemMessage,
-    _evaluate_json,
-    build_model_config,
-    complete_model,
-    count_tokens_approximately,
-    get_configurable_model_template,
-    invoke_model_with_retry_observability,
-    invoke_with_model_fallback,
-    native_report,
-    resolve_model_context_window,
-    response_was_truncated,
+    HumanMessage, RunnableConfig, SystemMessage, count_tokens_approximately,
+    require_report_runtime, resolve_model_context_window,
 )
 from .writing import (
     WRITING_RULES,
-    fit_writing_messages,
     project_evidence,
     writing_messages,
 )
@@ -219,48 +207,12 @@ def _select_evidence_for_budget(
     return selected
 
 
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            str(block.get("text", ""))
-            if isinstance(block, dict)
-            else str(getattr(block, "text", block))
-            for block in content
-        )
-    return str(content)
-
-
-def _parse_json_object(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    fenced = re.fullmatch(
-        r"```(?:json)?\s*(.*?)\s*```",
-        stripped,
-        re.DOTALL,
-    )
-    if fenced:
-        stripped = fenced.group(1).strip()
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        payload = json.loads(stripped[start : end + 1])
-    if not isinstance(payload, dict):
-        raise ValueError("evidence_synthesis_writer_must_return_object")
-    return payload
-
-
 async def _invoke_draft(
     payload: dict[str, Any],
     config: RunnableConfig,
 ) -> EvidenceSynthesisDraft:
     """Invoke the configured report writer without exposing rejected prose."""
     configurable = Configuration.from_runnable_config(config)
-    model_name = configurable.final_report_model
     # Keep the same whole-record budgeting on the restricted recovery path.
     messages = writing_messages(
         _DRAFT_PROMPT, {k: v for k, v in payload.items() if k != "eligible_evidence"},
@@ -268,79 +220,14 @@ async def _invoke_draft(
         guidance="Return exactly this JSON schema: " + json.dumps(EvidenceSynthesisDraft.model_json_schema(), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )
 
-    if native_report.get() is not None:
-        return await native_report.get().invoke("final_report", messages, configurable, span_name="lead.evidence_limited_writer", schema=EvidenceSynthesisDraft)
-    if configurable.model_backend == "litellm":
-        messages, _ = fit_writing_messages(
-            messages, model_name, configurable,
-            output_tokens=configurable.final_report_model_max_tokens,
-        )
-        return await complete_model(
-            messages,
-            config,
-            role="final_report",
-            stage="writing",
-            model=model_name,
-            max_output_tokens=configurable.final_report_model_max_tokens,
-            span_name="lead.evidence_limited_writer",
-            output_schema=EvidenceSynthesisDraft,
-        )
-
-    async def invoke_candidate(candidate_model: str, request_messages: list):
-        request_messages, _ = fit_writing_messages(
-            request_messages, candidate_model, configurable,
-            output_tokens=configurable.final_report_model_max_tokens,
-        )
-        model = get_configurable_model_template().with_config(
-            cast(
-                RunnableConfig,
-                build_model_config(
-                    candidate_model,
-                    configurable.final_report_model_max_tokens,
-                    config,
-                    role="final_report",
-                ),
-            )
-        )
-        return await invoke_model_with_retry_observability(
-            model,
-            request_messages,
-            config,
-            span_name="lead.evidence_limited_writer",
-            agent_role="lead",
-            model_name=candidate_model,
-            stage="writing",
-        )
-
-    response = await invoke_with_model_fallback(
-        invoke_candidate,
-        messages,
-        primary_model=model_name,
-        model_fallbacks=configurable.model_fallbacks,
-        role="final_report",
-        config=config,
-    )
-    if response_was_truncated(response):
-        raise ValueError("evidence_synthesis_writer_truncated")
-    return EvidenceSynthesisDraft.model_validate(
-        _parse_json_object(_content_text(response.content))
-    )
+    return await require_report_runtime().invoke("final_report", messages, configurable, span_name="lead.evidence_limited_writer", schema=EvidenceSynthesisDraft)
 
 
 async def _invoke_grounding_judge(
     payload: dict[str, Any],
     config: RunnableConfig,
 ) -> EvidenceSynthesisGroundingAssessment:
-    if native_report.get() is not None:
-        return await native_report.get().invoke("quality_evaluation", [SystemMessage(content=WRITING_RULES + "\n" + _GROUNDING_PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Configuration.from_runnable_config(config), span_name="lead.evidence_limited_grounding", schema=EvidenceSynthesisGroundingAssessment)
-    result = await _evaluate_json(
-        EvidenceSynthesisGroundingAssessment,
-        WRITING_RULES + "\n" + _GROUNDING_PROMPT,
-        payload,
-        config,
-        span_name="lead.evidence_limited_grounding",
-    )
-    return EvidenceSynthesisGroundingAssessment.model_validate(result)
+    return await require_report_runtime().invoke("quality_evaluation", [SystemMessage(content=WRITING_RULES + "\n" + _GROUNDING_PROMPT), HumanMessage(content=json.dumps(payload, ensure_ascii=False))], Configuration.from_runnable_config(config), span_name="lead.evidence_limited_grounding", schema=EvidenceSynthesisGroundingAssessment)
 
 
 def _validate_draft(
