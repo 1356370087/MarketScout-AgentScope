@@ -166,6 +166,7 @@ docs/
 
 # 本地评估运行产物（生成目录，不入库）
 tests/local_eval_results/
+.runs/
 
 # 临时目录（测试运行时等）
 tmp/

@@ -891,6 +891,17 @@ pnpm test:e2e    # Playwright E2E，覆盖桌面/平板/移动视口
 
 ### 本地评估
 
+新版 Agent Evals 提供版本化任务集、独立执行与重评分、原生 SQL 轨迹、代码/模型/人工评分、实际副作用检查、预算和回归门禁：
+
+```bash
+uv run python -m open_deep_research.evaluation validate tests/fixtures/agent_evals/core.json --output .runs/evals/controls
+uv run python -m open_deep_research.evaluation --env-file .env run tests/fixtures/agent_evals/core.json --output .runs/evals/baseline --budget-usd 20
+uv run python -m open_deep_research.evaluation review-export .runs/evals/baseline --output .runs/evals/review
+uv run python -m open_deep_research.evaluation check .runs/evals/baseline
+```
+
+`validate` 免费检查正负参考产物；`run` 使用真实模型并产生费用。固定环境与真实联网分别评估，人工校准等待真实标注；缺失证据不会被记成通过。完整操作、恢复与费用说明见 [本地 Agent Evals 指南](src/open_deep_research/evaluation/README.md)。以下旧入口继续兼容。
+
 本地评估不依赖 LangSmith，默认运行一条内置研究问题并使用 Judge 模型评分：
 
 ```bash
