@@ -6,8 +6,7 @@ from contextlib import nullcontext
 from agentscope.message import SystemMsg, UserMsg
 
 from .judge import native_judge
-from .metrics import normalize_evaluator_metric
-from .metrics import EvaluationMetric, MetricStatus
+from .metrics import EvaluationMetric, MetricStatus, normalize_evaluator_metric
 
 METRICS = (
     "overall_quality",
@@ -21,6 +20,7 @@ METRICS = (
     "tool_efficiency",
     "execution_compliance",
 )
+DIAGNOSTICS = {"groundedness", "citation_accuracy"}
 
 
 class EvaluationInterrupted(BaseException):
@@ -40,9 +40,13 @@ def complete_metric_categories(metrics):
             result.append(
                 EvaluationMetric(
                     evaluator=metric,
-                    key=metric + "_score",
+                    key=("diagnostic." if metric in DIAGNOSTICS else "")
+                    + metric
+                    + "_score",
                     score=None,
-                    status=MetricStatus.NOT_SCORED,
+                    status=MetricStatus.NOT_APPLICABLE
+                    if metric in DIAGNOSTICS
+                    else MetricStatus.NOT_SCORED,
                     comment="Not scored: evaluator has no applicable requirements or traces.",
                 ).model_dump(mode="json")
             )
@@ -57,15 +61,17 @@ async def evaluate_output(
     The caller owns the evaluation RecoverySession, model budget and frozen
     model configuration. Each sample uses a distinct journal task scope.
     """
-    from tests import evaluators
+    from . import evaluators
 
     loop = asyncio.get_running_loop()
     recovery = models.recovery
     results = []
 
     for metric in METRICS:
+        if metric in DIAGNOSTICS:
+            continue  # The canonical inventory supplies these primary scores.
 
-        async def invoke(schema, messages, operation):
+        async def invoke(schema, messages, operation, metric=metric):
             from open_deep_research.agentscope_runtime.recovery import ApprovalPending
             from open_deep_research.agentscope_runtime.recovery_store import (
                 FenceLost,
@@ -106,7 +112,7 @@ async def evaluate_output(
 
         pending = []
 
-        def adapter(schema, messages, *, operation):
+        def adapter(schema, messages, *, operation, pending=pending):
             from concurrent.futures import CancelledError
 
             future = asyncio.run_coroutine_threadsafe(
@@ -118,7 +124,7 @@ async def evaluate_output(
             except CancelledError as error:
                 raise EvaluationInterrupted(asyncio.CancelledError()) from error
 
-        def evaluate():
+        def evaluate(metric=metric):
             token = native_judge.set(adapter)
             try:
                 evaluator = getattr(evaluators, "eval_" + metric)
@@ -136,7 +142,7 @@ async def evaluate_output(
             for future in pending:
                 future.cancel()
             raise
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 -- Persist a sanitized evaluator failure.
             results.append(
                 EvaluationMetric(
                     evaluator=metric,

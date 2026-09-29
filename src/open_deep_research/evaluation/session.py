@@ -3,9 +3,9 @@
 import json
 import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
-from datetime import UTC, datetime
 
 from pydantic import SecretStr
 
@@ -59,17 +59,16 @@ async def create_judge_run(store, owner, run_id, run):
 
 
 def rubric_fingerprint():
-    from tests import evaluators, prompts
-
+    package = Path(__file__).parent
     return fingerprint(
-        [
-            Path(module.__file__).read_text(encoding="utf-8")
-            for module in (evaluators, prompts)
-        ]
+        {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(package.glob("*.py"))
+        }
     )
 
 
-def judge_run_config(judge, catalog):
+def judge_run_config(judge, catalog, *, cost_limit=None):
     """Freeze explicit Judge isolation while retaining the stricter run budgets."""
     cfg = Configuration.from_runnable_config(None)
     values = cfg.model_dump(mode="json")
@@ -84,7 +83,11 @@ def judge_run_config(judge, catalog):
         model_fallbacks={},
         model_catalog_snapshot=catalog,
         max_run_model_calls=min(cfg.max_run_model_calls or 60, 60),
-        max_run_cost_micro_usd=min(cfg.max_run_cost_micro_usd or 1_000_000, 1_000_000),
+        max_run_cost_micro_usd=min(
+            cfg.max_run_cost_micro_usd or 1_000_000,
+            1_000_000,
+            cost_limit if cost_limit is not None else 1_000_000,
+        ),
         run_deadline_seconds=min(cfg.run_deadline_seconds or 1800, 1800),
         enable_memory=False,
         enable_async_research=False,
@@ -139,7 +142,7 @@ class NativeJudgeSession:
 
 
 @asynccontextmanager
-async def native_judge_session(directory, *, judge=None):
+async def native_judge_session(directory, *, judge=None, cost_limit=None, as_of=None):
     """Open only an evaluation journal; never alter a source research checkpoint."""
     judge = judge or JudgeConfig.from_env()
     if not judge.api_key or not judge.base_url:
@@ -149,6 +152,8 @@ async def native_judge_session(directory, *, judge=None):
     manifest_path = directory / "manifest.json"
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if as_of is not None and manifest["evaluation_date"] != as_of:
+            raise ValueError("evaluation_date_changed")
         run = RunConfig.restore(manifest["configuration"])
         if judge.model != run.get("quality_evaluation_model"):
             raise ValueError("evaluation_judge_model_changed")
@@ -163,14 +168,18 @@ async def native_judge_session(directory, *, judge=None):
         finally:
             await client.aclose()
         validate_model_catalog(catalog, [judge.model], budget_enabled=True)
-        run = judge_run_config(judge, freeze_catalog_snapshot(catalog, [judge.model]))
+        run = judge_run_config(
+            judge,
+            freeze_catalog_snapshot(catalog, [judge.model]),
+            cost_limit=cost_limit,
+        )
         manifest = {
             "schema_version": 1,
             "run_id": uuid4().hex,
             "engine": "agentscope",
             "configuration": run.snapshot(),
             "rubric_sha256": rubric_fingerprint(),
-            "evaluation_date": datetime.now(UTC).date().isoformat(),
+            "evaluation_date": as_of or datetime.now(UTC).date().isoformat(),
             "judge_sha256": fingerprint(
                 {
                     "model": judge.model,

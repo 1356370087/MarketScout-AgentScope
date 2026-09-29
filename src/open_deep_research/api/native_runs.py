@@ -149,6 +149,7 @@ class NativeRuns:
                 config,
                 messages=messages,
                 application={
+                    "evaluation_capture": prepared.get("evaluation_capture") is True,
                     "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
                     "identity": {

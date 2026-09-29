@@ -222,6 +222,7 @@ class RecoverySession:
         replay_safe=False,
         reserve=None,
         actual=None,
+        observation=None,
     ):
         key = key or self.key(kind)
         if self.problem:
@@ -237,7 +238,8 @@ class RecoverySession:
                 observation={"task_id": self.task_id.get(),
                              "stage": self.stage.get().rsplit(":", 1)[0],
                              "agent_role": payload.get("role") if isinstance(payload, dict) else None,
-                             "tool_name": payload.get("name") if kind == "tool" else None},
+                             "tool_name": payload.get("name") if kind == "tool" else None,
+                             **(observation or {})},
             )
             if record["replayed"]:
                 return record["result"]
@@ -547,6 +549,9 @@ class RecoverySession:
             replay_safe=safe,
             reserve=reserve,
             actual=settle,
+            observation={"evaluation_request": {"name": tool.name, "args": arguments,
+                         "id": call_id, "effect": tool.effect.value,
+                         "execution_zone": tool.execution_zone.value}} if self.snapshot.application.get("evaluation_capture") else None,
         )
         return GovernedToolCallResult(
             ToolOutcomeMessage(**value["message"]),

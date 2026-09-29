@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any
 
@@ -13,6 +14,7 @@ class MetricStatus(str, Enum):
 
     SCORED = "scored"
     NOT_SCORED = "not_scored"
+    NOT_APPLICABLE = "not_applicable"
     RUN_FAILED = "run_failed"
     EVALUATOR_ERROR = "evaluator_error"
 
@@ -35,14 +37,41 @@ class EvaluationMetric(BaseModel):
             raise ValueError("scored metrics require a numeric or boolean score")
         if self.status != MetricStatus.SCORED and self.score is not None:
             raise ValueError("unscored metrics must not carry a score")
+        if self.score is not None and not math.isfinite(float(self.score)):
+            raise ValueError("scores must be finite")
         return self
+
+
+def primary_metrics(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Choose the canonical evidence inventory once, regardless of row order."""
+    result: dict[str, dict[str, Any]] = {}
+    evidence = {
+        "groundedness_score",
+        "citation_accuracy_score",
+        "source_authority_score",
+        "factual_accuracy_score",
+    }
+    for row in metrics:
+        key = row["key"]
+        if key.startswith("diagnostic."):
+            continue
+        old = result.get(key)
+        if old is None or (
+            key in evidence and row.get("evaluator") == "evidence_integrity"
+        ):
+            result[key] = row
+        elif old != row and not (
+            key in evidence and old.get("evaluator") == "evidence_integrity"
+        ):
+            raise ValueError("ambiguous_primary_metric:" + key)
+    return list(result.values())
 
 
 def langsmith_metric(
     key: str,
     *,
     status: MetricStatus,
-    score: bool | int | float | None = None,
+    score: bool | float | None = None,
     comment: str = "",
 ) -> dict[str, Any]:
     """Adapt a canonical metric to LangSmith's evaluator result contract."""
@@ -66,9 +95,7 @@ def normalize_evaluator_metric(
 ) -> dict[str, Any]:
     """Adapt LangSmith-style output to the local evaluation artifact contract."""
     metadata = result.get("metadata")
-    raw_status = (
-        metadata.get("metric_status") if isinstance(metadata, dict) else None
-    )
+    raw_status = metadata.get("metric_status") if isinstance(metadata, dict) else None
     score = result.get("score")
     comment = str(result.get("comment", ""))
     if raw_status is None:
@@ -80,9 +107,7 @@ def normalize_evaluator_metric(
             score = None
         else:
             status = (
-                MetricStatus.SCORED
-                if score is not None
-                else MetricStatus.NOT_SCORED
+                MetricStatus.SCORED if score is not None else MetricStatus.NOT_SCORED
             )
     else:
         status = MetricStatus(str(raw_status))

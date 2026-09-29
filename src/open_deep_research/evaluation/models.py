@@ -118,3 +118,21 @@ class EvaluationSnapshot(BaseModel):
     coverage_checklist: list[str] = Field(default_factory=list)
     evidence_registry: list[EvaluationEvidence] = Field(default_factory=list)
     tool_trace: EvaluationToolTrace
+
+
+class NativeEvaluationSnapshot(BaseModel):
+    """Version 2 adds native operations, completeness and independent run outcomes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["2.0"] = "2.0"
+    research_brief: str | None = None
+    coverage_checklist: list[str] = Field(default_factory=list)
+    evidence_registry: list[EvaluationEvidence] = Field(default_factory=list)
+    tool_trace: dict[str, Any]
+    operations: list[dict[str, Any]]
+    events: list[dict[str, Any]]
+    outcome: dict[str, Any]
+    provenance: dict[str, Any]
+    transcript: list[dict[str, Any]] = Field(default_factory=list)
+    handoffs: list[dict[str, Any]] = Field(default_factory=list)

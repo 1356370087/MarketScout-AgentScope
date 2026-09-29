@@ -129,7 +129,7 @@ def _host_resources(runs_dir: Path):
     return open_resources
 
 
-async def build_native_research_service(*, runs_dir, database_url=None):
+async def build_native_research_service(*, runs_dir, database_url=None, resource_provider=None, external_workers=True):
     """组装 NativeRuns 服务；恢复权威建表，工厂持有宿主资源生命周期。"""
     from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
     from open_deep_research.api.native_runs import NativeRuns
@@ -139,7 +139,7 @@ async def build_native_research_service(*, runs_dir, database_url=None):
     if database_url is None:
         database_url = "sqlite+aiosqlite:///" + (runs_dir / "native-recovery.db").as_posix()
     runtime = None
-    production = os.environ.get("AS_NATIVE_RESOURCES", "host") == "gateway"
+    production = resource_provider is None and os.environ.get("AS_NATIVE_RESOURCES", "host") == "gateway"
     if production:
         from open_deep_research.agentscope_runtime.app import ASRuntime
         from open_deep_research.agentscope_runtime.production_resources import (
@@ -165,7 +165,7 @@ async def build_native_research_service(*, runs_dir, database_url=None):
             return ControllerTeamLauncher(SandboxControllerClient(cfg, bundle))
 
         factory = ProductionRunFactory(runtime, authorize_run_owner,
-            production_resources(runs_dir, launcher_factory=launcher_factory), runs_dir=runs_dir)
+            production_resources(runs_dir, launcher_factory=launcher_factory if external_workers else None), runs_dir=runs_dir)
         prepare_config = prepare_production_config
     else:
         store = RecoveryStore(database_url)
@@ -173,7 +173,7 @@ async def build_native_research_service(*, runs_dir, database_url=None):
         factory = ProductionRunFactory(
             None,
             authorize_run_owner,
-            _host_resources(runs_dir),
+            resource_provider or _host_resources(runs_dir),
             runs_dir=runs_dir,
         )
 

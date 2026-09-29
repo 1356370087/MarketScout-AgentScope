@@ -45,8 +45,12 @@ _PROCESS_MARKER_RE = re.compile(
     r"搜索|search|来源|source|URL|域名|domain)",
     re.IGNORECASE,
 )
-_NORMATIVE_RE = re.compile(r"(?:必须|不得|禁止|只(?:能|创建|使用)?|must|do not|only|forbid)", re.IGNORECASE)
-_REPORT_MARKER_RE = re.compile(r"(?:最终报告|报告必须|final report|report must)", re.IGNORECASE)
+_NORMATIVE_RE = re.compile(
+    r"(?:必须|不得|禁止|只(?:能|创建|使用)?|must|do not|only|forbid)", re.IGNORECASE
+)
+_REPORT_MARKER_RE = re.compile(
+    r"(?:最终报告|报告必须|final report|report must)", re.IGNORECASE
+)
 
 
 class ExecutionConstraints(BaseModel):
@@ -156,8 +160,14 @@ def extract_execution_constraints(question: str) -> ExecutionConstraints:
     same_task = bool(
         urls
         and (
-            re.search(r"(?:同一|同一个).{0,24}(?:任务|task|研究员)", text, re.IGNORECASE)
-            or re.search(r"(?:不得拆分|do not split|same (?:researcher|task))", text, re.IGNORECASE)
+            re.search(
+                r"(?:同一|同一个).{0,24}(?:任务|task|研究员)", text, re.IGNORECASE
+            )
+            or re.search(
+                r"(?:不得拆分|do not split|same (?:researcher|task))",
+                text,
+                re.IGNORECASE,
+            )
         )
     )
     source_restricted = bool(
@@ -179,9 +189,16 @@ def extract_execution_constraints(question: str) -> ExecutionConstraints:
         if not (_PROCESS_MARKER_RE.search(compact) and _NORMATIVE_RE.search(compact)):
             continue
         clause_known = bool(
-            re.search(r"ConductResearch|fetch_url|不得拆分|do not split|same (?:researcher|task)", compact, re.IGNORECASE)
+            re.search(
+                r"ConductResearch|fetch_url|不得拆分|do not split|same (?:researcher|task)",
+                compact,
+                re.IGNORECASE,
+            )
             or (no_search and re.search(r"搜索|search", compact, re.IGNORECASE))
-            or (source_restricted and re.search(r"来源|source|URL", compact, re.IGNORECASE))
+            or (
+                source_restricted
+                and re.search(r"来源|source|URL", compact, re.IGNORECASE)
+            )
             or any(name.lower() in compact.lower() for name in required_tools)
             or any(domain in compact.lower() for domain in domains)
         )
@@ -221,7 +238,9 @@ def content_coverage_requirements(requirements: list[str]) -> list[str]:
     return [item for item in requirements if not is_execution_requirement(item)]
 
 
-def _trace_calls(trace: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _trace_calls(
+    trace: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     supervisor = [
         call
         for call in trace.get("supervisor_tool_calls", [])
@@ -265,6 +284,13 @@ def evaluate_execution_compliance(
         )
 
     supervisor_calls, researcher_calls = _trace_calls(tool_trace)
+    if tool_trace.get("completeness") in {"partial", "missing"}:
+        return ExecutionComplianceResult(
+            applicable=True,
+            status="evaluator_error",
+            reason_codes=["tool_trace_incomplete"],
+            constraints=constraints,
+        )
     requires_researcher_trace = bool(
         constraints.required_tools
         or constraints.forbidden_categories
@@ -294,8 +320,7 @@ def evaluate_execution_compliance(
     all_calls = [*supervisor_calls, *researcher_calls]
     if constraints.conduct_research_count is not None:
         observed = sum(
-            str(call.get("name", "")) == "ConductResearch"
-            for call in supervisor_calls
+            str(call.get("name", "")) == "ConductResearch" for call in supervisor_calls
         )
         details["conduct_research_count"] = observed
         if observed != constraints.conduct_research_count:
@@ -326,7 +351,9 @@ def evaluate_execution_compliance(
         if not isinstance(args, dict):
             continue
         raw_url = args.get("url")
-        if not isinstance(raw_url, str) or not raw_url.startswith(("http://", "https://")):
+        if not isinstance(raw_url, str) or not raw_url.startswith(
+            ("http://", "https://")
+        ):
             continue
         normalized = _normalize_url(raw_url)
         observed_urls.append(normalized)
@@ -337,9 +364,11 @@ def evaluate_execution_compliance(
         failures.append("required_url_not_read")
         details["missing_urls"] = missing_urls
     if constraints.same_task_for_urls and not missing_urls:
-        common_tasks = set.intersection(
-            *(url_tasks[url] for url in constraints.required_urls)
-        ) if constraints.required_urls else set()
+        common_tasks = (
+            set.intersection(*(url_tasks[url] for url in constraints.required_urls))
+            if constraints.required_urls
+            else set()
+        )
         common_tasks.discard("")
         if not common_tasks:
             failures.append("required_urls_not_read_by_same_task")
@@ -362,8 +391,7 @@ def evaluate_execution_compliance(
         outside_domains = [
             url
             for url in audited_urls
-            if (urlsplit(url).hostname or "").lower()
-            not in constraints.allowed_domains
+            if (urlsplit(url).hostname or "").lower() not in constraints.allowed_domains
         ]
         if outside_domains:
             failures.append("source_outside_allowed_domains")

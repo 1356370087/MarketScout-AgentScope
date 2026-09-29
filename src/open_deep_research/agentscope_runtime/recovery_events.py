@@ -16,6 +16,8 @@ _PUBLIC_STAGES = tuple(dict.fromkeys(_STAGES.values()))
 
 def public_events(event):
     payload = event["payload"]
+    if payload.get("type", "").startswith("evaluation."):
+        return []  # Local evaluation payloads never enter public SSE or telemetry.
     output = []
     decision = payload.get("decision")
     if decision and decision["action"] != "feedback":

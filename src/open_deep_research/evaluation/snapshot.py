@@ -63,6 +63,7 @@ _NAMED_SECRET_VALUE = re.compile(
         api[_-]?key
         |access[_-]?token
         |refresh[_-]?token
+        |token
         |password
         |secret
         |cookie
@@ -182,7 +183,9 @@ def _project_supervisor_trace(
                 )
                 calls.append(
                     SupervisorToolCall(
-                        name=str(call["name"]) if call.get("name") is not None else None,
+                        name=str(call["name"])
+                        if call.get("name") is not None
+                        else None,
                         args=args,
                         id=str(call["id"]) if call.get("id") is not None else None,
                     )
@@ -202,9 +205,7 @@ def _project_supervisor_trace(
                     if _message_value(message, "tool_call_id") is not None
                     else None
                 ),
-                content_preview=_redact_secret_text(content)[
-                    :_MAX_PREVIEW_CHARS
-                ],
+                content_preview=_redact_secret_text(content)[:_MAX_PREVIEW_CHARS],
             )
         )
     return calls, results
@@ -226,9 +227,7 @@ def _project_researcher_trace(
     results: list[ResearcherToolResult] = []
     for artifact in list(artifacts or [])[:_MAX_COLLECTION_ITEMS]:
         task_id = (
-            str(artifact["task_id"])
-            if artifact.get("task_id") is not None
-            else None
+            str(artifact["task_id"]) if artifact.get("task_id") is not None else None
         )
         messages = artifact.get("researcher_messages", [])
         if not isinstance(messages, list):
@@ -238,53 +237,54 @@ def _project_researcher_trace(
             raw_calls = _message_value(message, "tool_calls", [])
             if isinstance(raw_calls, list):
                 for call in raw_calls:
-                    if (
-                        len(calls) >= _MAX_COLLECTION_ITEMS
-                        or not isinstance(call, Mapping)
+                    if len(calls) >= _MAX_COLLECTION_ITEMS or not isinstance(
+                        call, Mapping
                     ):
                         continue
                     raw_args = call.get("args", {})
-                    calls.append(ResearcherToolCall(
-                        task_id=task_id,
-                        name=(
-                            str(call["name"])
-                            if call.get("name") is not None
-                            else None
-                        ),
-                        args=(
-                            _bounded_json_value(raw_args)
-                            if isinstance(raw_args, Mapping)
-                            else {}
-                        ),
-                        id=(
-                            str(call["id"])
-                            if call.get("id") is not None
-                            else None
-                        ),
-                    ))
+                    calls.append(
+                        ResearcherToolCall(
+                            task_id=task_id,
+                            name=(
+                                str(call["name"])
+                                if call.get("name") is not None
+                                else None
+                            ),
+                            args=(
+                                _bounded_json_value(raw_args)
+                                if isinstance(raw_args, Mapping)
+                                else {}
+                            ),
+                            id=(
+                                str(call["id"]) if call.get("id") is not None else None
+                            ),
+                        )
+                    )
             if (
                 len(results) >= _MAX_COLLECTION_ITEMS
                 or _message_value(message, "type") != "tool"
             ):
                 continue
-            results.append(ResearcherToolResult(
-                task_id=task_id,
-                name=(
-                    str(_message_value(message, "name"))
-                    if _message_value(message, "name") is not None
-                    else None
-                ),
-                tool_call_id=(
-                    str(_message_value(message, "tool_call_id"))
-                    if _message_value(message, "tool_call_id") is not None
-                    else None
-                ),
-                status=(
-                    str(_message_value(message, "status"))
-                    if _message_value(message, "status") is not None
-                    else None
-                ),
-            ))
+            results.append(
+                ResearcherToolResult(
+                    task_id=task_id,
+                    name=(
+                        str(_message_value(message, "name"))
+                        if _message_value(message, "name") is not None
+                        else None
+                    ),
+                    tool_call_id=(
+                        str(_message_value(message, "tool_call_id"))
+                        if _message_value(message, "tool_call_id") is not None
+                        else None
+                    ),
+                    status=(
+                        str(_message_value(message, "status"))
+                        if _message_value(message, "status") is not None
+                        else None
+                    ),
+                )
+            )
     return calls, results
 
 
@@ -330,11 +330,7 @@ def build_evaluation_snapshot(
                 if isinstance(run_metrics, Mapping)
                 else {}
             ),
-            limits=(
-                _bounded_json_value(limits)
-                if isinstance(limits, Mapping)
-                else {}
-            ),
+            limits=(_bounded_json_value(limits) if isinstance(limits, Mapping) else {}),
             availability=ToolTraceAvailability(
                 supervisor_messages_present=bool(messages),
                 completed_task_outputs_present=bool(task_outputs),

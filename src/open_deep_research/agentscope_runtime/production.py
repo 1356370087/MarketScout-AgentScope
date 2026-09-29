@@ -103,6 +103,9 @@ class ProductionRunFactory:
             await bind_run_sources(recovery.lease.run_id, principal.user_id, selected)
         from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
         config["_event_publisher"] = NativeEventPublisher(recovery.store, recovery.lease)
+        if snapshot.application.get("evaluation_capture"):
+            from open_deep_research.evaluation.trace import EvaluationRecorder
+            config["_evaluation_recorder"] = EvaluationRecorder(recovery)
         cfg = Configuration.from_runnable_config(config)
         await recovery.store.register_task(recovery.lease, "supervisor")
         async with self.open_resources(run_config, config, recovery) as ports:

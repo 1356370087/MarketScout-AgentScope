@@ -1,5 +1,6 @@
 """Stable evaluation contracts for research runs."""
 
+from .contracts import EvalCase, EvalDataset, EvalTrial, GraderResult, GraderSpec
 from .metrics import (
     EvaluationMetric,
     MetricStatus,
@@ -10,23 +11,35 @@ from .snapshot import EVALUATION_SNAPSHOT_VERSION, build_evaluation_snapshot
 
 __all__ = [
     "EVALUATION_SNAPSHOT_VERSION",
-    "EvaluationMetric",
     "JUDGE_SECURITY_PROTOCOL",
+    "EvalCase",
+    "EvalDataset",
+    "EvalTrial",
+    "EvaluationMetric",
+    "GraderResult",
+    "GraderSpec",
     "JudgeConfig",
     "MetricStatus",
+    "build_evaluation_snapshot",
     "build_judge_model",
     "invoke_judge_structured",
     "invoke_judge_structured_sync",
-    "build_evaluation_snapshot",
     "langsmith_metric",
     "normalize_evaluator_metric",
 ]
 
 
 def __getattr__(name):
-    if name not in {"JUDGE_SECURITY_PROTOCOL", "JudgeConfig", "build_judge_model", "invoke_judge_structured", "invoke_judge_structured_sync"}:
+    if name not in {
+        "JUDGE_SECURITY_PROTOCOL",
+        "JudgeConfig",
+        "build_judge_model",
+        "invoke_judge_structured",
+        "invoke_judge_structured_sync",
+    }:
         raise AttributeError(name)
     from . import judge
+
     value = getattr(judge, name)
     globals()[name] = value
     return value

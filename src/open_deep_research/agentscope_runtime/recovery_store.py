@@ -219,6 +219,9 @@ class RecoveryStore:
             for item in BudgetDimension
             if policy and policy.limit_for(item) is not None
         }
+        if (application or {}).get("evaluation_capture") and cfg.max_run_cost_micro_usd is not None:
+            # Offline experiments may use service credentials: enforce their cap here too.
+            limits["cost_micro_usd"] = cfg.max_run_cost_micro_usd
         state = ResearchSnapshot(
             run_id=run_id,
             config_fingerprint=run_config.compatibility_projection()["metadata"][
@@ -528,6 +531,12 @@ class RecoveryStore:
                                   if observation.get(k) is not None}
                     await self._event(conn, row, "research.operation_started",
                                       {"operation_key": key, "kind": kind, **dimensions})
+                    if row["snapshot"].get("application", {}).get("evaluation_capture") and observation.get("evaluation_request"):
+                        from open_deep_research.evaluation.trace import project_request
+                        await self._event(conn, row, "evaluation.tool_requested", {
+                            "operation_key": key, **dimensions,
+                            **project_request(observation["evaluation_request"]),
+                        })
         if unknown:
             raise UnknownOperation(key)
         return {"replayed": False}

@@ -166,6 +166,10 @@ class GovernedTool(ToolBase):
             return self._denied(
                 "missing_call_context", "Use the governed Toolkit call boundary."
             )
+        recorder = self.owner.config_provider().get("_evaluation_recorder")
+        if recorder is not None:
+            await recorder.request(identity.operation_id, self.owner.task_id, self.owner.role.value,
+                                   self.domain_tool, identity.call_id, kwargs)
         async with self.owner.gate.enter(self.is_concurrency_safe):
             # Resolve after waiting for the execution slot so revocation cannot be
             # bypassed by calls queued under an older authorization snapshot.
@@ -210,6 +214,9 @@ class GovernedTool(ToolBase):
             if self.owner.result_observer is not None:
                 await self.owner.result_observer(self.name, identity.call_id, result)
             error_type = result.error.error_type.value if result.error else None
+            if recorder is not None:
+                await recorder.outcome(identity.operation_id, self.owner.task_id, identity.call_id,
+                                       error_type=error_type, output=result.result.output if result.result else None)
             denied = error_type in {
                 "permission_denied",
                 "egress_domain_denied",
