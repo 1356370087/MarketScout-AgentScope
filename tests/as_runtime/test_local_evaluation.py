@@ -5,19 +5,28 @@ import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
 from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
-from open_deep_research.agentscope_runtime.research_pipeline import PendingDecision, ResearchPipeline
+from open_deep_research.agentscope_runtime.research_pipeline import (
+    PendingDecision,
+    ResearchPipeline,
+)
 from open_deep_research.api.native_runs import NativeRuns
 from open_deep_research.evaluation import local_runtime
 from tests.auth_helpers import research_principal
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["completed", "failed", "waiting", "timeout", "cancelled"])
-async def test_native_local_run_lifecycle(tmp_path, monkeypatch, outcome):
+@pytest.mark.parametrize("outcome,workers", [
+    ("completed", []), ("failed", []), ("waiting", []), ("timeout", []), ("cancelled", []),
+    ("failed", [("failed", "HTTPStatusError")]),
+    ("failed", [("failed", "HTTPStatusError"), ("completed", None)]),
+    ("failed", [("failed", "HTTPStatusError"), ("failed", "StructuredOutputError")]),
+])
+async def test_native_local_run_lifecycle(tmp_path, monkeypatch, outcome, workers):
     store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "runs.db").as_posix())
     await store.create_tables()
     closed = []
@@ -48,6 +57,19 @@ async def test_native_local_run_lifecycle(tmp_path, monkeypatch, outcome):
         return {"configurable": request.configurable}
 
     service = NativeRuns(store, factory, prepare, runs_dir=tmp_path)
+
+    if workers:
+        class Connection:
+            async def fetch(self, query, run_id):
+                return [{"task_id": str(i), "status": status, "error": error}
+                        for i, (status, error) in enumerate(workers)]
+
+        class Pool:
+            @asynccontextmanager
+            async def acquire(self):
+                yield Connection()
+
+        factory.runtime = SimpleNamespace(_team_host=SimpleNamespace(pool=Pool()))
 
     async def close():
         await service.aclose()
@@ -84,6 +106,10 @@ async def test_native_local_run_lifecycle(tmp_path, monkeypatch, outcome):
                 assert snapshot.pending is not None
             if outcome == "timeout":
                 assert output["result"]["error"] == "evaluation_research_timeout"
+            assert bool(output.get("evaluation_error")) == (workers == [("failed", "HTTPStatusError")])
+            if workers:
+                failures = output["evaluation_snapshot"]["outcome"]["worker_failures"]
+                assert len(failures) == sum(bool(error) for _, error in workers)
         assert closed == ["pipeline", "service"]
         assert not service.tasks
     finally:

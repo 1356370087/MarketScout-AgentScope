@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "name": "native-live-official-sources",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "python-gather",
+      "category": "live",
+      "question": "仅使用官方资料 https://docs.python.org/3/library/asyncio-task.html ，直接调用 fetch_url，不要搜索。说明 asyncio.gather 的 return_exceptions=True 如何处理异常，以及取消 gather 对未完成任务的影响。给出原文引用。",
+      "configuration": {"search_api": "none", "quality_evaluation_min_sources": 1},
+      "reference_outputs": {"answer": "return_exceptions=True 将异常作为结果收集；取消 gather 会取消尚未完成的提交任务。"},
+      "graders": [
+        {"id": "completed", "check": "state", "parameters": {"allowed": ["completed"]}},
+        {"id": "answer", "check": "correctness_score", "kind": "model", "target": "quality", "threshold": 0.8},
+        {"id": "no-search", "check": "tools", "target": "trace", "parameters": {"forbidden": ["web_research", "tavily_search"]}}
+      ]
+    },
+    {
+      "id": "postgres-json",
+      "category": "live",
+      "question": "仅使用官方资料 https://www.postgresql.org/docs/current/datatype-json.html ，直接调用 fetch_url，不要搜索。解释 PostgreSQL 的 json 与 jsonb 是否保留空白、键的顺序和重复键，附来源引用。",
+      "configuration": {"search_api": "none", "quality_evaluation_min_sources": 1},
+      "reference_outputs": {"answer": "json 保留输入文本、空白、键顺序和重复键；jsonb 不保留空白或键顺序，重复键只保留最后一个。"},
+      "graders": [
+        {"id": "completed", "check": "state", "parameters": {"allowed": ["completed"]}},
+        {"id": "answer", "check": "correctness_score", "kind": "model", "target": "quality", "threshold": 0.8},
+        {"id": "no-search", "check": "tools", "target": "trace", "parameters": {"forbidden": ["web_research", "tavily_search"]}}
+      ]
+    },
+    {
+      "id": "http-get",
+      "category": "live",
+      "question": "仅使用官方资料 https://www.rfc-editor.org/rfc/rfc9110.html ，直接调用 fetch_url，不要搜索。解释 GET 方法的安全性和幂等性分别是什么意思，以及为什么日志写入不必违反安全方法的语义。给出原文引用。",
+      "configuration": {"search_api": "none", "quality_evaluation_min_sources": 1},
+      "reference_outputs": {"answer": "GET 是安全且幂等的方法；安全意味着客户端没有请求状态变更，幂等指相同请求多次执行的预期效果与一次相同。日志等实现副作用不由客户端请求，不必违反安全语义。"},
+      "graders": [
+        {"id": "completed", "check": "state", "parameters": {"allowed": ["completed"]}},
+        {"id": "answer", "check": "correctness_score", "kind": "model", "target": "quality", "threshold": 0.8},
+        {"id": "no-search", "check": "tools", "target": "trace", "parameters": {"forbidden": ["web_research", "tavily_search"]}}
+      ]
+    }
+  ]
+}

@@ -41,7 +41,8 @@ def test_judge_applies_dashscope_non_thinking_options(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             captured.update(kwargs)
 
-    monkeypatch.setattr(judge, "LiteLLMModelGateway", CapturingGateway)
+    # The compatibility gateway is imported lazily to keep native imports isolated.
+    monkeypatch.setattr("open_deep_research.models.gateway.LiteLLMModelGateway", CapturingGateway)
 
     judge.build_judge_model(
         judge.JudgeConfig(
