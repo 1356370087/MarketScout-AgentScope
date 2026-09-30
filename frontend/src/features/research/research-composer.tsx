@@ -20,6 +20,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, type FormEvent } from "react";
+import { ChoiceGroup, SurfaceDialog, StatusBadge } from "@/components/ui/workspace";
 import { Button } from "@/components/ui/button";
 import { researchApi } from "@/lib/api";
 import { loadPublicationTheme, loadSettings } from "@/lib/settings";
@@ -57,7 +58,7 @@ function DocumentPicker({ documents, selected, onToggle }: { documents: Research
       <input type="checkbox" checked={selected.includes(document.id)} disabled={document.status !== "ready"} onChange={() => onToggle(document.id)} />
       <FileText size={15} />
       <span><b>{document.filename}</b><small>{document.chunk_count} 个片段 · {(document.size_bytes / 1024 / 1024).toFixed(1)} MiB</small></span>
-      <i data-status={document.status}>{document.status}</i>
+      <StatusBadge status={document.status} />
     </label>)}
     {!documents.length && <p className="empty-note">资料库中还没有可选文件。</p>}
   </div>;
@@ -72,6 +73,8 @@ export function ResearchComposer() {
   const [selected, setSelected] = useState<string[]>([]);
   const [urls, setUrls] = useState("");
   const [domains, setDomains] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [docSearch, setDocSearch] = useState("");
   const [dragging, setDragging] = useState(false);
   const [creating, setCreating] = useState(false);
   const [researchMode, setResearchMode] = useState<string>();
@@ -133,14 +136,11 @@ export function ResearchComposer() {
   }
 
   return <form className="research-composer research-composer-expanded" onSubmit={submit}>
-    <div className="composer-mode-options" style={{ display: "flex", gap: 16, padding: 16, flexWrap: "wrap" }}>
-      <label>研究执行模式 <select aria-label="研究执行模式" value={selectedResearchMode} onChange={(event) => setResearchMode(event.target.value)}>
-        <option value="sync">同步研究</option><option value="collaborator">异步 · Collaborator（Lead 委派）</option><option value="teams">异步 · Agent Teams（团队协作）</option>
-      </select></label>
-      {selectedResearchMode === "teams" && <label>团队默认执行方式 <select aria-label="团队默认执行方式" value={selectedTeamMode} onChange={(event) => setTeamMode(event.target.value)}>
-        <option value="direct">直接执行</option><option value="plan_approval">先规划，由 Lead 审批</option>
-      </select><small> Lead 创建团队，启动成员时可单独调整。</small></label>}
-    </div>
+    <div className="composer-preferences"><SurfaceDialog title="研究偏好" description="本次研究使用的执行方式。" trigger={<button type="button" className="ui-text-button"><SlidersHorizontal size={15} /> 研究偏好</button>}>
+      <ChoiceGroup label="研究执行模式" value={selectedResearchMode} onChange={setResearchMode} options={[{ value: "sync", label: "同步研究", description: "按研究计划执行" }, { value: "collaborator", label: "异步委派", description: "由 Lead 分配研究任务" }, { value: "teams", label: "团队协作", description: "多个成员协同研究" }]} />
+      {selectedResearchMode === "teams" && <ChoiceGroup label="团队默认执行方式" value={selectedTeamMode} onChange={setTeamMode} options={[{ value: "direct", label: "直接执行" }, { value: "plan_approval", label: "先规划，由 Lead 审批" }]} />}
+      <p className="empty-note">Lead 创建团队，启动成员时可单独调整。</p>
+    </SurfaceDialog></div>
     {!query && <div className="composer-template-row" aria-label="竞品分析模板">
       {promptTemplates.map(({ label, icon: Icon, prompt }) => <button key={label} type="button" onClick={() => setQuery(prompt)}><Icon size={14} /><span>{label}</span></button>)}
     </div>}
@@ -150,12 +150,11 @@ export function ResearchComposer() {
       onChange={(event) => setQuery(event.target.value)}
       placeholder={"描述公司、竞品、时间范围与希望支持的决策……\n例如：对比三家企业 AI 助手的产品能力、定价与渠道策略。"}
     />
-    <div className="source-mode-bar" role="tablist" aria-label="研究来源模式">
+    <div className="source-mode-bar" role="group" aria-label="研究来源模式">
       {modes.map(({ value, label, icon: Icon }) => <button
         key={value}
         type="button"
-        role="tab"
-        aria-selected={mode === value}
+        aria-pressed={mode === value}
         disabled={!docsEnabled && ["documents", "hybrid"].includes(value)}
         className={mode === value ? "active" : ""}
         onClick={() => chooseMode(value)}
@@ -178,14 +177,18 @@ export function ResearchComposer() {
         <input ref={fileRef} hidden type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.csv,.md,.txt,.png,.jpg,.jpeg,.tif,.tiff" onChange={(event) => event.target.files && addFiles(event.target.files)} />
       </div>
       {upload.isError && <p className="source-error">{upload.error.message}</p>}
-      {documents.isLoading ? <p className="empty-note"><LoaderCircle className="spin" size={13} /> 正在读取资料库…</p> : <DocumentPicker documents={documents.data?.items ?? []} selected={selected} onToggle={(id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} />}
+      <SurfaceDialog title="选择研究资料" description="只有已完成处理的资料可以加入研究。" open={pickerOpen} onOpenChange={setPickerOpen} trigger={<button type="button" className="secondary composer-picker-trigger" disabled={!docsEnabled}><FileText size={15} /> 从资料库选择 · 已选 {selected.length} 份</button>}>
+        <label className="ui-search"><input aria-label="搜索研究资料" placeholder="搜索文件名…" value={docSearch} onChange={(event) => setDocSearch(event.target.value)} /></label>
+        {documents.isLoading ? <p className="empty-note"><LoaderCircle className="spin" size={13} /> 正在读取资料库…</p> : documents.isError ? <p role="alert">资料库读取失败，请刷新重试。</p> : <DocumentPicker documents={(documents.data?.items ?? []).filter((document) => document.filename.toLocaleLowerCase().includes(docSearch.toLocaleLowerCase()))} selected={selected} onToggle={(id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} />}
+        <div className="ui-actions"><button type="button" className="primary" onClick={() => setPickerOpen(false)}>完成选择</button></div>
+      </SurfaceDialog>
       <div className="source-config-footer"><span>{selected.length} 个文件已选择</span><button type="button" onClick={() => void documents.refetch()} title="刷新状态"><RefreshCw size={13} /></button>{selected.length > 0 && <button type="button" onClick={() => setSelected([])} title="清空已选文件"><X size={13} /></button>}</div>
     </div>}
     {(createError || (!validSources && mode !== "web")) && <p className="composer-error" role="alert">{createError || "请选择符合当前模式的研究来源。"}</p>}
     <div className="composer-footer">
       <div className="composer-context">
         <span className="source-ready"><i />{sourceLabel}</span>
-        <Link href="/settings" title="打开研究配置"><SlidersHorizontal size={14} /><span>{String(activeSettings.report_type ?? "default")} · {activeSettings.enable_human_in_loop ? "人工复核" : "自动执行"}</span></Link>
+        <Link href="/settings" title="打开研究配置"><SlidersHorizontal size={14} /><span>{activeSettings.report_type && activeSettings.report_type !== "default" ? String(activeSettings.report_type) : "标准报告"} · {activeSettings.enable_human_in_loop ? "人工复核" : "自动执行"}</span></Link>
       </div>
       <Button className="composer-send" type="submit" disabled={creating || !query.trim() || !validSources} aria-label="启动研究">
         <span>{creating ? "正在创建" : "启动研究"}</span><ArrowUp size={17} />

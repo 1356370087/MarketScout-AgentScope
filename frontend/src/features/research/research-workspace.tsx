@@ -1,10 +1,11 @@
 "use client";
 
-import { Activity, AlertTriangle, CircleStop, Download, ExternalLink, FileText, Search, Send, ShieldCheck } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUp, Check, ChevronRight, CircleStop, Download, ExternalLink, FileText, ShieldCheck, Sparkles } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ApprovalCenter } from "@/features/research/approval-center";
 import { AppShell } from "@/components/app-shell";
+import { EmptyState, StatusBadge, SurfaceDialog, Tabs } from "@/components/ui/workspace";
+import { ApprovalCenter } from "@/features/research/approval-center";
 import { ReportPublications } from "@/features/research/report-publications";
 import { RunQualityStatus } from "@/components/run-quality-status";
 import { ResearchTeamPanel } from "@/features/research/research-team-panel";
@@ -17,26 +18,40 @@ import { isSecurityApprovalResolved, shouldRequestSecurityApprovals } from "@/li
 import { deriveWaveStatus, STAGES } from "@/lib/run-reducer";
 import type { ResearchTask } from "@/lib/types";
 import { useResearchRunStore } from "@/stores/research-run-store";
-
-import { MarkdownReport, ReportReviewPanel } from "./report-presentation";
+import { MarkdownReport, ReportReviewPanel, ReportContents } from "./report-presentation";
 export { ReportReviewPanel } from "./report-presentation";
-
-const stageNames = { preparing: "准备", planning: "规划", researching: "研究", synthesizing: "汇总", writing: "撰写", finalizing: "完成" };
-
 export { HumanActionCard, SecurityApprovalCard } from "@/features/research/approval-center";
 
-function TaskCard({ task, selected, onOpen }: { task: ResearchTask; selected: boolean; onOpen: () => void }) { return <button type="button" data-task-id={task.task_id} className={`task-card task-card-button ${selected ? "selected" : ""}`} aria-haspopup="dialog" aria-expanded={selected} onClick={onOpen}><div className="task-card-status"><span className="status-chip" data-status={task.status}>{task.status ?? "pending"}</span><Activity size={14} aria-hidden="true" /></div><h3>{task.title ?? task.task_id}</h3><p className="task-activity-label">{task.activity_label ?? task.activity_phase ?? task.phase ?? "等待活动"}</p><div className="task-meta"><span>ITER {task.iteration ?? 0}</span><span>SRC {task.source_count ?? 0}</span><span>MODEL {task.model_call_count ?? 0}</span><span>TOOL {task.tool_call_count ?? 0}</span>{(task.retry_count ?? 0) > 0 && <span>RETRY {task.retry_count}</span>}</div><small className="task-open-hint">打开执行详情 →</small></button>; }
+const stageNames = { preparing: "准备", planning: "规划", researching: "研究", synthesizing: "汇总", writing: "撰写", finalizing: "完成" };
+const connectionNames = { idle: "等待连接", connecting: "连接中", connected: "实时连接", reconnecting: "正在重连", closed: "连接已关闭", error: "连接异常" };
 
-function RunInspector() {
-  const state = useResearchRunStore(); const sources = Object.values(state.sourcesById); const findings = Object.values(state.findingsByTaskId);
-  return <><h2 className="inspector-title">实时证据面板</h2><UsageCompactSummary runId={state.runId} terminal={state.terminal} /><div className="inspector-block"><div className="summary-grid"><div><b>{Object.keys(state.tasksById).length}</b><span>研究任务</span></div><div><b>{sources.length}</b><span>唯一来源</span></div><div><b>{findings.length}</b><span>发现更新</span></div><div><b>{state.lastEventId}</b><span>事件序号</span></div></div></div>{state.warnings.length > 0 && <div className="inspector-block"><p className="eyebrow">警告</p>{state.warnings.map((warning, index) => <div className="finding" key={`${warning.code}-${index}`}><AlertTriangle size={13} /> {warning.message}</div>)}</div>}<div className="inspector-block"><p className="eyebrow">来源 / 去重后</p>{sources.map((source, index) => <a className="source-item" key={source.source_id || source.url} href={source.url} target="_blank" rel="noopener noreferrer"><span className="source-number">{String(index + 1).padStart(2, "0")}</span><span><b>{source.title || source.domain || source.url}</b><small>{source.domain} · {source.task_id ?? "lead"} <ExternalLink size={9} /></small></span></a>)}{!sources.length && <p className="empty-note">Researcher 发现的来源会在这里按规范化 URL 去重。</p>}</div><div className="inspector-block"><p className="eyebrow">Findings / 按任务更新</p>{findings.map((finding) => <div className="finding" key={finding.task_id}>{finding.summary || "已更新结构化发现"}</div>)}{!findings.length && <p className="empty-note">压缩后的发现会在任务完成时出现。</p>}</div></>;
+function TaskCard({ task, selected, onOpen }: { task: ResearchTask; selected: boolean; onOpen: () => void }) {
+  return <button type="button" data-task-id={task.task_id} className={`research-task-row ${selected ? "selected" : ""}`} aria-haspopup="dialog" aria-expanded={selected} onClick={onOpen}><span className="research-task-icon"><Activity size={17} /></span><span className="research-task-copy"><strong>{task.title ?? task.task_id}</strong><small>{task.activity_label ?? "等待活动更新"} · {task.source_count ?? 0} 个来源</small></span><StatusBadge status={task.status ?? "pending"} /><ChevronRight size={16} /></button>;
+}
+
+function RunInspector({ report }: { report: boolean }) {
+  const state = useResearchRunStore();
+  const [tab, setTab] = useState("sources");
+  const sources = Object.values(state.sourcesById), findings = Object.values(state.findingsByTaskId);
+  return <><h2 className="inspector-title">研究信息</h2>{report && <ReportContents value={state.report} />}<Tabs label="研究信息分类" value={tab} onChange={setTab} items={[{ value: "sources", label: `来源 ${sources.length}` }, { value: "findings", label: "发现" }, { value: "quality", label: "质量" }]}>
+    {tab === "sources" && <div className="inspector-block">{sources.map((source, index) => <div className="source-record" key={source.source_id || source.url}><a className="source-item" href={source.url} target="_blank" rel="noopener noreferrer"><span className="source-number">{String(index + 1).padStart(2, "0")}</span><span><b>{source.title || source.domain || source.url}</b><small>{source.domain || "研究资料"} <ExternalLink size={12} /></small></span></a><small className="source-task">{source.task_id ? state.tasksById[source.task_id]?.title ?? source.task_id : "研究协调"}</small></div>)}{!sources.length && <EmptyState title="正在等待来源" description="研究发现的来源会在这里持续更新。" />}</div>}
+    {tab === "findings" && <div className="inspector-block">{findings.map((finding) => <article className="finding" key={finding.task_id}><h3>{state.tasksById[finding.task_id]?.title ?? "研究发现"}</h3><p>{finding.summary || "已更新结构化发现"}</p></article>)}{!findings.length && <EmptyState title="尚无阶段发现" description="任务完成交接后，已记录的发现会显示在这里。" />}</div>}
+    {tab === "quality" && <div className="inspector-block"><p className="empty-note">任务完成与质量准入分别记录。请结合报告中的证据缺口使用研究结果。</p>{state.reportReview ? <ReportReviewPanel review={state.reportReview} /> : <p className="empty-note">尚无报告复核结果。</p>}{state.warnings.map((warning, index) => <div className="finding" key={`${warning.code}-${index}`}><AlertTriangle size={15} /> {warning.message}</div>)}</div>}
+  </Tabs><UsageCompactSummary runId={state.runId} terminal={state.terminal} /></>;
 }
 
 export function ResearchWorkspace({ runId }: { runId: string }) {
   useRunStream(runId);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
-  const router = useRouter(); const searchParams = useSearchParams(); const selectedTaskId = searchParams.get("task");
-  const state = useResearchRunStore(); const [feedback, setFeedback] = useState("");
+  const router = useRouter(), searchParams = useSearchParams(), selectedTaskId = searchParams.get("task");
+  const state = useResearchRunStore();
+  const [feedback, setFeedback] = useState("");
+  const [sending, setSending] = useState(false);
+  const [feedbackError, setFeedbackError] = useState("");
+  const [feedbackNotice, setFeedbackNotice] = useState("");
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState("");
   const usage = useRunUsage(runId, true, state.terminal);
   const { connectionState, isHydrated, runId: hydratedRunId, terminal, setSecurityApprovals } = state;
   useEffect(() => {
@@ -59,12 +74,44 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
     const timer = window.setInterval(refresh, 3_000);
     return () => { active = false; window.clearInterval(timer); controllers.forEach((controller) => controller.abort()); };
   }, [connectionState, hydratedRunId, isHydrated, runId, setSecurityApprovals, terminal]);
-  const requestedView = searchParams.get("view"); const view = requestedView === "usage" || requestedView === "report" ? requestedView : "process";
-  const tasks = Object.values(state.tasksById).map((task) => ({ ...task, ...usage.data?.task_operations?.[task.task_id] })); const selectedTask = tasks.find((task) => task.task_id === selectedTaskId); const waveIds = Array.from(new Set(tasks.map((task) => task.wave_id || "wave-0")));
-  const showReport = Boolean(state.report) && view === "report"; const showUsage = view === "usage";
+  const requestedView = searchParams.get("view");
+  const view = ["usage", "report", "team"].includes(requestedView ?? "") ? requestedView! : "process";
+  const tasks = Object.values(state.tasksById).map((task) => ({ ...task, ...usage.data?.task_operations?.[task.task_id] }));
+  const selectedTask = tasks.find((task) => task.task_id === selectedTaskId);
+  const waveIds = Array.from(new Set(tasks.map((task) => task.wave_id || "wave-0")));
+  const pendingCount = state.pendingSecurityApprovals.length + (state.pendingHumanAction ? 1 : 0);
   function downloadMarkdown() { const blob = new Blob([state.report], { type: "text/markdown;charset=utf-8" }); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `${state.title || runId}.md`; anchor.click(); URL.revokeObjectURL(href); }
-  async function submitFeedback() { if (!feedback.trim()) return; await researchApi.feedback(runId, { type: "direction", message: feedback }); setFeedback(""); }
+  async function submitFeedback() {
+    if (!feedback.trim() || sending || state.terminal) return;
+    setSending(true); setFeedbackError(""); setFeedbackNotice("");
+    try { await researchApi.feedback(runId, { type: "direction", message: feedback }); setFeedback(""); setFeedbackNotice("补充已受理，实际应用情况请查看研究进展。"); }
+    catch (error) { setFeedbackError(error instanceof Error ? error.message : "发送失败，请重试。"); }
+    finally { setSending(false); }
+  }
+  async function cancel() { setCancelling(true); setCancelError(""); try { await researchApi.cancel(runId); setCancelOpen(false); } catch (error) { setCancelError(error instanceof Error ? error.message : "停止失败，请重试。"); } finally { setCancelling(false); } }
   function selectTask(taskId?: string) { if (taskId) setApprovalsOpen(false); const params = new URLSearchParams(searchParams.toString()); if (taskId) params.set("task", taskId); else params.delete("task"); const query = params.toString(); router.push(`/research/${encodeURIComponent(runId)}${query ? `?${query}` : ""}`, { scroll: false }); }
-  function setView(next: "process" | "usage" | "report") { const params = new URLSearchParams(searchParams.toString()); params.set("view", next); router.push(`/research/${encodeURIComponent(runId)}?${params}`, { scroll: false }); }
-  return <><AppShell inspector={<RunInspector />}><div className="run-topbar"><div className="run-topbar-row"><div><span className="eyebrow mono">RUN / {runId}</span><h1>{state.title || "研究任务"}</h1></div><div className="run-controls"><button data-approval-trigger className="secondary approval-trigger" onClick={() => setApprovalsOpen(true)} aria-haspopup="dialog" aria-expanded={approvalsOpen}><ShieldCheck size={16} /> 审批中心 <span>{state.pendingSecurityApprovals.length + (state.pendingHumanAction ? 1 : 0)}</span></button><span className={`connection ${state.connectionState}`}><i />{state.connectionState}</span><div className="view-tabs"><button data-task-focus-fallback className={view === "process" ? "active" : ""} onClick={() => setView("process")}>过程</button><button className={showUsage ? "active" : ""} onClick={() => setView("usage")}>用量</button><button className={showReport ? "active" : ""} disabled={!state.report} onClick={() => setView("report")}>报告</button></div><button className="danger" disabled={state.terminal} onClick={() => researchApi.cancel(runId)}><CircleStop size={14} /> 取消</button></div></div><div className="stage-track" aria-label="研究阶段">{STAGES.map((stage) => <div key={stage} className={`stage-node ${state.stageProgress[stage] ?? (state.currentStage === stage ? "running" : "")}`}><span>{stageNames[stage]}</span></div>)}</div></div><div className="run-content"><RunQualityStatus state={state} /><ResearchTeamPanel runId={runId} revision={state.lastEventId} terminal={state.terminal} />{(state.pendingHumanAction || state.pendingSecurityApprovals.length > 0) && <button className="approval-pending-notice" onClick={() => setApprovalsOpen(true)}><ShieldCheck size={18} /><span><strong aria-live="polite">{state.pendingSecurityApprovals.length + (state.pendingHumanAction ? 1 : 0)} 项请求等待你的决定</strong><small>相关研究将在你处理后继续</small></span><span>查看请求 →</span></button>}{state.reportReview && <ReportReviewPanel review={state.reportReview} />}{showUsage ? <TokenUsageDashboard runId={runId} visible terminal={state.terminal} /> : showReport ? <><div className="report-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}><button className="secondary" onClick={downloadMarkdown}><Download size={15} /> Markdown</button><button className="secondary" onClick={() => window.print()}><FileText size={15} /> 打印 / PDF</button></div><ReportPublications runId={runId} initial={state.publications} preferredFormat={state.preferredOutputFormat} /><article className="report-shell"><MarkdownReport value={state.report} /></article>{state.artifacts.length > 0 && <section className="panel"><div className="panel-header"><h2>Artifacts</h2></div><div className="panel-body task-grid">{state.artifacts.map((artifact, index) => <a className="task-card" key={artifact.path || artifact.url || index} href={artifact.url || artifact.path} download><FileText /> <h3>{artifact.name || artifact.type || `Artifact ${index + 1}`}</h3></a>)}</div></section>}</> : <><section className="panel"><div className="panel-header"><h2>研究计划与任务波次</h2><span className="mono">{tasks.length} TASKS</span></div><div className="panel-body" style={{ display: "grid", gap: 24 }}>{waveIds.map((waveId, waveIndex) => { const waveTasks = tasks.filter((task) => (task.wave_id || "wave-0") === waveId); const waveStatus = deriveWaveStatus(waveTasks, state.wavesById[waveId]?.status); return <div className="wave" key={waveId}><div className="wave-title"><span>WAVE {String(waveIndex + 1).padStart(2, "0")} / {waveId}</span><span>{waveStatus.toUpperCase()}</span></div><div className="task-grid">{waveTasks.map((task) => <TaskCard key={task.task_id} task={task} selected={selectedTaskId === task.task_id} onOpen={() => selectTask(task.task_id)} />)}</div></div>; })}{!tasks.length && <p className="empty-note">等待计划事件。连接建立后，真实任务会按执行 wave 出现在轨道中。</p>}</div></section><section className="panel"><div className="panel-header"><h2>全局方向反馈</h2><Search size={15} /></div><div className="panel-body" style={{ display: "flex", gap: 8 }}><input style={{ flex: 1, background: "#091014", border: "1px solid var(--line)", color: "white", padding: 10 }} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="调整研究方向，或提出需要补证的主张……" /><button className="secondary" disabled={!feedback.trim()} onClick={submitFeedback}><Send size={15} /> 发送</button></div></section></>}</div></AppShell><ApprovalCenter key={runId} runId={runId} open={approvalsOpen} onOpenChange={setApprovalsOpen} /><TaskActivityDrawer runId={runId} task={approvalsOpen ? undefined : selectedTask} onClose={() => selectTask()} /></>;
+  function setView(next: string) { const params = new URLSearchParams(searchParams.toString()); params.set("view", next); router.push(`/research/${encodeURIComponent(runId)}?${params}`, { scroll: false }); }
+  const taskWaves = waveIds.map((waveId, index) => { const waveTasks = tasks.filter((task) => (task.wave_id || "wave-0") === waveId); return <section className="research-wave" key={waveId}><div className="research-wave-heading"><h3>第 {index + 1} 组任务</h3><StatusBadge status={deriveWaveStatus(waveTasks, state.wavesById[waveId]?.status)} /></div><div className="research-task-list">{waveTasks.map((task) => <TaskCard key={task.task_id} task={task} selected={selectedTaskId === task.task_id} onOpen={() => selectTask(task.task_id)} />)}</div></section>; });
+  const approvalNotice = pendingCount > 0 && <button className="approval-pending-notice" onClick={() => setApprovalsOpen(true)}><ShieldCheck size={20} /><span><strong aria-live="polite">{pendingCount} 项请求等待你的决定</strong><small>处理后，相关研究才能继续</small></span><ChevronRight size={17} /></button>;
+  return <><AppShell inspector={<RunInspector report={view === "report"} />}><div className="research-heading"><div><span className="eyebrow">深度研究</span><h1>{state.title || "研究任务"}</h1><div className="research-meta"><StatusBadge status={state.status} /><span>{tasks.length} 个任务 · {Object.keys(state.sourcesById).length} 个来源</span><span className={`connection ${state.connectionState}`}><i />{connectionNames[state.connectionState]}</span></div></div><button data-approval-trigger data-task-focus-fallback className="secondary approval-trigger" onClick={() => setApprovalsOpen(true)} aria-haspopup="dialog" aria-expanded={approvalsOpen}><ShieldCheck size={16} /> 审批中心 <span>{pendingCount}</span></button></div>
+    {(state.connectionState === "reconnecting" || state.connectionState === "error") && <p className="research-connection-notice" role="status">连接中断，保留最后已知状态，正在尝试恢复实时更新。</p>}
+    <Tabs label="研究视图" value={view} onChange={setView} items={[{ value: "process", label: "研究进展" }, { value: "team", label: "研究团队" }, { value: "report", label: "报告", disabled: !state.report }, { value: "usage", label: "用量" }]}><div className="research-content">
+      <RunQualityStatus state={state} />
+      {view !== "process" && approvalNotice}
+      {view === "team" ? <ResearchTeamPanel runId={runId} revision={state.lastEventId} terminal={state.terminal} /> : view === "usage" ? <TokenUsageDashboard runId={runId} visible terminal={state.terminal} /> : view === "report" ? state.report ? <>
+        <div className="report-actions"><SurfaceDialog title="导出研究报告" description="选择交付格式，查看生成进度与发布结果。" trigger={<button className="secondary"><Download size={16} /> 导出报告</button>}><div className="ui-actions"><button className="secondary" onClick={downloadMarkdown}><Download size={15} /> Markdown</button><button className="secondary" onClick={() => window.print()}><FileText size={15} /> 打印 / PDF</button></div><ReportPublications runId={runId} initial={state.publications} preferredFormat={state.preferredOutputFormat} /></SurfaceDialog></div>
+        {state.reportReview && <ReportReviewPanel review={state.reportReview} />}<article className="report-shell"><MarkdownReport value={state.report} /></article>
+        {state.artifacts.length > 0 && <section className="panel"><div className="panel-header"><h2>研究附件</h2></div><div className="panel-body task-grid">{state.artifacts.map((artifact, index) => <a className="task-card" key={artifact.path || artifact.url || index} href={artifact.url || artifact.path} download><FileText /><h3>{artifact.name || artifact.type || `附件 ${index + 1}`}</h3></a>)}</div></section>}
+      </> : <EmptyState title="报告尚未生成" description="研究完成撰写后，报告会显示在这里。" /> : <>
+        <ol className="research-stage-track" aria-label="研究阶段">{STAGES.map((stage) => <li key={stage} data-status={state.stageProgress[stage] ?? (state.currentStage === stage ? "running" : "pending")} aria-current={state.currentStage === stage ? "step" : undefined}>{stageNames[stage]}</li>)}</ol>
+        {approvalNotice}
+        {!state.isHydrated && <p role="status" className="empty-note">正在读取研究状态…</p>}
+        <ol className="research-timeline">{STAGES.filter((stage) => state.stageProgress[stage] === "completed" || state.stageProgress[stage] === "failed" || state.currentStage === stage || (stage === "researching" && tasks.length > 0)).map((stage) => <li className="research-step" key={stage}><span className="research-step-icon">{state.stageProgress[stage] === "completed" ? <Check size={17} /> : <Sparkles size={17} />}</span><div><h2>{stageNames[stage]}<StatusBadge status={state.stageProgress[stage] ?? (state.currentStage === stage ? "running" : "pending")} label={!state.stageProgress[stage] && state.currentStage !== stage ? "已记录任务" : undefined} /></h2>{stage === "researching" ? taskWaves.length ? taskWaves : <p className="empty-note">等待研究任务分配。</p> : <p className="research-step-copy">{state.stageProgress[stage] === "completed" ? "这一阶段已完成。" : state.stageProgress[stage] === "failed" ? "这一阶段未完成，请查看运行提示。" : "正在处理这一阶段，进展将持续更新。"}</p>}</div></li>)}</ol>
+
+        {!state.currentStage && !tasks.length && state.isHydrated && <EmptyState title={state.terminal ? "没有已记录的研究任务" : "研究准备中"} description="计划与任务由实际运行记录生成。" />}
+        {!state.terminal && <form className="direction-composer" onSubmit={(event) => { event.preventDefault(); void submitFeedback(); }}><label htmlFor="direction-feedback">补充研究方向</label><textarea id="direction-feedback" value={feedback} disabled={sending} onChange={(event) => setFeedback(event.target.value)} placeholder="调整研究方向，或提出需要补证的主张……" rows={2} /><div className="direction-footer"><span>发送给本次研究</span><div className="ui-actions"><button type="button" className="ui-text-button" disabled={state.status === "cancelling"} onClick={() => setCancelOpen(true)}><CircleStop size={15} /> 停止研究</button><button type="submit" className="primary" aria-label="发送补充" disabled={sending || !feedback.trim()}><ArrowUp size={16} />{sending ? "发送中" : "发送"}</button></div></div>{feedbackError && <p role="alert" className="form-alert error">{feedbackError}</p>}{feedbackNotice && <p role="status" className="empty-note">{feedbackNotice}</p>}</form>}
+      </>}
+    </div></Tabs>
+  </AppShell><ApprovalCenter key={runId} runId={runId} open={approvalsOpen} onOpenChange={setApprovalsOpen} /><TaskActivityDrawer runId={runId} task={approvalsOpen ? undefined : selectedTask} onClose={() => selectTask()} />
+  <SurfaceDialog title="停止这次研究？" description="已产生的研究记录会保留。停止后不能继续本次执行。" open={cancelOpen} onOpenChange={setCancelOpen}>{cancelError && <p role="alert" className="form-alert error">{cancelError}</p>}<div className="ui-actions"><button className="secondary" onClick={() => setCancelOpen(false)}>继续研究</button><button className="danger" disabled={cancelling || state.terminal} onClick={() => void cancel()}>{cancelling ? "正在停止…" : "确认停止"}</button></div></SurfaceDialog></>;
 }

@@ -23,9 +23,9 @@ test.describe("self-hosted IAM", () => {
     if ((page.viewportSize()?.width ?? 1440) < 768) {
       await page.getByRole("button", { name: "打开导航" }).click();
     }
-    await page.getByRole("link", { name: "身份管理" }).click();
-    await expect(page.getByRole("heading", { name: "身份与权限管理" })).toBeVisible();
-    await expect(page.getByText("管理员权限不会赋予读取其他用户研究内容的能力")).toBeVisible();
+    await page.getByRole("link", { name: "管理后台" }).click();
+    await expect(page.getByRole("heading", { name: "成员与权限" })).toBeVisible();
+    await expect(page.getByText("管理权限不包含读取其他用户的研究内容")).toBeVisible();
   });
 
   test("creates a real research run when explicitly enabled", async ({ page }) => {

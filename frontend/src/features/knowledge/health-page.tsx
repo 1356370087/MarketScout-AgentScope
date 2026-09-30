@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { ChoiceGroup, SearchSelect, SurfaceDialog } from "@/components/ui/workspace";
+import { KnowledgeNav } from "./knowledge-nav";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { apiFetch } from "@/lib/api";
@@ -30,6 +32,7 @@ export default function HealthPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [targetOpen, setTargetOpen] = useState(false);
   const [target, setTarget] = useState(initialTarget);
   const root = `/knowledge-bases/${kb}/health`;
   useEffect(() => {
@@ -54,7 +57,7 @@ export default function HealthPage() {
     setSaving(true); setError("");
     try {
       await apiFetch(`${root}/targets`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(target) });
-      setTarget(initialTarget); setReload(v => v + 1);
+      setTarget(initialTarget); setTargetOpen(false); setReload(v => v + 1);
     } catch (e) { setError(String(e)); } finally { setSaving(false); }
   }
   async function removeTarget(id: string) {
@@ -63,12 +66,13 @@ export default function HealthPage() {
     catch (e) { setError(String(e)); } finally { setSaving(false); }
   }
   return <AppShell><div className={`page knowledge-page ${styles.panel}`}>
-    <header className="page-header"><div><span className="eyebrow">KNOWLEDGE / HEALTH</span><h1>知识库健康与缺口</h1><p>按竞品和数据期间检查资料覆盖、时效与待处理事项。</p><Link href="/knowledge">知识检索</Link> · <Link href="/knowledge/ledger">事实台账与 Wiki</Link></div></header>
+    <header className="page-header"><div><span className="eyebrow">KNOWLEDGE / HEALTH</span><h1>知识库健康与缺口</h1><p>按竞品和数据期间检查资料覆盖、时效与待处理事项。</p></div></header>
+    <KnowledgeNav />
     <div className={styles.toolbar}>
-      <label>知识库 <select aria-label="知识库" value={kb} onChange={e => filter(() => { setKb(e.target.value); setCompany(""); setPeriod(""); setTarget(initialTarget); })}>{bases.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+      <SearchSelect label="知识库" value={kb} onChange={value => filter(() => { setKb(value); setCompany(""); setPeriod(""); setTarget(initialTarget); })} options={bases.map(b => ({ value: b.id, label: b.name }))} />
       <label>竞品 <input aria-label="竞品筛选" list="health-companies" placeholder="全部竞品" value={company} onChange={e => filter(() => setCompany(e.target.value))} /><datalist id="health-companies">{data?.companies.map(c => <option key={c}>{c}</option>)}</datalist></label>
       <label>数据期间 <input aria-label="期间筛选" list="health-periods" placeholder="全部期间" value={period} onChange={e => filter(() => setPeriod(e.target.value))} /><datalist id="health-periods">{data?.periods.map(p => <option key={p}>{p}</option>)}</datalist></label>
-      <label>检索记录窗口 <select aria-label="检索窗口" value={days} onChange={e => filter(() => setDays(Number(e.target.value)))}>{[7, 30, 90, 365].map(n => <option key={n} value={n}>近 {n} 天</option>)}</select></label>
+      <ChoiceGroup label="检索记录窗口" value={String(days)} onChange={value => filter(() => setDays(Number(value)))} options={[7, 30, 90, 365].map(n => ({ value: String(n), label: `近 ${n} 天` }))} />
       <button disabled={loading || !kb} onClick={() => setReload(v => v + 1)}>刷新看板</button>
     </div>
     {error && <p role="alert">{error}</p>}{loading && <p role="status">正在汇总知识库健康状态…</p>}
@@ -86,16 +90,16 @@ export default function HealthPage() {
       {!data.items.length && <p>当前筛选下没有待处理事项；尚未配置覆盖目标时，不代表资料已完整。</p>}
       <div className="document-toolbar"><button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>上一页</button><span>共 {data.total} 条，当前 {data.total ? offset + 1 : 0}–{Math.min(offset + 50, data.total)}</span><button disabled={offset + 50 >= data.total} onClick={() => setOffset(offset + 50)}>下一页</button></div>
       <h2>主题覆盖目标</h2><p>按确认的竞品名称、期间及主题精确匹配。资料未设置“主题”时使用“资料类型”。更新周期填 0 表示仅检查明确有效期，历史资料不会仅因年份久远而过期。</p>
-      <form onSubmit={e => { e.preventDefault(); void saveTarget(); }}><fieldset disabled={saving} style={{ border: 0, padding: 0 }}><div className={styles.toolbar}>
+      <SurfaceDialog title="主题覆盖目标" open={targetOpen} onOpenChange={setTargetOpen} trigger={<button type="button">配置覆盖目标</button>}><form onSubmit={e => { e.preventDefault(); void saveTarget(); }}>{error && <p role="alert" className="form-alert error">{error}</p>}<fieldset disabled={saving} style={{ border: 0, padding: 0 }}><div className={styles.toolbar}>
         <label>竞品名称 <input aria-label="目标竞品" required maxLength={200} value={target.company} onChange={e => setTarget({ ...target, company: e.target.value })} /></label>
         <label>数据期间 <input aria-label="目标期间" required maxLength={100} placeholder="例如 2025年" value={target.period} onChange={e => setTarget({ ...target, period: e.target.value })} /></label>
         <label>主题 / 资料类型 <input aria-label="目标主题" required maxLength={200} placeholder="例如 财报、价格表" value={target.topic} onChange={e => setTarget({ ...target, topic: e.target.value })} /></label>
         <label>最少资料数 <input aria-label="最少资料数" type="number" required min={1} max={100} value={target.min_documents} onChange={e => setTarget({ ...target, min_documents: Number(e.target.value) })} /></label>
         <label>更新周期（天，0 为不限）<input aria-label="更新周期" type="number" required min={0} max={3650} value={target.max_age_days} onChange={e => setTarget({ ...target, max_age_days: Number(e.target.value) })} /></label>
         <button type="submit">保存覆盖目标</button>
-      </div></fieldset></form>
+      </div></fieldset></form></SurfaceDialog>
       {!data.targets.length && <p>尚未配置目标。添加竞品、期间和所需主题后，即使没有上传资料，也能看到对应缺口。</p>}
-      <ul>{data.targets.filter(t => (!company || t.company === company) && (!period || t.period === period)).map(t => <li key={t.id}>{t.company} · {t.period} · {t.topic}：有效资料 {t.available_documents}/{t.min_documents}，缺 {t.missing_documents} 份 <button disabled={saving} onClick={() => setTarget({ company: t.company, period: t.period, topic: t.topic, min_documents: t.min_documents, max_age_days: t.max_age_days })}>编辑</button><button disabled={saving} onClick={() => void removeTarget(t.id)}>移除目标</button></li>)}</ul>
+      <ul>{data.targets.filter(t => (!company || t.company === company) && (!period || t.period === period)).map(t => <li key={t.id}>{t.company} · {t.period} · {t.topic}：有效资料 {t.available_documents}/{t.min_documents}，缺 {t.missing_documents} 份 <button disabled={saving} onClick={() => { setTarget({ company: t.company, period: t.period, topic: t.topic, min_documents: t.min_documents, max_age_days: t.max_age_days }); setTargetOpen(true); }}>编辑</button><button disabled={saving} onClick={() => void removeTarget(t.id)}>移除目标</button></li>)}</ul>
     </>}
   </div></AppShell>;
 }

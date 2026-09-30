@@ -7,7 +7,29 @@ import remarkGfm from "remark-gfm";
 import type { ReportReviewSummary } from "@/lib/contracts/publications";
 
 export function MarkdownReport({ value }: { value: string }) {
-  return <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ href, children }) => { const localDocument = Boolean(href && /^\/documents\/[0-9a-f-]+(?:\?chunk=[0-9a-f-]+)?$/i.test(href)); const safe = href?.startsWith("http://") || href?.startsWith("https://") || href?.startsWith("#") || localDocument; return safe ? <a href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer">{children}</a> : <span>{children}</span>; } }}>{value}</ReactMarkdown>;
+  return <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{
+    h1: ({ node, children }) => <h1 id={`report-line-${node?.position?.start.line}`}>{children}</h1>,
+    h2: ({ node, children }) => <h2 id={`report-line-${node?.position?.start.line}`}>{children}</h2>,
+    h3: ({ node, children }) => <h3 id={`report-line-${node?.position?.start.line}`}>{children}</h3>,
+    a: ({ href, children }) => { const localDocument = Boolean(href && /^\/documents\/[0-9a-f-]+(?:\?chunk=[0-9a-f-]+)?$/i.test(href)); const safe = href?.startsWith("http://") || href?.startsWith("https://") || href?.startsWith("#") || localDocument; return safe ? <a href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer">{children}</a> : <span>{children}</span>; }
+  }}>{value}</ReactMarkdown>;
+}
+
+function collectHeadings(value: string) {
+  let fence = "";
+  const headings = value.split("\n").flatMap((line, index) => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) { if (!fence) fence = marker; else if (marker[0] === fence[0] && marker.length >= fence.length) fence = ""; return []; }
+    if (fence) return [];
+    const heading = /^ {0,3}(#{1,3})\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+    return heading ? [{ line: index + 1, level: heading[1].length, title: heading[2].replace(/[*_`]/g, "") }] : [];
+  });
+  return headings;
+}
+
+export function ReportContents({ value }: { value: string }) {
+  const headings = collectHeadings(value);
+  return headings.length ? <nav className="report-contents" aria-label="报告目录"><h3>报告目录</h3>{headings.map((heading) => <a key={heading.line} href={`#report-line-${heading.line}`} data-level={heading.level}>{heading.title}</a>)}</nav> : null;
 }
 
 const reportReviewStatusLabels: Record<string, string> = {

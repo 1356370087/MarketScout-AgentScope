@@ -23,8 +23,9 @@ async function authority(page: Page, scenario: "network" | "plan" | "many" = "ne
     const pathname = url.pathname;
     if (pathname.includes("/events")) return route.fulfill({ status: 200, contentType: "text/event-stream", body: ": connected\n\n" });
     let result: unknown = {};
-    if (pathname.endsWith("/me")) result = { email: "researcher@example.com", permissions: [], display_name: "研究员" };
+    if (pathname.endsWith("/me")) result = { email: "researcher@example.com", roles: ["researcher"], permissions: [], display_name: "研究员" };
     else if (pathname.endsWith("/usage")) result = { accounting_status: "unavailable" };
+    else if (pathname.endsWith("/team")) result = { enabled: false, members: [], tasks: [], messages: [] };
     else if (pathname.endsWith("/runs")) result = { items: [] };
     else if (pathname.endsWith("/run-ui")) result = { run_id: "run-ui", title: "电池回收行业研究", status: "running", last_event_id: 0, progress: { current_stage: "researching", task_items: {} }, pending_security_approvals: pending, pending_human_action: human };
     else if (pathname.endsWith("/egress-state")) result = { baseline_mode: "auto", run_setting: "profile", effective_mode: mode, can_resolve: true, can_interact: true, allowed_modes: ["manual", "auto"], health: { calls_used: 24, remaining_calls: 176 }, records, targets: [{ target_id: "target-ui", target: request.target, capability: "tool.egress", version, decision: targetDecision, updated_at: Date.now() / 1000, reason: "", policy_denied: false, classification: { verdict: "ask", source: "stage2", reason: "域名用途尚不明确。" } }] };

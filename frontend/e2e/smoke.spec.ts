@@ -7,7 +7,7 @@ test.skip(
 
 test("local bypass opens the research intake at all breakpoints", async ({ page }) => {
   await page.goto("/research/new");
-  await expect(page.getByRole("heading", { name: /把一个竞争问题/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /今天，想深入了解什么/ })).toBeVisible();
   await expect(page.getByLabel("研究问题")).toBeVisible();
 });
 

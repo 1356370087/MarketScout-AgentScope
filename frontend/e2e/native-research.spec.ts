@@ -67,7 +67,7 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
       expect(final.output.markdown.length).toBeGreaterThan(100);
       expect(final.output.markdown).toMatch(/https?:\/\/|local:\/\/|\/documents\//);
       await page.reload();
-      await page.getByRole("button", { name: "报告", exact: true }).click();
+      await page.getByRole("tab", { name: "报告", exact: true }).click();
       await expect(page.locator(".report-shell")).toContainText(final.output.markdown.replace(/^#+\s*/gm, "").slice(0, 15));
       const usageResponse = await page.request.get(`/api/research/runs/${runId}/usage`);
       expect(usageResponse.ok()).toBeTruthy();

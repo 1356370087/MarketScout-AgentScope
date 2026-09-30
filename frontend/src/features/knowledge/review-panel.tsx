@@ -1,11 +1,12 @@
 "use client";
 import { docTypes } from "./document-types";
 import { useState } from "react";
+import { SearchSelect } from "@/components/ui/workspace";
 import { confirmMetadata, fetchGenerationReview, publishGeneration, reviseUnit, type GenerationReview } from "@/lib/knowledge-api";
 
-export function ReviewPanel() {
-  const [documentId, setDocumentId] = useState("");
-  const [generationId, setGenerationId] = useState("");
+export function ReviewPanel({ initialDocumentId = "", initialGenerationId = "" }: { initialDocumentId?: string; initialGenerationId?: string }) {
+  const [documentId, setDocumentId] = useState(initialDocumentId);
+  const [generationId, setGenerationId] = useState(initialGenerationId);
   const [review, setReview] = useState<GenerationReview | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -44,10 +45,7 @@ export function ReviewPanel() {
             {(review.quality_report.flags?.length ?? 0) > 0 && ` · 质量标记：${review.quality_report.flags!.join("、")}`}
           </div>
           <div className="document-toolbar">
-            <select defaultValue={docTypeConfirmed} onChange={(event) => setNote(event.target.value)}>
-              <option value="">确认资料类型…</option>
-              {docTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-            </select>
+            <SearchSelect label="确认资料类型" value={note || docTypeConfirmed} onChange={setNote} options={[{ value: "", label: "确认资料类型…" }, ...docTypes.map(type => ({ value: type, label: type }))]} />
             <button disabled={!note} onClick={() => void withRevision((revision) => confirmMetadata(documentId, generationId, revision, { doc_type: note }))}>确认元数据</button>
             <button className="primary" disabled={publishing || review.status === "published"} onClick={() => void publish()}>{publishing ? "发布中…" : review.status === "published" ? "已发布" : "发布"}</button>
           </div>

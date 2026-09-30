@@ -1,46 +1,16 @@
 "use client";
 import { useState } from "react";
-import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
+import { PageHeading, Tabs } from "@/components/ui/workspace";
 import { SearchPanel } from "./search-panel";
 import { AnswerPanel } from "./answer-panel";
 import { ReviewPanel } from "./review-panel";
+import { KnowledgeNav } from "./knowledge-nav";
 
 export default function KnowledgePage() {
-  const [tab, setTab] = useState<"search" | "answer" | "review">("search");
-  const inspector = (
-    <>
-      <h2 className="inspector-title">知识库</h2>
-      <div className="inspector-block">
-        <p className="eyebrow">检索边界</p>
-        <p className="empty-note">仅检索已发布代次；范围、版本与权限过滤发生在数据库内。重排失败会明确标注，不会伪装成“没有答案”。</p>
-      </div>
-    </>
-  );
-  return (
-    <AppShell inspector={inspector}>
-      <div className="page knowledge-page">
-        <header className="page-header">
-          <div>
-            <span className="eyebrow">KNOWLEDGE BASE / RETRIEVAL &amp; QA</span>
-            <h1>统一检索与单轮资料问答。</h1>
-            <p>三路召回 + 语义重排 + 同文档配额；回答只依据本次证据并逐段引用。</p>
-          </div>
-        </header>
-        <div className="document-toolbar">
-          <Link href="/knowledge/ledger">事实台账、Wiki 与资料归档</Link>
-          <Link href="/knowledge/health">健康与缺口看板</Link>
-          {(["search", "answer", "review"] as const).map((item) => (
-            <button key={item} className={tab === item ? "primary" : ""} onClick={() => setTab(item)}>
-              {item === "search" ? "独立检索" : item === "answer" ? "资料问答" : "审核工作台"}
-            </button>
-          ))}
-        </div>
-        {tab === "search" && <SearchPanel />}
-        {tab === "answer" && <AnswerPanel />}
-        {tab === "review" && <ReviewPanel />}
-      </div>
-    </AppShell>
-  );
+  const params = useSearchParams();
+  const [selectedTab, setTab] = useState<string>();
+  const tab = selectedTab ?? (params.get("review") === "1" ? "review" : "search");
+  return <AppShell><div className="page knowledge-page"><PageHeading title="组织的知识，触手可及" description="在已发布资料中检索、提问与核验，让每个答案保留依据。" /><KnowledgeNav /><Tabs label="知识工具" value={tab} onChange={setTab} items={[{ value: "search", label: "资料检索" }, { value: "answer", label: "资料问答" }, { value: "review", label: "审核工作台" }]}>{tab === "search" && <SearchPanel />}{tab === "answer" && <AnswerPanel />}{tab === "review" && <ReviewPanel key={`${params.get("document_id")}:${params.get("generation_id")}`} initialDocumentId={params.get("document_id") ?? ""} initialGenerationId={params.get("generation_id") ?? ""} />}</Tabs></div></AppShell>;
 }
-
