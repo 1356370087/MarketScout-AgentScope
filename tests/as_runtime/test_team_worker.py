@@ -234,7 +234,7 @@ async def test_external_consumer_drains_on_close_and_task_result_survives(
     assert service.done() and not consumer._active
 
 
-async def test_superseded_worker_cannot_commit_model_receipt(env, tmp_path):
+async def test_superseded_worker_cannot_commit_model_receipt(env, tmp_path, record_property):
     from sqlalchemy import select
 
     from open_deep_research.agentscope_runtime.recovery_store import FenceLost
@@ -256,15 +256,19 @@ async def test_superseded_worker_cannot_commit_model_receipt(env, tmp_path):
         records = (
             (
                 await conn.execute(
-                    select(store.ops.c.state).where(
+                    select(store.ops.c.kind, store.ops.c.state).where(
                         store.ops.c.run_id == team.lease.run_id
                     )
                 )
             )
-            .scalars()
             .all()
         )
-    assert "committed" not in records
+    record_property("operation_states", json.dumps([list(row) for row in records]))
+    # Coordination/context receipts committed before takeover remain valid;
+    # only the in-flight model result is fenced by this scenario.
+    model_states = [state for kind, state in records if kind.startswith("model:")]
+    assert model_states
+    assert "committed" not in model_states
     assert not (await team.service.tasks(team.lease.run_id))[0].get("_worker_error")
 
 

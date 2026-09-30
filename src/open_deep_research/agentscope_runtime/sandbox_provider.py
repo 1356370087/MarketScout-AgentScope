@@ -13,6 +13,7 @@ from pydantic import SecretStr
 
 from open_deep_research.agentscope_runtime.gateway import LiteLLMChatModel
 from open_deep_research.models.protocol_errors import ModelGatewayError
+from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER, is_token_limit_exceeded
 from open_deep_research.observability.trace_context import current_traceparent
 from open_deep_research.sandbox.wire import GatewayModelOutcomeV2
 
@@ -150,7 +151,11 @@ class NativeGatewayProvider:
             }.get(exc.status_code, "gateway_error")
             if exc.status_code in {403, 429} and "budget" in str(exc).lower():
                 code = "gateway_budget_exceeded"
-            raise ModelGatewayError(code, status_code=exc.status_code) from exc
+            raise ModelGatewayError(
+                code, status_code=exc.status_code,
+                provider_error_code=GATEWAY_TOKEN_LIMIT_MARKER
+                if exc.status_code == 400 and is_token_limit_exceeded(exc) else None,
+            ) from exc
         finally:
             self.headers.reset(token)
         usage = result.usage

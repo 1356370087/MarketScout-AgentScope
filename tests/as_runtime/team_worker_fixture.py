@@ -21,6 +21,7 @@ from open_deep_research.agentscope_runtime.research_agents import Researcher
 from open_deep_research.agentscope_runtime.research_models import ResearchModels
 from open_deep_research.agentscope_runtime.research_quality import NativeResearchQuality
 from open_deep_research.agentscope_runtime.team_worker import TeamWorkers
+from open_deep_research.events.public import PublicFindingsSummary
 from open_deep_research.tools.base import (
     ToolExecutionZone,
     ToolOrigin,
@@ -60,6 +61,10 @@ class Model(ScriptedModel):
         return ChatResponse(content=blocks, is_last=True)
 
     async def generate_structured_output(self, messages, schema):
+        if schema is PublicFindingsSummary:
+            return StructuredResponse(content={
+                "findings": ["研究资料显示市场增长，证据 ev1 的适用范围仍需核对。"],
+            })
         prompt = messages[-1].get_text_content()
         result = await Judge().structured("quality_evaluation", prompt, schema, {})
         return StructuredResponse(content=result.model_dump(mode="json"))

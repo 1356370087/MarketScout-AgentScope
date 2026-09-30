@@ -521,5 +521,42 @@
       "scope": "Removed query or LangChain tool wrappers; native policy, protocol and runtime tests cover the replacement boundaries."
     }
   ],
-  "note": "Coverage mapping is by behavior area, not a claim of one-to-one framework-internal assertions."
+  "note": "Coverage mapping is by behavior area, not a claim of one-to-one framework-internal assertions.",
+  "partial_retirements": [
+    {
+      "file": "tests/test_run_lease.py",
+      "old_test_functions": [
+        "test_stream_message_releases_lease_when_startup_publication_fails",
+        "test_stream_message_releases_lease_when_fence_binding_fails",
+        "test_stream_message_rebinds_run_scoped_resources_when_run_id_changes",
+        "test_stream_resume_does_not_acquire_lease_when_owner_validation_fails",
+        "test_heartbeat_io_failure_requests_run_cancellation"
+      ],
+      "reason": "Only QueryEngine lifecycle private APIs retired; shared file fence and artifact assertions remain. Native SQL and resource lifecycle assertions replace them.",
+      "native_coverage": [
+        "tests/as_runtime/test_recovery.py",
+        "tests/as_runtime/test_native_startup_recovery.py",
+        "tests/as_runtime/test_production_factory.py",
+        "tests/as_runtime/test_model_execution.py"
+      ]
+    },
+    {
+      "file": "tests/test_tool_governance.py",
+      "old_test_functions": [
+        "test_research_complete_bypasses_whitelist_is_blocked",
+        "test_research_complete_allowed_ends_research",
+        "test_id_filtering_preserves_same_name_valid_call",
+        "test_build_supervisor_tools_excludes_llm_security_approval",
+        "test_retryable_search_failure_yields_structured_error",
+        "test_toolexception_with_429_string"
+      ],
+      "reason": "Retired private QueryEngine tool-loop and LangChain exception cases; shared governance, retries, permissions and egress assertions remain on typed native tools.",
+      "native_coverage": [
+        "tests/as_runtime/test_tools.py",
+        "tests/as_runtime/test_research_migration.py",
+        "tests/test_tool_prompts.py",
+        "tests/test_single_task_enforcement.py"
+      ]
+    }
+  ]
 }

@@ -5,7 +5,7 @@ validation including configured constraints, error classification, retry with
 exponential backoff scoped by origin, the governed execution entry point, the
 supervisor gate, pre-bind filtering, and user-role blacklists), self-hosted IAM
 Principal role propagation, plus integration tests that exercise
-researcher_tools and supervisor_tools end-to-end.
+the shared execution protocol used by the native GovernedToolkit.
 """
 
 from __future__ import annotations
@@ -18,14 +18,13 @@ from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import tool as lc_tool
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
+from inspect import signature, isawaitable, isclass
+from typing import get_type_hints
+from pydantic import BaseModel, create_model
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.tools.adapters import adapt_langchain_tool
-from open_deep_research.tools.base import Tool, ToolContext, ToolEffect, ToolOrigin
-from open_deep_research.tools.fetch_webpage import fetch_webpage
+from open_deep_research.tools.base import Tool, ToolContext, ToolEffect, ToolOrigin, ToolResult, build_tool
 from open_deep_research.tools.governance import (
     AgentRole,
     ToolErrorType,
@@ -47,9 +46,9 @@ from open_deep_research.tools.governance import (
 from open_deep_research.tools.governance import (
     invoke_tool_with_retry as _invoke_tool_with_retry,
 )
-from open_deep_research.tools.research_complete import ResearchComplete
-from open_deep_research.tools.supervisor.conduct_research import ConductResearch
-from open_deep_research.tools.utils import tavily_search, think_tool
+from open_deep_research.agentscope_runtime.research_agents import _Topic as ConductResearch
+from open_deep_research.agentscope_runtime.search import tavily_search_tool
+from open_deep_research.agentscope_runtime.web_tools import fetch_url_tool, WebFetchLedger
 from security.rbac.principal import Principal
 
 # ---------------------------------------------------------------------------
@@ -59,7 +58,7 @@ from security.rbac.principal import Principal
 
 def _config(**configurable: Any) -> RunnableConfig:
     """Build a RunnableConfig with the given configurable overrides."""
-    return RunnableConfig(configurable=configurable, metadata={"run_id": "test"})
+    return dict(configurable=configurable, metadata={"run_id": "test"})
 
 
 def _runtime_user(
@@ -85,34 +84,47 @@ def _client_response_error(status: int, message: str = "err") -> aiohttp.ClientR
     )
 
 
-def _make_tool(fn, *, origin: ToolOrigin, retryable: bool, name: str | None = None) -> Any:
-    """Wrap a coroutine behind the project Tool Adapter.
+def _make_tool(fn, *, origin, retryable=False, name=None, **kwargs):
+    """Build the project's typed Tool directly from small test callables."""
+    if isclass(fn) and issubclass(fn, BaseModel):
+        schema = fn
+    else:
+        hints = get_type_hints(fn)
+        schema = create_model(fn.__name__ + "Input", **{
+            key: (hints.get(key, Any), parameter.default if parameter.default is not parameter.empty else ...)
+            for key, parameter in signature(fn).parameters.items()
+        })
 
-    ``fn`` is a bare async function (with a docstring) -- we apply ``lc_tool``
-    fresh so the resulting StructuredTool has a clean schema, then tag metadata.
-    """
-    t = lc_tool(fn)
-    if name is not None:
-        t.name = name
-    return adapt_langchain_tool(t, origin=origin, retryable=retryable)
+    async def call(input, context, on_progress=None):
+        result = fn(**input.model_dump())
+        if isawaitable(result):
+            result = await result
+        return ToolResult(output=result.model_dump_json() if isinstance(result, BaseModel) else result)
 
-
-def _research_complete_tool(
-    *,
-    origin: ToolOrigin = ToolOrigin.SYSTEM,
-    retryable: bool = False,
-    auth_satisfied: bool = False,
-):
-    """Build a fresh ResearchComplete Tool Adapter."""
-    return adapt_langchain_tool(
-        lc_tool(ResearchComplete),
-        origin=origin,
-        retryable=retryable,
-        auth_satisfied=auth_satisfied,
-    )
+    return build_tool(name=name or fn.__name__, input_schema=schema, call=call,
+                      description=fn.__doc__ or "Fixture tool", origin=origin,
+                      retryable=retryable, **kwargs)
 
 
-@lc_tool
+def _research_complete_tool(*, origin=ToolOrigin.SYSTEM, retryable=False, auth_satisfied=False):
+    if origin is ToolOrigin.MCP:
+        from types import SimpleNamespace
+        from agentscope.message import TextBlock, ToolResultState
+        from agentscope.tool import ToolResponse
+        from mcp.types import Tool as Descriptor
+        from open_deep_research.agentscope_runtime.mcp import NativeMcpTool
+        handle = AsyncMock(return_value=ToolResponse(content=[TextBlock(text="ResearchComplete")],
+                                                     state=ToolResultState.SUCCESS))
+        server = SimpleNamespace(ensure=AsyncMock(), client=SimpleNamespace(get_tool=AsyncMock(return_value=handle)))
+        return NativeMcpTool(server, Descriptor(name="ResearchComplete", inputSchema={"type": "object", "properties": {}}),
+                             origin=origin, effect=ToolEffect.READ_ONLY, retryable=retryable,
+                             egress_urls_url=None, auth_satisfied=auth_satisfied)
+
+    async def complete():
+        return "ResearchComplete"
+    return _make_tool(complete, name="ResearchComplete", origin=origin, retryable=retryable)
+
+
 async def ok_tool() -> str:
     """A tool that always succeeds."""
     return "ok-result"
@@ -130,13 +142,22 @@ async def _bad_request_404_fn() -> str:
 
 # Module-level @tool wrappers (kept for the retry-unit tests that call
 # invoke_tool_with_retry directly with a StructuredTool).
-ok_tool = adapt_langchain_tool(ok_tool, origin=ToolOrigin.SYSTEM)
-flaky_503 = adapt_langchain_tool(
-    lc_tool(_flaky_503_fn), origin=ToolOrigin.SEARCH, retryable=True
+ok_tool = _make_tool(ok_tool, origin=ToolOrigin.SYSTEM)
+flaky_503 = _make_tool(
+    _flaky_503_fn, origin=ToolOrigin.SEARCH, retryable=True
 )
-bad_request_404 = adapt_langchain_tool(
-    lc_tool(_bad_request_404_fn), origin=ToolOrigin.SEARCH, retryable=True
+bad_request_404 = _make_tool(
+    _bad_request_404_fn, origin=ToolOrigin.SEARCH, retryable=True
 )
+
+
+tavily_search = tavily_search_tool(lambda: {}, None)
+fetch_url = fetch_url_tool(lambda: {}, None, WebFetchLedger())
+
+async def _think(reflection: str):
+    return f"Reflection recorded: {reflection}"
+
+think_tool = _make_tool(_think, name="think_tool", origin=ToolOrigin.SYSTEM)
 
 
 async def _probe_search_fn(query: str) -> str:
@@ -171,7 +192,7 @@ def check_permission(
 
 
 async def execute_governed_tool_call(*args, **kwargs):
-    """Return the transport message for legacy scenario assertions."""
+    """Return the typed transport message for shared scenario assertions."""
     kwargs.pop("origin_index", None)
     outcome = await _execute_governed_tool_call(*args, **kwargs)
     return outcome.message
@@ -186,7 +207,7 @@ async def invoke_tool_with_retry(
     """Invoke the new typed retry seam while preserving scenario assertions."""
     config = config or _config()
     if not isinstance(tool, Tool):
-        tool = adapt_langchain_tool(
+        tool = _make_tool(
             tool,
             origin=ToolOrigin.SEARCH,
             retryable=True,
@@ -227,9 +248,9 @@ class TestToolOriginFields:
     def test_retryable_defaults_are_conservative(self):
         assert get_tool_retryable(ok_tool) is False
 
-    def test_effectful_langchain_tool_is_serial_unless_explicitly_opted_in(self):
-        effectful_tool = adapt_langchain_tool(
-            lc_tool(_probe_search_fn),
+    def test_effectful_tool_is_serial_unless_explicitly_opted_in(self):
+        effectful_tool = _make_tool(
+            _probe_search_fn,
             origin=ToolOrigin.MCP,
             effect=ToolEffect.EXTERNAL_WRITE,
         )
@@ -373,7 +394,7 @@ class TestPreBindFiltering:
         # Assert -- the non-whitelisted Tool is filtered out by name
         assert names == {"ResearchComplete"}
 
-    def test_legacy_fetch_requires_search_permission(self):
+    def test_native_fetch_requires_search_permission(self):
         config = _config(
             langgraph_auth_user=_runtime_user(
                 "researcher",
@@ -382,7 +403,7 @@ class TestPreBindFiltering:
         )
 
         out = filter_tools_by_permission(
-            [fetch_webpage], AgentRole.RESEARCHER, config
+            [fetch_url], AgentRole.RESEARCHER, config
         )
 
         assert out == []
@@ -458,8 +479,8 @@ class TestParamValidation:
 
     def test_conduct_research_missing_topic(self):
         # Arrange
-        tool = adapt_langchain_tool(
-            lc_tool(ConductResearch),
+        tool = _make_tool(
+            ConductResearch,
             origin=ToolOrigin.SYSTEM,
         )
         # Act
@@ -547,12 +568,7 @@ class TestClassifyRetryableError:
             # Act / Assert
             assert classify_retryable_error(outer) == (ToolErrorType.service_unavailable, True)
 
-    def test_toolexception_with_429_string(self):
-        from langchain_core.tools import ToolException
-        # Act / Assert
-        assert classify_retryable_error(ToolException("HTTP 429 Too Many Requests")) == (
-            ToolErrorType.rate_limited, True,
-        )
+
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +592,6 @@ class TestInvokeToolWithRetry:
         # Arrange -- a tool that 503s twice then succeeds
         state = {"n": 0}
 
-        @lc_tool
         async def transient() -> str:
             """Fails twice then succeeds."""
             state["n"] += 1
@@ -689,8 +704,8 @@ class TestExecuteGovernedToolCall:
             """Return content longer than the declared output budget."""
             return "abcdefghij"
 
-        declared = adapt_langchain_tool(
-            lc_tool(long_output),
+        declared = _make_tool(
+            long_output,
             origin=ToolOrigin.SYSTEM,
             max_output_chars=5,
         )
@@ -747,8 +762,8 @@ class TestExecuteGovernedToolCall:
             attempts += 1
             raise _client_response_error(503, "busy")
 
-        effectful = adapt_langchain_tool(
-            lc_tool(external_write),
+        effectful = _make_tool(
+            external_write,
             origin=ToolOrigin.MCP,
             effect=ToolEffect.EXTERNAL_WRITE,
             retryable=True,
@@ -779,8 +794,8 @@ class TestExecuteGovernedToolCall:
             attempts += 1
             raise _client_response_error(503, "busy")
 
-        effectful = adapt_langchain_tool(
-            lc_tool(idempotent_external_write),
+        effectful = _make_tool(
+            idempotent_external_write,
             origin=ToolOrigin.MCP,
             effect=ToolEffect.EXTERNAL_WRITE,
             retryable=True,
@@ -809,10 +824,8 @@ class TestExecuteGovernedToolCall:
             """Read from the already owner-validated document selection."""
             return f"local:{query}"
 
-        declared = lc_tool(read_selected_document)
-        declared.name = "search_documents"
-        local_read = adapt_langchain_tool(
-            declared,
+        local_read = _make_tool(
+            read_selected_document, name="search_documents",
             origin=ToolOrigin.LOCAL_DOCUMENT,
             effect=ToolEffect.SENSITIVE_READ,
         )
@@ -847,10 +860,8 @@ class TestExecuteGovernedToolCall:
             """Read a local document without a frozen selection."""
             return query
 
-        declared = lc_tool(read_local_document)
-        declared.name = "search_documents"
-        local_read = adapt_langchain_tool(
-            declared,
+        local_read = _make_tool(
+            read_local_document, name="search_documents",
             origin=ToolOrigin.LOCAL_DOCUMENT,
             effect=ToolEffect.SENSITIVE_READ,
         )
@@ -978,11 +989,11 @@ class TestSupervisorGovernedExecution:
         )
         assert json.loads(message.content)["error_type"] == "tool_not_found"
 
-    def test_registry_rejects_unadapted_langchain_tool(self):
+    def test_registry_rejects_unwrapped_callable(self):
         from open_deep_research.tools.base import build_tool_registry
 
         with pytest.raises(TypeError):
-            build_tool_registry([lc_tool(ConductResearch)])
+            build_tool_registry([ConductResearch])
 
     @pytest.mark.asyncio
     async def test_executor_blocks_whitelist_violation(self):
@@ -1103,56 +1114,6 @@ class TestPrincipalRolePropagation:
 # ---------------------------------------------------------------------------
 
 
-class TestResearcherToolsIntegration:
-    @pytest.mark.asyncio
-    async def test_retryable_search_failure_yields_structured_error(self):
-        """A SEARCH researcher tool raising HTTP 503 returns max_retries_exceeded."""
-        # Arrange -- a SEARCH+retryable tool that always 503s
-        search_503 = _make_tool(
-            _flaky_503_fn,
-            origin=ToolOrigin.SEARCH,
-            retryable=True,
-            name="flaky_503",
-        )
-        from open_deep_research.agents.deep_researcher import researcher_tools
-        ai_msg = AIMessage(content="", tool_calls=[{"name": "flaky_503", "args": {}, "id": "it1"}])
-        state = {
-            "researcher_messages": [ai_msg], "tool_call_iterations": 1,
-            "research_topic": "test topic", "memory_context": None,
-        }
-        config = _config(max_tool_retries=1, tool_retry_base_delay=1.0, tool_retry_max_delay=30.0, max_react_tool_calls=10)
-
-        import asyncio as _asyncio
-
-        import open_deep_research.agents.deep_researcher as mod
-
-        async def fake_get_all_tools(_config):
-            return [search_503]
-
-        fake_sleep_calls: list[float] = []
-
-        async def patched_sleep(d: float) -> None:
-            fake_sleep_calls.append(d)
-
-        original_get_all_tools = mod.get_all_tools
-        orig_sleep = _asyncio.sleep
-        mod.get_all_tools = fake_get_all_tools
-        _asyncio.sleep = patched_sleep
-        try:
-            # Act
-            result = await researcher_tools(state, config)
-        finally:
-            mod.get_all_tools = original_get_all_tools
-            _asyncio.sleep = orig_sleep
-
-        # Assert
-        messages = result.update["researcher_messages"]
-        assert len(messages) == 1
-        parsed = json.loads(messages[0].content)
-        assert parsed["error_type"] == "max_retries_exceeded"
-        assert parsed["tool_name"] == "flaky_503"
-        assert parsed["attempts"] == 2  # initial + 1 retry
-        assert len(fake_sleep_calls) == 1  # one backoff before the final attempt
 
 
 # ---------------------------------------------------------------------------
@@ -1160,92 +1121,6 @@ class TestResearcherToolsIntegration:
 # ---------------------------------------------------------------------------
 
 
-class TestSupervisorToolsIntegration:
-    @pytest.mark.asyncio
-    async def test_research_complete_bypasses_whitelist_is_blocked(self):
-        """A ResearchComplete call excluded by the supervisor whitelist must NOT
-        end the research phase -- it is denied and the loop continues (P1#1)."""
-        # Arrange
-        from open_deep_research.agents.deep_researcher import supervisor_tools
-        ai_msg = AIMessage(content="", tool_calls=[{"name": "ResearchComplete", "args": {}, "id": "rc-1"}])
-        state = {
-            "supervisor_messages": [ai_msg], "research_iterations": 1, "research_brief": "b",
-            "enable_async_research": False, "memory_context": None, "notes": [], "raw_notes": [],
-        }
-        config = _config(
-            max_researcher_iterations=100,
-            supervisor_tool_whitelist=["think_tool", "ConductResearch"],  # ResearchComplete excluded
-        )
-        # Act
-        result = await supervisor_tools(state, config)
-        # Assert -- does NOT end; continues to supervisor with the denial
-        assert result.goto != "__end__"
-        msgs = result.update.get("supervisor_messages", [])
-        assert any(m.name == "ResearchComplete" and json.loads(m.content)["error_type"] == "permission_denied" for m in msgs)
-
-    @pytest.mark.asyncio
-    async def test_research_complete_allowed_ends_research(self):
-        # Arrange
-        from open_deep_research.agents.deep_researcher import supervisor_tools
-        ai_msg = AIMessage(content="", tool_calls=[{"name": "ResearchComplete", "args": {}, "id": "rc-2"}])
-        state = {
-            "supervisor_messages": [ai_msg], "research_iterations": 1, "research_brief": "b",
-            "enable_async_research": False, "memory_context": None, "notes": [], "raw_notes": [],
-        }
-        config = _config(
-            max_researcher_iterations=100,
-            supervisor_tool_whitelist=["think_tool", "ConductResearch", "ResearchComplete"],
-        )
-        # Act
-        result = await supervisor_tools(state, config)
-        # Assert -- ends research
-        assert result.goto == "__end__"
-
-    @pytest.mark.asyncio
-    async def test_id_filtering_preserves_same_name_valid_call(self, tmp_path):
-        """An invalid same-name call must not drag a valid same-name call out of
-        the active dispatch set (filtered by tool_call id, not name)."""
-        # Arrange
-        import open_deep_research.agents.deep_researcher as mod
-        from open_deep_research.agents.deep_researcher import supervisor_tools
-
-        async def fake_ainvoke(*a, **k):
-            return {"compressed_research": "GOOD-RAN", "raw_notes": []}
-
-        ai_msg = AIMessage(content="", tool_calls=[
-            {"name": "ConductResearch", "args": {}, "id": "cr-bad"},  # missing research_topic
-            {"name": "ConductResearch", "args": {"research_topic": "ai safety"}, "id": "cr-good"},
-        ])
-        state = {
-            "supervisor_messages": [ai_msg], "research_iterations": 1, "research_brief": "b",
-            "enable_async_research": False, "memory_context": None, "notes": [], "raw_notes": [],
-        }
-        config = _config(
-            max_researcher_iterations=100,
-            max_concurrent_research_units=5,
-            runs_dir=str(tmp_path),
-        )
-        orig_ainvoke = mod.researcher_runtime.ainvoke
-        mod.researcher_runtime.ainvoke = fake_ainvoke
-        try:
-            # Act
-            result = await supervisor_tools(state, config)
-        finally:
-            mod.researcher_runtime.ainvoke = orig_ainvoke
-        # Assert
-        msgs = result.update.get("supervisor_messages", [])
-        bad = [m for m in msgs if m.tool_call_id == "cr-bad"]
-        good = [m for m in msgs if m.tool_call_id == "cr-good"]
-        assert len(bad) == 1 and json.loads(bad[0].content)["error_type"] == "validation_error"
-        assert len(good) == 1
-        assert json.loads(good[0].content)["compressed_research"] == "GOOD-RAN"
-
-    def test_build_supervisor_tools_excludes_llm_security_approval(self):
-        from open_deep_research.agents.deep_researcher import build_supervisor_tools
-
-        async_tools = build_supervisor_tools({"enable_async_research": True})
-        names = [t.name for t in async_tools]
-        assert "ApproveResearchDomain" not in names
 
 # ---------------------------------------------------------------------------
 # Egress domain allowlist (check_egress_domain inside execute_governed_tool_call)
@@ -1259,10 +1134,8 @@ async def _ok_fetch_fn(url: str) -> str:
 
 def _fetch_tool() -> Any:
     """Build a retryable fetch_webpage Tool used by egress scenarios."""
-    t = lc_tool(_ok_fetch_fn)
-    t.name = "fetch_webpage"
-    return adapt_langchain_tool(
-        t,
+    return _make_tool(
+        _ok_fetch_fn, name="fetch_webpage",
         origin=ToolOrigin.SYSTEM,
         retryable=True,
         egress_urls=lambda args: [args["url"]],
@@ -1277,7 +1150,7 @@ def _egress_config(**configurable: Any) -> RunnableConfig:
         "sandbox_policy_path": "config/sandbox-policy.toml",
     }
     base.update(configurable)
-    return RunnableConfig(
+    return dict(
         configurable=base, metadata={"run_id": "egress-run"}
     )
 class TestEgressAllowlist:
@@ -1322,8 +1195,8 @@ class TestEgressAllowlist:
             calls += 1
             return url
 
-        tool = adapt_langchain_tool(
-            lc_tool(multi_fetch),
+        tool = _make_tool(
+            multi_fetch,
             origin=ToolOrigin.SEARCH,
             egress_urls=lambda args: [
                 args["url"],
@@ -1354,7 +1227,7 @@ class TestEgressAllowlist:
 
     def test_disabled_sandbox_skips_egress_gate(self):
         tool = _fetch_tool()
-        cfg = RunnableConfig(configurable={}, metadata={"run_id": "plain"})
+        cfg = dict(configurable={}, metadata={"run_id": "plain"})
         msg = asyncio.run(
             execute_governed_tool_call(
                 {"name": "fetch_webpage", "id": "tc1", "args": {"url": "https://untrusted.example/x"}},

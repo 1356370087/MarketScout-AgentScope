@@ -4,10 +4,10 @@ import pytest
 
 from open_deep_research.prompts import research_system_prompt
 from open_deep_research.tools.governance import AgentRole
-from open_deep_research.tools.registry import prepare_toolset
-from open_deep_research.tools.supervisor.conduct_research import ConductResearch
-from open_deep_research.tools.supervisor.start_research_task import StartResearchTask
-from open_deep_research.tools.tavily_search import tavily_search
+from open_deep_research.tools.registry import prepare_existing_toolset
+from open_deep_research.agentscope_runtime.research_agents import _Topic, _Thought, _control_tool
+from open_deep_research.agentscope_runtime.teams_tools import TaskCreateInput
+from open_deep_research.agentscope_runtime.search import search_provider_tools, tavily_search_tool
 
 
 def test_research_prompt_requires_progressive_search_within_task_contract() -> None:
@@ -44,23 +44,20 @@ async def test_research_prompt_uses_only_the_selected_search_backend(
     selected: str,
     not_selected: str,
 ) -> None:
-    assembly = await prepare_toolset(
-        AgentRole.RESEARCHER,
-        {
-            "configurable": {
-                "web_pipeline_mode": "legacy",
-                "search_api": search_api,
-            }
-        },
-    )
+    config = {"configurable": {"web_pipeline_mode": "legacy", "search_api": search_api}}
+    async def unused(*_args):
+        pytest.fail("prompt rendering must not execute a tool")
+    tools = [*search_provider_tools(lambda: config, None), _control_tool("think_tool", _Thought, unused)]
+    assembly = await prepare_existing_toolset(tools,
+                                              AgentRole.RESEARCHER, config)
     rendered = research_system_prompt.format(
         tool_guidance=assembly.guidance,
         mcp_prompt="",
         date="July 7, 2026",
     )
 
-    assert selected in rendered
-    assert not_selected not in rendered
+    assert selected.strip("`") in rendered
+    assert not_selected.strip("`") not in rendered
     assert "Do not call it in parallel with a search or another tool" in rendered
 
     base_prompt = research_system_prompt.format(
@@ -75,7 +72,7 @@ async def test_research_prompt_uses_only_the_selected_search_backend(
 
 
 def test_research_task_schemas_distinguish_objectives_from_queries() -> None:
-    for task_model in (ConductResearch, StartResearchTask):
+    for task_model in (_Topic, TaskCreateInput):
         description = task_model.model_fields["research_topic"].description or ""
 
         assert "complete, self-contained research objective" in description
@@ -85,6 +82,7 @@ def test_research_task_schemas_distinguish_objectives_from_queries() -> None:
 
 @pytest.mark.asyncio
 async def test_tavily_schema_exposes_progressive_query_guidance() -> None:
+    tavily_search = tavily_search_tool(lambda: {}, None)
     schema_description = tavily_search.input_schema.model_json_schema()["description"]
     tool_guidance = tavily_search.prompt({}) or ""
 

@@ -12,14 +12,22 @@ import unicodedata
 import fitz
 import pytest
 from docx import Document
-from fastapi import HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from open_deep_research.report.runtime import AIMessage
+from tests.report_helpers import patch_report_model
 from markdown_it import MarkdownIt
 from pptx import Presentation
 
-from open_deep_research import server
-from open_deep_research.agents.query_engine import QueryEngine
+from sqlalchemy.pool import NullPool
+from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+from open_deep_research.agentscope_runtime.recovery import RecoverySession
+from open_deep_research.agentscope_runtime.run_config import RunConfig
+from open_deep_research.agentscope_runtime.report import enqueue_report_publication
+from open_deep_research.api.native_runs import NativeRuns
+from open_deep_research.api.research_router import build_research_router
+from open_deep_research.api.streams import StreamOptions, _publication_event_iterator
+from open_deep_research.configuration import Configuration
 from open_deep_research.events.publications import PublicationEventStore
 from open_deep_research.report.canonical import canonicalize_report
 from open_deep_research.report.models import (
@@ -97,17 +105,12 @@ def test_canonical_report_keeps_supported_blocks_and_allowlisted_links() -> None
 
 @pytest.mark.asyncio
 async def test_file_output_formats_keep_report_generation_binary_free(monkeypatch) -> None:
-    from open_deep_research.report import assembly as assembly_module
     from open_deep_research.report import build_report
 
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kwargs):
         return AIMessage(content="# Report\n\nBody")
 
-    monkeypatch.setattr(
-        assembly_module,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
+    patch_report_model(monkeypatch, fake_invoke)
     update = await build_report(
         {"messages": [], "research_brief": "brief", "notes": ["finding"]},
         {"configurable": {"output_format": "pdf", "web_pipeline_mode": "legacy", "quality_evaluation_enabled": False}, "metadata": {"run_id": "binary-free"}},
@@ -452,31 +455,61 @@ def test_job_store_is_idempotent_and_worker_commits_hash_verified_file(
     assert store.canonical_report_path.is_file()
 
 
-def test_query_engine_persists_markdown_and_canonical_bundle(tmp_path) -> None:
-    run_id = "canonical-bundle"
-    engine = QueryEngine(
-        {
-            "configurable": {"runs_dir": str(tmp_path)},
-            "metadata": {"run_id": run_id, "owner": "user-1"},
-        }
-    )
-    assert engine.context_store is not None
-    engine.context_store.initialize("user-1", engine.config)
-    state = {
-        "final_report": MARKDOWN,
-        "research_brief": "Market Report",
-        "sources": [{"title": "Primary", "url": "https://example.com/source"}],
-    }
+@pytest.fixture
+def native_publications(tmp_path):
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "native.db").as_posix(),
+                          engine_kwargs={"poolclass": NullPool})
+    asyncio.run(store.create_tables())
+    service = NativeRuns(store, None, None, runs_dir=tmp_path)
+    app = FastAPI()
+    app.include_router(build_research_router(service))
+    app.dependency_overrides[get_current_user] = lambda: research_principal("user-1")
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            yield service, client, app
+    finally:
+        asyncio.run(service.aclose())
+        asyncio.run(store.aclose())
 
-    asyncio.run(engine._write_report_bundle(state))  # noqa: SLF001
 
-    assert (engine.context_store.context_dir / "final_report.md").read_text() == MARKDOWN
-    canonical = (engine.context_store.context_dir / "canonical_report.json").read_text()
-    assert '"title": "Market Report"' in canonical
+async def _native_completed(service, tmp_path, run_id="publish-api"):
+    context = _completed_run(tmp_path, run_id)
+    config = RunConfig.compile({"configurable": {"output_format": "pdf"}})
+    state = await service.store.create_from_config("user-1", run_id, config,
+                                                   application={"configuration": config.snapshot(),
+                                                                "request_configurable": {"output_format": "pdf"}})
+    lease = await service.store.acquire(run_id, "user-1")
+    try:
+        state.status = "completed"
+        state.final_report = MARKDOWN
+        state.report_product = {"canonical_report": canonicalize_report(
+            MARKDOWN, run_id=run_id, sources=[{"title": "Primary", "url": "https://example.com/source"}],
+        ).model_dump(mode="json"), "result": {"status": "success", "preferred_output_format": "pdf"}}
+        await service.store.save(lease, state)
+    finally:
+        await service.store.release(lease)
+    return context
 
 
 @pytest.mark.asyncio
-async def test_run_snapshot_offloads_publication_listing(tmp_path, monkeypatch) -> None:
+async def test_native_publication_persists_markdown_and_canonical_bundle(tmp_path, native_publications):
+    service, _client, _app = native_publications
+    await _native_completed(service, tmp_path, "canonical-bundle")
+    recovery = await RecoverySession.open(service.store, "canonical-bundle", "user-1")
+    try:
+        await enqueue_report_publication(recovery, recovery.snapshot, publication_format="markdown",
+                                         theme=PublisherTheme(), runs_dir=tmp_path)
+    finally:
+        await recovery.close()
+    context = tmp_path / "canonical-bundle" / "context"
+    assert (context / "final_report.md").read_text() == MARKDOWN
+    assert json.loads((context / "canonical_report.json").read_text())["title"] == "Market Report"
+
+
+@pytest.mark.asyncio
+async def test_run_snapshot_offloads_publication_listing(tmp_path, monkeypatch, native_publications):
+    service, _client, _app = native_publications
+    await _native_completed(service, tmp_path, "offloaded-list")
     caller_thread = threading.get_ident()
     worker_thread = caller_thread
 
@@ -486,8 +519,7 @@ async def test_run_snapshot_offloads_publication_listing(tmp_path, monkeypatch) 
         return []
 
     monkeypatch.setattr(PublicationJobStore, "list", record_thread)
-
-    assert await server._run_publications("offloaded-list", str(tmp_path)) == []  # noqa: SLF001
+    assert (await service.snapshot("offloaded-list", "user-1"))["output"]["publications"] == []
     assert worker_thread != caller_thread
 
 
@@ -623,27 +655,12 @@ async def test_publication_sse_replays_cursor_and_accepts_later_jobs(
         payload={"format": "pdf", "status": "completed", "attempt": 1},
         dedupe_key="pub-1:completed",
     )
-    real_from_config = server.Configuration.from_runnable_config
+    options = StreamOptions(Configuration().model_copy(update={"sse_poll_interval_ms": 1}), asyncio.Event(), None, 60,
+                            PublisherSettings(runs_dir=tmp_path, sse_idle_seconds=1))
 
-    def fast_sse_config(config):
-        resolved = real_from_config(config)
-        resolved.sse_poll_interval_ms = 1
-        return resolved
-
-    monkeypatch.setattr(
-        server.Configuration,
-        "from_runnable_config",
-        fast_sse_config,
-    )
-    monkeypatch.setattr(
-        server,
-        "get_publisher_settings",
-        lambda: PublisherSettings(runs_dir=tmp_path, sse_idle_seconds=1),
-    )
-
-    iterator = server._publication_event_iterator(  # noqa: SLF001
+    iterator = _publication_event_iterator(  # noqa: SLF001
         store,
-        after=first.sequence,
+        after=first.sequence, options=options,
     )
     assert "event: publication.completed" in await anext(iterator)
 
@@ -667,26 +684,10 @@ async def test_publication_sse_heartbeats_then_closes_after_idle_timeout(
     monkeypatch,
 ) -> None:
     store = PublicationEventStore("publication-heartbeat", runs_dir=tmp_path)
-    real_from_config = server.Configuration.from_runnable_config
+    options = StreamOptions(Configuration().model_copy(update={"sse_poll_interval_ms": 1, "sse_heartbeat_seconds": 0.005}), asyncio.Event(), None, 60,
+                            PublisherSettings(runs_dir=tmp_path, sse_idle_seconds=0.02))
 
-    def fast_sse_config(config):
-        resolved = real_from_config(config)
-        resolved.sse_poll_interval_ms = 1
-        resolved.sse_heartbeat_seconds = 0.005
-        return resolved
-
-    monkeypatch.setattr(
-        server.Configuration,
-        "from_runnable_config",
-        fast_sse_config,
-    )
-    monkeypatch.setattr(
-        server,
-        "get_publisher_settings",
-        lambda: PublisherSettings(runs_dir=tmp_path, sse_idle_seconds=0.02),
-    )
-
-    iterator = server._publication_event_iterator(store)  # noqa: SLF001
+    iterator = _publication_event_iterator(store, options=options)
     heartbeat = await asyncio.wait_for(anext(iterator), timeout=0.25)
 
     assert heartbeat == ": keep-alive\n\n"
@@ -700,15 +701,14 @@ async def test_publication_sse_heartbeats_then_closes_after_idle_timeout(
         pytest.fail("publication SSE did not close after its idle timeout")
 
 
-def test_owner_can_queue_poll_and_download_publication(tmp_path, monkeypatch) -> None:
+def test_owner_can_queue_poll_and_download_publication(tmp_path, monkeypatch, native_publications) -> None:
     monkeypatch.setenv("RUNS_DIR", str(tmp_path))
     monkeypatch.setenv("PUBLISHER_ENABLED", "true")
-    _completed_run(tmp_path)
-    server._runs.clear()
-    server.app.dependency_overrides[get_current_user] = lambda: research_principal(
+    asyncio.run(_native_completed(native_publications[0], tmp_path))
+    native_publications[2].dependency_overrides[get_current_user] = lambda: research_principal(
         "user-1"
     )
-    client = TestClient(server.app, raise_server_exceptions=False)
+    client = native_publications[1]
     try:
         queued_response = client.post(
             "/runs/publish-api/publications",
@@ -762,21 +762,20 @@ def test_owner_can_queue_poll_and_download_publication(tmp_path, monkeypatch) ->
         assert snapshot["output"]["preferred_output_format"] == "pdf"
         assert snapshot["output"]["publications"][0]["status"] == "completed"
     finally:
-        server.app.dependency_overrides.clear()
+        native_publications[2].dependency_overrides.clear()
 
 
-def test_other_owner_cannot_list_publications(tmp_path, monkeypatch) -> None:
+def test_other_owner_cannot_list_publications(tmp_path, monkeypatch, native_publications) -> None:
     monkeypatch.setenv("RUNS_DIR", str(tmp_path))
-    _completed_run(tmp_path, "private-publication")
-    server._runs.clear()
-    server.app.dependency_overrides[get_current_user] = lambda: research_principal(
+    asyncio.run(_native_completed(native_publications[0], tmp_path, "private-publication"))
+    native_publications[2].dependency_overrides[get_current_user] = lambda: research_principal(
         "user-2"
     )
-    client = TestClient(server.app, raise_server_exceptions=False)
+    client = native_publications[1]
     try:
         response = client.get("/runs/private-publication/publications")
     finally:
-        server.app.dependency_overrides.clear()
+        native_publications[2].dependency_overrides.clear()
 
     assert response.status_code == 404
 
@@ -784,22 +783,22 @@ def test_other_owner_cannot_list_publications(tmp_path, monkeypatch) -> None:
 def test_create_publication_checks_owner_before_publisher_availability(
     tmp_path,
     monkeypatch,
+    native_publications,
 ) -> None:
     monkeypatch.setenv("RUNS_DIR", str(tmp_path))
     monkeypatch.setenv("PUBLISHER_ENABLED", "false")
-    _completed_run(tmp_path, "private-disabled-publication")
-    server._runs.clear()
-    server.app.dependency_overrides[get_current_user] = lambda: research_principal(
+    asyncio.run(_native_completed(native_publications[0], tmp_path, "private-disabled-publication"))
+    native_publications[2].dependency_overrides[get_current_user] = lambda: research_principal(
         "user-2"
     )
-    client = TestClient(server.app, raise_server_exceptions=False)
+    client = native_publications[1]
     try:
         response = client.post(
             "/runs/private-disabled-publication/publications",
             json={"format": "pdf"},
         )
     finally:
-        server.app.dependency_overrides.clear()
+        native_publications[2].dependency_overrides.clear()
 
     assert response.status_code == 404
 
@@ -807,16 +806,16 @@ def test_create_publication_checks_owner_before_publisher_availability(
 def test_owner_can_retry_transient_failure_after_attempts_are_exhausted(
     tmp_path,
     monkeypatch,
+    native_publications,
 ) -> None:
     monkeypatch.setenv("RUNS_DIR", str(tmp_path))
     monkeypatch.setenv("PUBLISHER_ENABLED", "true")
     monkeypatch.setenv("PUBLISHER_MAX_ATTEMPTS", "1")
-    _completed_run(tmp_path, "retry-publication")
-    server._runs.clear()
-    server.app.dependency_overrides[get_current_user] = lambda: research_principal(
+    asyncio.run(_native_completed(native_publications[0], tmp_path, "retry-publication"))
+    native_publications[2].dependency_overrides[get_current_user] = lambda: research_principal(
         "user-1"
     )
-    client = TestClient(server.app, raise_server_exceptions=False)
+    client = native_publications[1]
     try:
         queued = client.post(
             "/runs/retry-publication/publications",
@@ -868,13 +867,12 @@ def test_owner_can_retry_transient_failure_after_attempts_are_exhausted(
         assert processed == 1
         assert store.get(publication_id).status == "completed"
     finally:
-        server.app.dependency_overrides.clear()
+        native_publications[2].dependency_overrides.clear()
 
 
-@pytest.mark.asyncio
-async def test_retry_toctou_missing_job_returns_404(tmp_path, monkeypatch) -> None:
+def test_retry_toctou_missing_job_returns_404(tmp_path, monkeypatch, native_publications) -> None:
     monkeypatch.setenv("RUNS_DIR", str(tmp_path))
-    context = _completed_run(tmp_path, "retry-toctou")
+    context = asyncio.run(_native_completed(native_publications[0], tmp_path, "retry-toctou"))
     store = PublicationJobStore("retry-toctou", runs_dir=tmp_path)
     markdown = context.brief_path.parent.joinpath("final_report.md").read_text()
     job, _created = store.enqueue(
@@ -891,21 +889,15 @@ async def test_retry_toctou_missing_job_returns_404(tmp_path, monkeypatch) -> No
         error_code="publication_io_failed",
         retryable=True,
     )
-    server._runs.clear()
 
     def disappear_during_retry(_self, _publication_id, **_kwargs):
         raise FileNotFoundError(job.publication_id)
 
     monkeypatch.setattr(PublicationJobStore, "retry", disappear_during_retry)
 
-    with pytest.raises(HTTPException) as error:
-        await server.retry_publication(
-            "retry-toctou",
-            job.publication_id,
-            research_principal("user-1"),
-        )
-    assert error.value.status_code == 404
-    assert error.value.detail == "publication_not_found"
+    response = native_publications[1].post(f"/runs/retry-toctou/publications/{job.publication_id}/retry")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "publication_not_found"
 
 
 def test_worker_emits_failure_when_expired_lease_exhausts_attempts(

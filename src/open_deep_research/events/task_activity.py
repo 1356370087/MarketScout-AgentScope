@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 import portalocker
 from pydantic import BaseModel, Field
@@ -61,6 +62,7 @@ ActivityStatus = Literal[
 ]
 
 _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_TASK_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SECRET_KEY_RE = re.compile(
     r"(?:api[_-]?key|authorization|(?:access|refresh|bearer)[_-]?token|cookie|password|"
     r"secret|prompt|reasoning_(?:content|text)|chain_of_thought|memory_context|"
@@ -214,14 +216,17 @@ class TaskActivityStore:
         """Initialize the task-local activity paths and retention limits."""
         if not _COMPONENT_RE.fullmatch(run_id) or ".." in run_id:
             raise ValueError("Invalid run_id")
-        if not _COMPONENT_RE.fullmatch(task_id) or ".." in task_id:
+        if not _TASK_COMPONENT_RE.fullmatch(task_id) or ".." in task_id:
             raise ValueError("Invalid task_id")
         self.run_id = run_id
         self.task_id = task_id
         self.directory = Path(runs_dir).resolve() / run_id / "task_activity"
-        self.path = self.directory / f"{task_id}.jsonl"
-        self.index_path = self.directory / f"{task_id}.index.json"
-        self.lock_path = self.directory / f"{task_id}.lock"
+        # Native report/model task scopes contain colons, invalid in Windows filenames.
+        # Preserve the event identity and existing filenames for ordinary task IDs.
+        component = quote(task_id, safe="")
+        self.path = self.directory / f"{component}.jsonl"
+        self.index_path = self.directory / f"{component}.index.json"
+        self.lock_path = self.directory / f"{component}.lock"
         self.lock_timeout_seconds = lock_timeout_seconds
 
     @property

@@ -21,7 +21,6 @@ from open_deep_research.sandbox.controller import (
 )
 from open_deep_research.sandbox.controller_client import SandboxControllerClient
 from open_deep_research.sandbox.local_provider import BubblewrapSandboxProvider
-from open_deep_research.sandbox.manager import DockerSandboxManager
 from open_deep_research.sandbox.safe_io import UnsafeSandboxArchive
 
 
@@ -490,36 +489,59 @@ def test_terminate_escalates_from_term_to_kill() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_during_create_stops_the_eventually_created_container() -> None:
-    stopped: list[str] = []
+async def test_cancel_during_native_team_create_serializes_stop(tmp_path, monkeypatch):
+    from docker.errors import NotFound
+    from fastapi import FastAPI
+    from open_deep_research.sandbox.team_controller import TeamRequest, install_team_routes
 
-    class Controller:
-        @staticmethod
-        async def create_task(**_kwargs):
-            await asyncio.sleep(0.05)
-            return SimpleNamespace(container_id="created-after-cancel")
+    started, finish = threading.Event(), threading.Event()
+    events = []
+    container = None
 
-        @staticmethod
-        async def stop_task(container_id, *, timeout_seconds):
-            del timeout_seconds
-            stopped.append(container_id)
+    class Containers:
+        def get(self, name):
+            if container is None:
+                raise NotFound("not created yet")
+            return container
 
-    manager = DockerSandboxManager()
-    create = asyncio.create_task(
-        manager._create_controller_task(
-            Controller(),
-            payload=object(),
-            task_token="token",
-            runtime_digest_value="digest",
-            stop_grace_seconds=5,
-        )
-    )
-    await asyncio.sleep(0.01)
-    create.cancel()
+        def run(self, *_args, **kwargs):
+            nonlocal container
+            started.set()
+            assert finish.wait(2), "test did not release Docker create"
+            container = SimpleNamespace(labels=kwargs["labels"], status="running",
+                                        remove=lambda **_: events.append("stopped"))
+            events.append("created")
+            return container
 
-    with pytest.raises(asyncio.CancelledError):
-        await create
-    assert stopped == ["created-after-cancel"]
+    environment = tmp_path / "worker.env"
+    environment.write_text("APP_ENV=development\n", encoding="utf-8")
+    monkeypatch.setenv("AS_TEAM_WORKER_ENV_FILE", str(environment))
+    monkeypatch.setenv("AS_TEAM_WORKER_IMAGE", "fixture:local")
+    app = FastAPI()
+    install_team_routes(app, SimpleNamespace(
+        _authorize_service=lambda *_a, **_kw: None,
+        client=SimpleNamespace(containers=Containers()),
+    ))
+    endpoint = next(route.endpoint for route in app.routes if route.path == "/v1/team/ensure")
+    request = TeamRequest(deployment_id="fixture", lease={"run_id": "run", "fence": 1},
+                          task_id="task", service_timestamp=time.time(),
+                          service_nonce="fixture-nonce-123456", service_signature="fixture")
+    create = asyncio.create_task(endpoint(request))
+    stop = None
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        create.cancel()
+        stop = asyncio.create_task(endpoint(request.model_copy(update={"stop": True})))
+        await asyncio.sleep(0.03)
+        assert not stop.done(), "stop overtook an unfinished Docker create"
+        finish.set()
+        with pytest.raises(asyncio.CancelledError):
+            await create
+        assert await stop == {"status": "stopped"}
+        assert events == ["created", "stopped"]
+    finally:
+        finish.set()
+        await asyncio.gather(create, *([stop] if stop else []), return_exceptions=True)
 
 
 def test_bwrap_does_not_bind_the_entire_host_root() -> None:

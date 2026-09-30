@@ -1,6 +1,7 @@
 """Native run publication commands using the existing durable publisher worker."""
 
 import asyncio
+import portalocker
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -37,6 +38,15 @@ def publication_response(job):
     return row
 
 
+async def run_publications(run_id, runs_dir):
+    """Load bounded publication metadata without blocking the HTTP event loop."""
+    try:
+        jobs = await asyncio.to_thread(PublicationJobStore(run_id, runs_dir=runs_dir).list)
+    except (OSError, ValueError, portalocker.exceptions.LockException):
+        return []
+    return [publication_response(job) for job in jobs[:100]]
+
+
 def build_publication_router(service):
     from open_deep_research.api.research_router import http_errors
 
@@ -59,10 +69,10 @@ def build_publication_router(service):
     @router.post("/runs/{run_id}/publications")
     async def create(run_id: str, request: PublicationRequest, principal=read):
         with http_errors():
+            store = await store_for(run_id, principal.user_id)
             settings = get_publisher_settings()
             if not settings.enabled:
                 raise HTTPException(503, "publisher_disabled")
-            store = await store_for(run_id, principal.user_id)
             state, _ = await service.store.load(run_id, principal.user_id)
             if state.status != "completed":
                 raise HTTPException(409, "run_not_completed")
@@ -207,7 +217,7 @@ def build_publication_router(service):
 
             def requeued(job):
                 PublicationEventStore(run_id, runs_dir=str(service.runs_dir)).append(
-                    "publication.queued",
+                    "publication.requeued",
                     publication_id=job.publication_id,
                     payload=publication_event_payload(job),
                     dedupe_key=f"{job.publication_id}:retry:{job.attempt}:{job.max_attempts}",
@@ -216,9 +226,12 @@ def build_publication_router(service):
             recovery = await RecoverySession.open(service.store, run_id, principal.user_id)
             try:
                 async with service.store.transaction(recovery.lease):
-                    return publication_response(
-                        await asyncio.to_thread(store.retry, publication_id, on_requeued=requeued)
+                    return JSONResponse(
+                        publication_response(await asyncio.to_thread(store.retry, publication_id, on_requeued=requeued)),
+                        status_code=202,
                     )
+            except FileNotFoundError:
+                raise HTTPException(404, "publication_not_found") from None
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from None
             finally:

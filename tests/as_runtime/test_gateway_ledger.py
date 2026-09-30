@@ -526,3 +526,51 @@ async def test_partial_gateway_usage_keeps_unknown_dimension(host, status):
     await ledger.transition(transition)
     used = (await ledger.recovery.store.budget("r", "u"))["used"]
     assert used == {"model_calls": 1, "input_tokens": 0, "output_tokens": 10}
+
+
+@pytest.mark.parametrize("failure", ["context", "connection"])
+async def test_provider_failure_semantics_survive_native_sql_and_wire(host, failure):
+    import json
+    from pydantic import SecretStr
+    from open_deep_research.agentscope_runtime.gateway import SandboxBinding, SandboxChatModel, GatewayCallError
+    from open_deep_research.agentscope_runtime.sandbox_provider import NativeGatewayProvider
+    from open_deep_research.models.errors import is_token_limit_exceeded
+
+    gateway, ledger, _client = host
+    physical_calls, outcomes = [], []
+
+    def provider_http(request):
+        physical_calls.append(request)
+        if failure == "connection":
+            raise httpx.ReadError("PRIVATE-UPSTREAM-TEXT", request=request)
+        return httpx.Response(400, json={"error": {"code": "context_length_exceeded",
+                                                  "message": "PRIVATE-UPSTREAM-TEXT"}})
+
+    provider = NativeGatewayProvider(api_key="fixture", base_url="https://fixture.invalid/v1",
+                                     transport=httpx.MockTransport(provider_http))
+    gateway.model_gateways["r"] = provider
+
+    async def transport(request):
+        wire = GatewayModelRequestV2.model_validate(json.loads(request.content))
+        context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time() + 300,
+                                    api_keys={"LITELLM_RUN_KEY": "fixture"})
+        outcome = await gateway.invoke_model_operation_v2(wire, context)
+        # Replay the exact physical operation from its SQL receipt, with no second charge.
+        assert await gateway.invoke_model_operation_v2(wire, context) == outcome
+        outcomes.append(outcome)
+        assert "PRIVATE-UPSTREAM-TEXT" not in outcome.model_dump_json()
+        return httpx.Response(200, json=outcome.model_dump(mode="json"))
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport), base_url="http://gateway") as client:
+            model = SandboxChatModel(binding=SandboxBinding("http://gateway", "r", "t", "researcher",
+                                                            "researching", SecretStr("capability")),
+                                     model="research", client=client, stream=False)
+            with pytest.raises(GatewayCallError) as raised:
+                await model(messages=[UserMsg("user", "Research")])
+            assert is_token_limit_exceeded(raised.value) is (failure == "context")
+            assert raised.value.uncertain is (failure == "connection")
+        assert len(physical_calls) == 1
+        assert outcomes[0].status == ("failed" if failure == "context" else "uncertain")
+    finally:
+        await provider.aclose()

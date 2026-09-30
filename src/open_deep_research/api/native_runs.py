@@ -359,6 +359,8 @@ class NativeRuns:
             return self.history_read(run_id, owner)
         projection = project_public_events(await self.events(run_id, owner))
         status = browser_status(state)
+        from open_deep_research.api.publications import run_publications
+        publications = await run_publications(run_id, self.runs_dir) if self.runs_dir is not None else []
         return {
             "run_id": run_id,
             "engine": "agentscope",
@@ -372,8 +374,10 @@ class NativeRuns:
             "output": {
                 **_stable_output(
                     state.report_product,
+                    publications=publications,
                     publication_theme=state.application.get("publication_theme"),
-                    preferred_output_format=state.application.get("configuration", {})
+                    preferred_output_format=state.application.get("request_configurable", {}).get("output_format")
+                    or state.application.get("configuration", {})
                     .get("contract", {})
                     .get("configurable", {})
                     .get("output_format"),

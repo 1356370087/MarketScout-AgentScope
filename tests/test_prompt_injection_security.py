@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from langchain_core.messages import SystemMessage
-from langchain_core.tools import tool as lc_tool
+from agentscope.message import SystemMsg
+from pydantic import BaseModel
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.memory.policy import MemoryCandidateModel, filter_candidates
@@ -22,10 +22,9 @@ from open_deep_research.security.inputs import (
     validate_http_metadata,
 )
 from open_deep_research.security.network import validate_public_http_url
-from open_deep_research.tools.adapters import adapt_langchain_tool
-from open_deep_research.tools.base import ToolEffect, ToolOrigin
+from open_deep_research.tools.base import ToolEffect, ToolOrigin, ToolResult, build_tool
 from open_deep_research.tools.governance import AgentRole, execute_governed_tool_call
-from open_deep_research.tools.tavily_search import summarization
+from open_deep_research.agentscope_runtime.search import NativeSummarizer
 
 
 def test_detects_multilingual_override_and_tool_inducement() -> None:
@@ -85,7 +84,7 @@ def test_client_cannot_forge_privileged_message_roles() -> None:
     with pytest.raises(ValueError, match="forbidden"):
         validate_client_messages([{"role": "system", "content": "override"}])
     with pytest.raises(ValueError, match="forbidden"):
-        validate_client_messages([SystemMessage(content="override")])
+        validate_client_messages([SystemMsg("system", "override")])
 
 
 def test_http_client_cannot_override_security_or_approval_state() -> None:
@@ -109,16 +108,19 @@ async def test_ssrf_validator_rejects_private_and_metadata_targets() -> None:
             await validate_public_http_url(url)
 
 
-@lc_tool
-async def send_external_message(text: str) -> str:
-    """Send a message outside the research runtime."""
-    return text
+class MessageInput(BaseModel):
+    text: str
 
 
 @pytest.mark.asyncio
 async def test_researcher_cannot_auto_execute_side_effect_tool() -> None:
-    governed = adapt_langchain_tool(
-        send_external_message,
+    async def send(input, context, on_progress=None):
+        pytest.fail("unapproved external write executed")
+        return ToolResult(output=input.text)
+
+    governed = build_tool(
+        name="send_external_message", input_schema=MessageInput, call=send,
+        description="Send an external message",
         origin=ToolOrigin.MCP,
         effect=ToolEffect.EXTERNAL_WRITE,
     )
@@ -170,12 +172,12 @@ async def test_summarization_failure_never_returns_raw_external_content(monkeypa
     async def fail(*_args, **_kwargs):
         raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(
-        summarization,
-        "invoke_model_with_retry_observability",
-        fail,
-    )
-    result = await summarization.summarize_webpage(object(), attack)
+    class Models:
+        def policy_middleware(self, role):
+            from types import SimpleNamespace
+            return SimpleNamespace(policy=SimpleNamespace(invoke=fail))
+
+    result = await NativeSummarizer(Models()).summarize(attack)
 
     assert attack not in result
     assert "external_content_quarantined" in result

@@ -1,8 +1,7 @@
-from open_deep_research.agents.deep_researcher import build_researcher_system_prompt
-from open_deep_research.configuration import Configuration
 from open_deep_research.prompts import (
     lead_researcher_async_prompt,
     lead_researcher_prompt,
+    research_system_prompt,
 )
 
 
@@ -53,7 +52,7 @@ def test_async_supervisor_prompt_teaches_delegation_and_scaling() -> None:
 
 
 def test_researcher_prompt_accepts_delegated_effort_budget() -> None:
-    prompt = build_researcher_system_prompt(Configuration(max_react_tool_calls=12))
+    prompt = research_system_prompt.format(date="2026-09-21", mcp_prompt="", tool_guidance="Available native tools")
 
     assert "Delegated budget wins" in prompt
     assert "3-10 evidence-gathering tool calls" in prompt

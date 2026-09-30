@@ -1,5 +1,6 @@
 import asyncio
 import json
+import pytest
 
 from open_deep_research.events.public import RunEventStore
 from open_deep_research.events.task_activity import (
@@ -50,6 +51,19 @@ def test_store_sequences_deduplicates_and_pages(tmp_path):
     assert [item.sequence for item in items] == [2]
     assert has_more is True
     assert last_sequence == 2
+
+
+def test_native_report_task_scope_roundtrips_without_changing_event_identity(tmp_path):
+    task_id = "report:lead.report_review:0"
+    store = TaskActivityStore("run-1", task_id, runs_dir=str(tmp_path))
+    event = _append(store, "model.completed", "review:0")
+    restored = TaskActivityStore("run-1", task_id, runs_dir=str(tmp_path))
+    assert restored.read() == [event]
+    assert event.task_id == task_id
+    assert ":" not in store.path.name
+    assert store.path.parent == tmp_path / "run-1" / "task_activity"
+    with pytest.raises(ValueError, match="Invalid task_id"):
+        TaskActivityStore("run-1", "report:../other", runs_dir=str(tmp_path))
 
 
 def test_store_repairs_partial_tail(tmp_path):

@@ -1,22 +1,13 @@
-"""Prompt-contract tests for folder-organized researcher tools."""
+"""Prompt contracts for native tools and the actual Supervisor model input."""
 
 import ast
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
-
-from open_deep_research.agents import deep_researcher
-from open_deep_research.prompts import (
-    lead_researcher_async_prompt,
-    lead_researcher_prompt,
-)
-from open_deep_research.tools.governance import AgentRole
-from open_deep_research.tools.registry import assemble_toolset, render_tool_guidance
-from open_deep_research.tools.supervisor import (
-    SupervisorToolDeps,
-    build_supervisor_tools,
-)
+from agentscope.message import TextBlock
+from open_deep_research.agentscope_runtime.research_agents import Supervisor
+from tests.as_runtime.test_research_migration import Models, cfg, contract
+from tests.test_tool_registry import assemble_native
 
 TOOLS_ROOT = Path(__file__).parents[1] / "src" / "open_deep_research" / "tools"
 
@@ -33,30 +24,16 @@ def test_tool_prompt_modules_are_pure_string_renderers() -> None:
         assert not imports, f"{prompt_path} must not import tool implementation code"
 
 
-def test_researcher_definitions_own_their_call_implementations() -> None:
-    folder_names = {
-        "anthropic_web_search",
-        "fetch_url",
-        "fetch_webpage",
-        "openai_web_search",
-        "research_complete",
-        "tavily_search",
-        "think_tool",
-        "web_research",
-    }
 
-    for folder_name in folder_names:
-        source = (TOOLS_ROOT / folder_name / "definition.py").read_text(
-            encoding="utf-8"
-        )
+def test_native_tool_definitions_own_their_call_implementations():
+    files = [TOOLS_ROOT / name / "definition.py" for name in
+             ("read_file", "write_file", "shell_exec", "search_documents", "research_complete")]
+    files += [TOOLS_ROOT.parent / "agentscope_runtime" / name for name in ("search.py", "web_tools.py")]
+    for path in files:
+        source = path.read_text(encoding="utf-8")
         tree = ast.parse(source)
-        local_calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name.endswith("_call")
-        ]
-        assert local_calls, f"{folder_name} must own its executable call"
+        assert any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and
+                   (node.name.endswith("_call") or node.name == "call") for node in ast.walk(tree)), path
         assert "clone_builtin_tool" not in source
         assert "tools.implementations" not in source
 
@@ -64,100 +41,36 @@ def test_researcher_definitions_own_their_call_implementations() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["legacy", "shadow", "enforced"])
 async def test_every_enabled_builtin_has_nonempty_description_and_prompt(mode):
-    tools = await assemble_toolset(
-        AgentRole.RESEARCHER,
-        {
-            "configurable": {
-                "web_pipeline_mode": mode,
-                "search_api": "tavily",
-            }
-        },
-    )
-
+    tools = await assemble_native({"configurable": {"web_pipeline_mode": mode, "search_api": "tavily"}})
+    assert tools
     for tool in tools:
         assert (await tool.description()).strip()
         assert (tool.prompt({}) or "").strip()
 
 
-@pytest.mark.parametrize(
-    ("template", "async_enabled", "expected", "absent"),
-    [
-        (lead_researcher_prompt, False, "`ConductResearch`", "`StartResearchTask`"),
-        (
-            lead_researcher_async_prompt,
-            True,
-            "`StartResearchTask`",
-            "`ConductResearch`",
-        ),
-    ],
-)
-def test_supervisor_available_tools_are_rendered_from_actual_toolset(
-    template,
-    async_enabled,
-    expected,
-    absent,
-):
-    tools = build_supervisor_tools(
-        SupervisorToolDeps(
-            enable_async_research=async_enabled,
-        )
-    )
-    rendered = template.format(
-        date="2026-08-17",
-        tool_guidance=render_tool_guidance(tools, {}),
-        max_concurrent_research_units=5,
-        max_researcher_iterations=6,
-        max_react_tool_calls=10,
-    )
-
-    assert expected in rendered
-    assert absent not in rendered
+async def supervisor_prompt(**config):
+    models = Models({"supervisor": [[TextBlock(text="done")]]})
+    with pytest.raises(ValueError, match="supervisor produced no research handoff"):
+        await Supervisor(models, lambda: cfg(async_research_mode="collaborator", **config),
+                         None, run_id="prompt-test").run("Investigate the topic", contract())
+    messages = models.created[0][2].calls[0]["messages"]
+    return "\n".join(message.get_text_content() or "" for message in messages if message.role == "system")
 
 
 @pytest.mark.asyncio
-async def test_initial_supervisor_prompt_uses_permission_filtered_guidance(monkeypatch):
-    class FakeResearchModel:
-        def with_config(self, _config):
-            return self
+@pytest.mark.parametrize("async_enabled,expected,absent", [
+    (False, "`ConductResearch`", "`TaskCreate`"),
+    (True, "`TaskCreate`", "`ConductResearch`"),
+])
+async def test_supervisor_available_tools_are_rendered_from_actual_toolset(async_enabled, expected, absent):
+    prompt = await supervisor_prompt(enable_async_research=async_enabled)
+    assert expected in prompt
+    assert absent not in prompt
 
-        def with_structured_output(self, *_args, **_kwargs):
-            return self
 
-    async def fake_invoke(*_args, **_kwargs):
-        return deep_researcher.ResearchQuestion(research_brief="Investigate the topic")
-
-    monkeypatch.setattr(
-        deep_researcher,
-        "get_model_connection_kwargs",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        deep_researcher,
-        "apply_helicone_config",
-        lambda model_config, *_args, **_kwargs: model_config,
-    )
-    monkeypatch.setattr(deep_researcher, "configurable_model", FakeResearchModel())
-    monkeypatch.setattr(
-        deep_researcher,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
-
-    command = await deep_researcher.write_research_brief(
-        {"messages": [HumanMessage(content="Investigate a test topic")]},
-        {
-            "configurable": {
-                "research_model": "openai:gpt-4.1",
-                "enable_async_research": False,
-                "supervisor_tool_whitelist": ["think_tool"],
-            },
-            "metadata": {"run_id": "filtered-supervisor-guidance"},
-        },
-    )
-    system_prompt = str(command.update["supervisor_messages"]["value"][0].content)
-    available_tools = system_prompt.split("<Available Tools>", 1)[1].split(
-        "</Available Tools>", 1
-    )[0]
-
+@pytest.mark.asyncio
+async def test_initial_supervisor_prompt_uses_permission_filtered_guidance():
+    prompt = await supervisor_prompt(supervisor_tool_whitelist=["think_tool"])
+    available_tools = prompt.split("<Available Tools>", 1)[1].split("</Available Tools>", 1)[0]
     assert "`think_tool`" in available_tools
     assert "`ConductResearch`" not in available_tools

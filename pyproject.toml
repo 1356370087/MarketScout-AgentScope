@@ -41,3 +41,6 @@ dependencies = [
 evaluation-langsmith = [
     "langsmith>=0.12.6,<1",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

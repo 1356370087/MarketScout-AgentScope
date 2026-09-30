@@ -12,10 +12,22 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from agentscope.message import UserMsg
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, HumanMessage, message_to_dict
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
+from open_deep_research.agentscope_runtime.gateway import (
+    SandboxBinding,
+    SandboxChatModel,
+)
+from open_deep_research.agentscope_runtime.sandbox_provider import (
+    STRUCTURED_OUTPUT_TOOL_NAME,
+)
+from open_deep_research.agentscope_runtime.sandbox_workspace import (
+    ControllerBackend,
+    ControllerWorkspace,
+    ControllerWorkspaceSpec,
+)
 from open_deep_research.configuration import (
     RUN_CONFIG_FROZEN_FIELDS,
     RUN_CONFIG_FROZEN_FIELDS_V7,
@@ -35,7 +47,6 @@ from open_deep_research.sandbox.crypto import (
     encode_task_token,
     sign_payload,
 )
-from open_deep_research.sandbox.fake_provider import DeterministicGatewayModel
 from open_deep_research.sandbox.gateway import (
     GatewayRunContext,
     GatewayRunRegistrationRequest,
@@ -44,11 +55,6 @@ from open_deep_research.sandbox.gateway import (
     create_gateway_app,
 )
 from open_deep_research.sandbox.gateway_catalog import GatewayCatalogTool
-from open_deep_research.sandbox.gateway_model import GatewayChatModel
-from open_deep_research.sandbox.manager import (
-    _SANDBOX_RUNTIME_CONFIG_KEYS,
-    DockerSandboxManager,
-)
 from open_deep_research.sandbox.operations import ModelOperationStore
 from open_deep_research.sandbox.safe_io import (
     ArchiveLimits,
@@ -64,9 +70,9 @@ from open_deep_research.sandbox.schema import (
 )
 from open_deep_research.sandbox.wire import (
     GatewayCatalogToolV1,
-    GatewayModelOutcomeV1,
-    GatewayModelRequestV1,
+    GatewayModelOutcomeV2,
     GatewayModelRequestV2,
+    SandboxTaskPayloadV1,
     SandboxTaskResultV1,
     TaskTokenClaimsV1,
 )
@@ -74,7 +80,6 @@ from open_deep_research.security.inputs import (
     validate_http_configurable,
     validate_http_metadata,
 )
-from open_deep_research.tasks.registry import TaskRecord
 from open_deep_research.tools.base import tool_to_model_definition
 
 ROOT_KEY = base64.b64encode(b"k" * 32).decode()
@@ -189,57 +194,57 @@ def test_policy_is_strict_and_selects_role_profile():
     assert len(policy_digest(bundle)) == 64
 
 
-def test_payload_filters_callback_and_credentials():
-    sandbox_config = _sandbox_config().model_copy(update={"model_backend": "litellm"})
-    config = {
-        "configurable": sandbox_config.model_dump(mode="json"),
-        "metadata": {"run_id": "run-payload", "run_fence_token": 3},
-    }
-    record = TaskRecord(task_id="task-payload", research_topic="topic", run_id="run-payload")
-    payload = DockerSandboxManager().build_payload(
-        task_record=record,
-        config=config,
-        researcher_state={
-            "researcher_messages": [HumanMessage(content="topic")],
-            "research_topic": "topic",
-            "_query_checkpoint_callback": lambda _: None,
-        },
-        policy_digest_value=policy_digest(load_policy_bundle("config/sandbox-policy.toml")),
+def _workspace_payload():
+    bundle = load_policy_bundle("config/sandbox-policy.toml")
+    profile_id, profile = bundle.select_profile({"researcher"})
+    workspace = ControllerWorkspace(
+        workspace_id="workspace-payload",
+        controller=SimpleNamespace(),
+        backend=ControllerBackend(),
+        spec=ControllerWorkspaceSpec(
+            run_id="run-payload", task_id="task-payload", fence_token=3,
+            profile=profile, profile_id=profile_id, policy_digest=policy_digest(bundle),
+        ),
     )
-    assert "_query_checkpoint_callback" not in payload.researcher_state
-    assert "sandbox_root_signing_key" not in payload.runtime_config
-    assert "langfuse_secret_key" not in payload.runtime_config
-    assert payload.runtime_config["event_log_enabled"] is False
-    assert payload.runtime_config["query_session_persistence_enabled"] is False
-    assert payload.runtime_config["task_checkpoint_enabled"] is False
-    assert payload.runtime_config["model_backend"] == "litellm"
-    assert payload.runtime_config["runs_dir"].startswith("/workspace/tmp/")
-    assert payload.fence_token == 3
-    assert set(payload.runtime_config) <= {
-        *_SANDBOX_RUNTIME_CONFIG_KEYS,
-        "langgraph_auth_user",
-    }
-    assert "allowed_model_endpoints" not in payload.runtime_config
-    assert payload.runtime_config["model_fallbacks"] == {}
+    return workspace._payload()
 
 
-def test_payload_runtime_allowlist_never_admits_credential_fields() -> None:
+def test_native_workspace_payload_excludes_host_runtime_configuration():
+    payload = _workspace_payload()
+    restored = SandboxTaskPayloadV1.model_validate_json(payload.model_dump_json())
+    assert restored.runtime_config == {}
+    assert restored.researcher_state == {"research_topic": "workspace"}
+    assert restored.fence_token == 3
+    assert restored.run_id == "run-payload"
+    assert restored.task_id == "task-payload"
+
+
+def test_payload_rejects_checkpoint_callback():
+    data = _workspace_payload().model_dump()
+    data["researcher_state"]["_query_checkpoint_callback"] = lambda _: None
+    with pytest.raises(ValidationError, match="unsupported keys"):
+        SandboxTaskPayloadV1.model_validate(data)
+
+
+def test_payload_runtime_never_inherits_configuration_credentials() -> None:
     sensitive_suffixes = (
-        "_api_key",
-        "_secret_key",
-        "_access_token",
-        "_auth_token",
-        "_password",
+        "_api_key", "_secret_key", "_access_token", "_auth_token", "_password",
     )
     sensitive_fields = {
-        name
-        for name in Configuration.model_fields
-        if name == "mcp_subject_token"
-        or name == "apiKeys"
+        name for name in Configuration.model_fields
+        if name in {"mcp_subject_token", "apiKeys", "sandbox_root_signing_key"}
         or name.endswith(sensitive_suffixes)
     }
     assert sensitive_fields
-    assert sensitive_fields.isdisjoint(_SANDBOX_RUNTIME_CONFIG_KEYS)
+    assert sensitive_fields.isdisjoint(_workspace_payload().runtime_config)
+
+
+@pytest.mark.parametrize("key", ["apiKeys", "researcher_api_key", "langfuse_secret_key"])
+def test_payload_rejects_explicit_runtime_credentials(key):
+    data = _workspace_payload().model_dump()
+    data["runtime_config"][key] = "must-not-reach-worker"
+    with pytest.raises(ValidationError, match="credential-shaped keys"):
+        SandboxTaskPayloadV1.model_validate(data)
 
 
 def test_complete_result_preserves_evidence_contract():
@@ -256,26 +261,43 @@ def test_complete_result_preserves_evidence_contract():
     assert restored.evidence_registry == [{"evidence_id": "e1"}]
 
 
-def test_deterministic_compression_preserves_delegated_requirement_ids():
-    response = DeterministicGatewayModel(role="compression").invoke(
-        [HumanMessage(content="Owned requirement COV-01-a1b2c3d4e5f6")]
-    )
-    assert "COV-01-a1b2c3d4e5f6" in str(response.content)
+@pytest.mark.asyncio
+async def test_native_compression_transport_preserves_requirement_ids_and_binding():
+    requirement = "COV-01-a1b2c3d4e5f6"
+    requests = []
 
+    def respond(request):
+        assert request.url.path == "/v2/models/complete"
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(200, json=GatewayModelOutcomeV2(
+            logical_operation_id=body["logical_operation_id"],
+            requested_model=body["model"], status="completed", finish_reason="stop",
+            message={"role": "assistant", "content": f"Supported: {requirement}"},
+        ).model_dump(mode="json"))
 
-def test_gateway_model_uses_frozen_runnable_role_and_stage():
-    request = GatewayChatModel()._request(
-        [HumanMessage(content="compress")],
-        {
-            "metadata": {
-                "run_id": "run-role",
-                "task_id": "task-role",
-                "sandbox_model_role": "compression",
-            }
-        },
-    )
-    assert request.role == "compression"
-    assert request.stage == "synthesizing"
+    async with httpx.AsyncClient(
+        base_url="http://gateway", transport=httpx.MockTransport(respond),
+    ) as client:
+        model = SandboxChatModel(
+            binding=SandboxBinding(
+                url="http://gateway", run_id="run-role", task_id="task-role",
+                role="compression", stage="synthesizing", token=SecretStr("task-token"),
+            ),
+            model="compression-model", client=client, stream=True,
+        )
+        stream = await model([UserMsg("user", f"Owned requirement {requirement}")])
+        responses = [response async for response in stream]
+    assert len(responses) == 1
+    assert responses[0].is_last
+    assert requirement in responses[0].content[0].text
+    assert len(requests) == 1
+    request = requests[0]
+    assert requirement in json.dumps(request["messages"])
+    assert request["role"] == "compression"
+    assert request["stage"] == "synthesizing"
+    assert request["run_id"] == "run-role"
+    assert request["task_id"] == "task-role"
 
 
 def test_controller_payload_is_readable_by_unprivileged_worker():
@@ -373,7 +395,8 @@ def test_gateway_accepts_service_signed_api_model_request() -> None:
         runtime.keys.service_auth,
     )
     runtime.register(registration)
-    request = GatewayModelRequestV1(
+    request = GatewayModelRequestV2(
+        model="supervisor-model",
         run_id="run-service-model",
         task_id="api",
         role="supervisor",
@@ -563,9 +586,6 @@ async def test_gateway_v2_missing_run_key_does_not_touch_journal_or_budget() -> 
 
 @pytest.mark.asyncio
 async def test_gateway_v2_persists_structured_payload_for_replay() -> None:
-    from open_deep_research.models.codec import STRUCTURED_OUTPUT_TOOL_NAME
-    from open_deep_research.models.gateway import ModelResult, ModelRoute, ModelUsage
-
     runtime = GatewayRuntime(_sandbox_config())
     saved = {}
     invocations = []
@@ -584,14 +604,20 @@ async def test_gateway_v2_persists_structured_payload_for_replay() -> None:
     class Gateway:
         async def complete(self, request):
             invocations.append(request)
-            return ModelResult(
-                message=AIMessage(content="reviewed", tool_calls=[{
-                    "name": STRUCTURED_OUTPUT_TOOL_NAME,
-                    "args": {"verdict": "allow"}, "id": "call",
-                }]),
-                structured=None, usage=ModelUsage(), response_cost_usd=None,
-                request_id="request", route=ModelRoute("classifier", "glm"),
-                finish_reason="tool_calls", latency_ms=1,
+            assert request.tool_choice == {
+                "type": "function", "function": {"name": STRUCTURED_OUTPUT_TOOL_NAME},
+            }
+            assert request.tools[0]["function"]["parameters"] == request.structured_schema
+            return GatewayModelOutcomeV2(
+                logical_operation_id=request.logical_operation_id,
+                requested_model=request.model, status="completed",
+                message={"role": "assistant", "content": "reviewed", "tool_calls": [{
+                    "id": "call", "type": "function", "function": {
+                        "name": STRUCTURED_OUTPUT_TOOL_NAME,
+                        "arguments": json.dumps({"verdict": "allow"}),
+                    },
+                }]},
+                usage={"input_tokens": 2, "output_tokens": 3}, finish_reason="tool_calls",
             )
 
     runtime.internal = Internal()
@@ -658,12 +684,13 @@ async def test_gateway_v2_cancellation_releases_budget_and_journals_uncertain() 
         "/internal/sandbox/operations/get",
         "/internal/sandbox/budgets/reserve",
         "/internal/sandbox/operations/transition",
+        "/internal/sandbox/task-activity",
         "/internal/sandbox/budgets/fail",
         "/internal/sandbox/operations/transition",
     ]
     statuses = [status for _path, status in posted]
     # Journal: dispatched on reserve, then a definite uncertain terminal state.
-    assert statuses == [None, None, "dispatched", None, "uncertain"]
+    assert statuses == [None, None, "dispatched", "running", None, "uncertain"]
 
 
 def test_gateway_app_lifespan_reaps_expired_credentials_without_api_cleanup() -> None:
@@ -702,31 +729,46 @@ def test_doctor_warns_when_developer_profile_is_mapped_off_linux(monkeypatch) ->
     monkeypatch.setattr(sandbox_doctor.sys, "platform", "win32")
 
     assert sandbox_doctor._developer_profile_warnings(bundle) == [
-        "developer-workspace is mapped but the current platform is not Linux; "
-        "this profile is not release-qualified"
+        (
+            "developer-workspace is mapped but the current platform is not Linux; "
+            "this profile is not release-qualified"
+        )
     ]
 
 
-def test_gateway_model_binds_pydantic_structured_output_schema() -> None:
+@pytest.mark.asyncio
+async def test_native_gateway_model_sends_pydantic_structured_output_schema() -> None:
     class StructuredResult(BaseModel):
         answer: str
 
-    bound = GatewayChatModel().bind_tools(
-        [StructuredResult],
-        tool_choice="any",
-    )
-    assert bound.bound_tools[0]["function"]["name"] == "StructuredResult"
-    assert "answer" in bound.bound_tools[0]["function"]["parameters"]["properties"]
-    request = bound._request(
-        [HumanMessage(content="Return a structured answer")],
-        {
-            "metadata": {
-                "run_id": "run-structured",
-                "task_id": "task-structured",
-            }
-        },
-    )
-    assert request.tool_choice == "any"
+    requests = []
+
+    def respond(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(200, json=GatewayModelOutcomeV2(
+            logical_operation_id=body["logical_operation_id"],
+            requested_model=body["model"], status="completed", finish_reason="tool_calls",
+            structured={"answer": "reviewed"},
+        ).model_dump(mode="json"))
+
+    async with httpx.AsyncClient(
+        base_url="http://gateway", transport=httpx.MockTransport(respond),
+    ) as client:
+        model = SandboxChatModel(
+            binding=SandboxBinding(
+                url="http://gateway", run_id="run-structured", task_id="task-structured",
+                role="researcher", stage="researching", token=SecretStr("task-token"),
+            ),
+            model="research-model", client=client,
+        )
+        response = await model.generate_structured_output(
+            [UserMsg("user", "Return a structured answer")], StructuredResult,
+        )
+    assert response.content == {"answer": "reviewed"}
+    assert len(requests) == 1
+    assert requests[0]["structured_schema"] == StructuredResult.model_json_schema()
+    assert requests[0]["tools"] == []
 
 
 @pytest.mark.asyncio
@@ -796,30 +838,32 @@ async def test_gateway_catalog_preserves_remote_dynamic_schema() -> None:
     assert definition["parameters"]["required"] == ["query"]
 
 
-def test_gateway_stream_sends_started_before_terminal_result() -> None:
+def test_gateway_v2_endpoint_returns_native_complete_result() -> None:
     class FakeRuntime:
-        runs = {}
+        def __init__(self):
+            self.runs = {}
 
         def authorize_task(self, request, **_kwargs):
             return object(), object()
 
-        async def invoke_model_operation(self, request, _context):
-            return GatewayModelOutcomeV1(
+        async def invoke_model_operation_v2(self, request, _context):
+            return GatewayModelOutcomeV2(
                 logical_operation_id=request.logical_operation_id,
-                physical_attempt_id="physical-1",
                 status="completed",
-                message=message_to_dict(AIMessage(content="done")),
+                requested_model=request.model,
+                message={"role": "assistant", "content": "done"},
             )
 
     client = TestClient(create_gateway_app(FakeRuntime()))
     response = client.post(
-        "/v1/models/stream",
+        "/v2/models/complete",
         json={
             "run_id": "run-stream",
             "task_id": "task-stream",
             "role": "researcher",
             "stage": "researching",
             "logical_operation_id": "logical-stream",
+            "model": "research-model",
             "messages": [],
         },
         headers={
@@ -829,8 +873,11 @@ def test_gateway_stream_sends_started_before_terminal_result() -> None:
         },
     )
     assert response.status_code == 200
-    events = [json.loads(line) for line in response.text.splitlines()]
-    assert [event["type"] for event in events] == ["started", "result"]
+    outcome = GatewayModelOutcomeV2.model_validate(response.json())
+    assert outcome.status == "completed"
+    assert outcome.message == {"role": "assistant", "content": "done"}
+    assert outcome.logical_operation_id == "logical-stream"
+    assert client.post("/v1/models/stream", json={}).status_code == 404
 
 
 def test_network_policy_applies_deny_before_wildcard_allow() -> None:

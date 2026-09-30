@@ -1,16 +1,16 @@
-"""Tests for file-backed Query session persistence."""
+"""Shared report artifacts and read-only historical journal contracts."""
 
 import asyncio
 import json
 import multiprocessing
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from open_deep_research.api.history import HistoricalRunReader
 
 from open_deep_research.run_context import (
-    JournalCorruptedError,
     ResearchBriefPersistenceError,
     RunContextStore,
+    SessionJournalRecord,
 )
 
 
@@ -41,10 +41,12 @@ def test_research_brief_hash_mismatch_is_rejected(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_journal_replays_state_and_externalized_messages(tmp_path) -> None:
+async def test_history_reads_externalized_messages_without_restoring_an_engine(tmp_path) -> None:
     store = _store(tmp_path, inline=1024)
     store.persist_research_brief("authoritative brief")
     large = "x" * 2048
+    artifact = "artifacts/messages/assistant.json"
+    store.write_json_atomic(artifact, {"message": {"type": "ai", "data": {"content": large}}})
 
     await store.append(
         channel="lead",
@@ -55,19 +57,22 @@ async def test_journal_replays_state_and_externalized_messages(tmp_path) -> None
             "update": {
                 "messages": {
                     "type": "override",
-                    "value": [HumanMessage(content="hello"), AIMessage(content=large)],
+                    "value": [
+                        {"__message__": {"type": "human", "data": {"content": "hello"}}},
+                        {"__message_artifact__": artifact},
+                    ],
                 }
             },
         },
     )
     await store.checkpoint("research_brief_written", "plan_approval")
 
-    replay = store.replay()
-
-    assert [message.content for message in replay.state["messages"]] == ["hello", large]
-    assert replay.state["research_brief"] == "authoritative brief"
-    assert replay.manifest.next_stage == "plan_approval"
-    assert list((store.context_dir / "artifacts" / "messages").glob("*.json"))
+    before = {p: p.read_bytes() for p in store.context_dir.rglob("*") if p.is_file()}
+    archive = HistoricalRunReader(tmp_path, store.run_id, "user-1")
+    assert [message.get_text_content() for message in archive.messages().messages] == ["hello", large]
+    assert archive.manifest.next_stage == "plan_approval"
+    assert archive.snapshot()["resumable"] is False
+    assert {p: p.read_bytes() for p in store.context_dir.rglob("*") if p.is_file()} == before
 
 
 def _append_in_process(runs_dir: str, run_id: str, start: int, count: int) -> None:
@@ -98,7 +103,7 @@ async def test_journal_concurrent_appends_have_contiguous_sequence(tmp_path) -> 
         for index in range(20)
     ))
 
-    records = store.replay().records
+    records = [SessionJournalRecord.model_validate_json(line) for line in store.journal_path.read_bytes().splitlines()]
     assert [record.seq for record in records] == list(range(1, 21))
 
 
@@ -117,12 +122,12 @@ def test_journal_is_contiguous_across_processes(tmp_path) -> None:
         process.join(timeout=10)
         assert process.exitcode == 0
 
-    records = store.replay().records
+    records = [SessionJournalRecord.model_validate_json(line) for line in store.journal_path.read_bytes().splitlines()]
     assert [record.seq for record in records] == list(range(1, 31))
 
 
 @pytest.mark.asyncio
-async def test_replay_ignores_only_a_partial_final_line(tmp_path) -> None:
+async def test_history_rejects_partial_tail_without_repairing_it(tmp_path) -> None:
     store = _store(tmp_path)
     await store.append(
         channel="lead",
@@ -133,19 +138,14 @@ async def test_replay_ignores_only_a_partial_final_line(tmp_path) -> None:
     with store.journal_path.open("ab") as handle:
         handle.write(b'{"schema_version":1')
 
-    assert len(store.replay().records) == 1
-    appended = await store.append(
-        channel="lead",
-        record_type="state_delta",
-        stage="received",
-        payload={"scope": "main", "update": {"value": 2}},
-    )
-    assert appended.seq == 2
-    assert len(store.replay().records) == 2
+    before = store.journal_path.read_bytes()
+    with pytest.raises(ValueError):
+        HistoricalRunReader(tmp_path, store.run_id, "user-1").messages()
+    assert store.journal_path.read_bytes() == before
 
 
 @pytest.mark.asyncio
-async def test_replay_rejects_corruption_before_final_record(tmp_path) -> None:
+async def test_history_rejects_corruption_before_final_record(tmp_path) -> None:
     store = _store(tmp_path)
     for index in range(2):
         await store.append(
@@ -157,12 +157,14 @@ async def test_replay_rejects_corruption_before_final_record(tmp_path) -> None:
     lines = store.journal_path.read_text(encoding="utf-8").splitlines()
     store.journal_path.write_text("not-json\n" + lines[1] + "\n", encoding="utf-8")
 
-    with pytest.raises(JournalCorruptedError, match="journal_corrupted"):
-        store.replay()
+    before = store.journal_path.read_bytes()
+    with pytest.raises(ValueError):
+        HistoricalRunReader(tmp_path, store.run_id, "user-1").messages()
+    assert store.journal_path.read_bytes() == before
 
 
 @pytest.mark.asyncio
-async def test_replay_rejects_complete_corrupt_final_record(tmp_path) -> None:
+async def test_history_rejects_complete_corrupt_final_record(tmp_path) -> None:
     store = _store(tmp_path)
     await store.append(
         channel="lead",
@@ -173,8 +175,8 @@ async def test_replay_rejects_complete_corrupt_final_record(tmp_path) -> None:
     with store.journal_path.open("ab") as handle:
         handle.write(b"not-json\n")
 
-    with pytest.raises(JournalCorruptedError, match="journal_corrupted"):
-        store.replay()
+    with pytest.raises(ValueError):
+        HistoricalRunReader(tmp_path, store.run_id, "user-1").messages()
     assert store.journal_path.read_bytes().endswith(b"not-json\n")
 
 
@@ -257,7 +259,7 @@ def test_manifest_never_contains_plain_credentials(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_manifest_can_be_rebuilt_from_journal(tmp_path) -> None:
+async def test_shared_artifact_manifest_can_be_rebuilt_from_journal(tmp_path) -> None:
     store = _store(tmp_path)
     await store.append(
         channel="lead",
@@ -265,7 +267,7 @@ async def test_manifest_can_be_rebuilt_from_journal(tmp_path) -> None:
         stage="received",
         payload={
             "scope": "main",
-            "update": {"messages": [HumanMessage(content="hello")]},
+            "update": {"messages": [{"role": "user", "content": "hello"}]},
             "owner_id": "user-1",
             "config": {"configurable": {"research_model": "model"}},
             "coordination_schema_version": 1,
@@ -293,7 +295,7 @@ async def test_manifest_rebuild_without_markers_remains_legacy(tmp_path) -> None
         stage="received",
         payload={
             "scope": "main",
-            "update": {"messages": [HumanMessage(content="legacy")]},
+            "update": {"messages": [{"role": "user", "content": "legacy"}]},
             "owner_id": "user-1",
             "config": {"configurable": {"research_model": "model"}},
         },

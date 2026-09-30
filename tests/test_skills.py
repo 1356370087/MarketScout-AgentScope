@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableConfig
+from open_deep_research.report.runtime import AIMessage
+from tests.report_helpers import patch_report_model
+from open_deep_research.config_types import RuntimeConfig as RunnableConfig
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.report import assembly as assembly_module
 from open_deep_research.report import build_report
 from open_deep_research.report.models import ReportOutline, SectionSpec
 from open_deep_research.skills import (
@@ -22,7 +22,7 @@ from open_deep_research.skills import (
 
 
 def _config(**configurable: Any) -> RunnableConfig:
-    return {"configurable": configurable, "metadata": {"run_id": "skills-test"}}
+    return {"configurable": {"quality_evaluation_enabled": False, "web_pipeline_mode": "legacy", **configurable}, "metadata": {"run_id": "skills-test"}}
 
 
 def test_builtin_skills_registered():
@@ -56,12 +56,10 @@ async def test_skill_report_context_injected_into_writer_prompt(monkeypatch):
     captured: dict[str, Any] = {}
 
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
-        captured["prompt"] = messages[0].content
+        captured["prompt"] = "\n".join(message.content for message in messages)
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {"messages": [], "research_brief": "b", "notes": ["n"], "completed_task_outputs": []}
     await build_report(state, _config(skills=["medical"]))
@@ -76,12 +74,10 @@ async def test_no_skill_context_for_default_config(monkeypatch):
     captured: dict[str, Any] = {}
 
     async def fake_invoke(model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw):
-        captured["prompt"] = messages[0].content
+        captured["prompt"] = "\n".join(message.content for message in messages)
         return AIMessage(content="ok")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
+    patch_report_model(monkeypatch, fake_invoke)
 
     state = {"messages": [], "research_brief": "b", "notes": ["n"], "completed_task_outputs": []}
     await build_report(state, _config())  # no skills
@@ -94,29 +90,15 @@ async def test_no_skill_context_for_default_config(monkeypatch):
 async def test_skill_report_context_injected_into_all_sectioned_writer_prompts(monkeypatch):
     prompts: list[str] = []
 
-    class FakeStructuredModel:
-        def with_config(self, _config):
-            return self
-
-        def with_structured_output(self, _schema, **_kwargs):
-            return self
-
     async def fake_invoke(
         model, messages, config, *, span_name, agent_role=None, model_name=None, **_kw
     ):
-        prompts.append(messages[0].content)
+        prompts.append("\n".join(message.content for message in messages))
         if span_name == "lead.report_outline":
             return ReportOutline(title="T", sections=[SectionSpec(name="Findings")])
         return AIMessage(content="body")
 
-    monkeypatch.setattr(
-        assembly_module, "invoke_model_with_retry_observability", fake_invoke
-    )
-    monkeypatch.setattr(
-        assembly_module,
-        "_writer_model_template",
-        FakeStructuredModel(),
-    )
+    patch_report_model(monkeypatch, fake_invoke)
     state = {
         "messages": [],
         "research_brief": "b",
