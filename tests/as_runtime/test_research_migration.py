@@ -492,6 +492,61 @@ async def test_supervisor_cancellation_cleans_up_workers():
     assert finished.is_set()
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_async_wait_does_not_spend_model_turns_without_task_updates(monkeypatch, cancel):
+    waiting = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    original_wait = asyncio.wait
+
+    async def fast_wait(futures, *, timeout=None, return_when=asyncio.ALL_COMPLETED):
+        waiting.set()
+        # Advance an empty polling timeout immediately; a real update stays blocked.
+        return await original_wait(
+            futures, timeout=0 if timeout is not None else None,
+            return_when=return_when,
+        )
+
+    monkeypatch.setattr(asyncio, "wait", fast_wait)
+
+    class Worker:
+        async def run(self, assignment, *_args):
+            try:
+                await release.wait()
+                return ResearchHandoff(**assignment.model_dump(), compressed_research="done")
+            finally:
+                finished.set()
+
+    models = Models({"supervisor": [
+        [tool_call("TaskCreate", "create", research_topic="q")],
+        [tool_call("WaitForTeamEvents", "wait")],
+        [tool_call("ResearchComplete", "complete")],
+    ]})
+    supervisor = Supervisor(
+        models, lambda: cfg(enable_async_research=True, max_researcher_iterations=2),
+        Worker(), run_id="run",
+    )
+    task = asyncio.create_task(supervisor.run("brief", contract()))
+    try:
+        await asyncio.wait_for(waiting.wait(), 2)
+        await asyncio.sleep(0.02)
+        assert len(models.created[0][2].calls) == 2
+        assert not finished.is_set()
+        if cancel:
+            task.cancel()
+            with pytest.raises(RuntimeError, match="research agent stopped: interrupted"):
+                await task
+        else:
+            release.set()
+            results, _ = await asyncio.wait_for(task, 2)
+            assert len(results) == 1
+            assert len(models.created[0][2].calls) == 3
+        assert finished.is_set()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_pipeline_runs_inside_native_agent_middleware():
     flow = pipeline()
     model = ScriptedModel([[TextBlock(text="must not call")]])

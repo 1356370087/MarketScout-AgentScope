@@ -98,6 +98,27 @@ def test_revision_keeps_full_draft_and_issue_tail(native_port):
     assert len(json.loads(messages[2].content)["records"]) == 20
 
 
+def test_review_budget_keeps_late_cited_source_before_unrelated_records(native_port):
+    evidence = records()
+    for record in evidence[:-1]:
+        record["source_url"] = "https://example.com/unrelated"
+    cited = evidence[-1]
+    draft = ReportDraft(markdown=f"结论引用 [来源]({cited['source_url']})。")
+    payload = build_reviewer_payload(draft, {"evidence_registry": evidence}, {})
+    assert payload["evidence_registry"][0]["evidence_id"] == cited["evidence_id"]
+    messages = writing_messages(
+        "Review the report", {"draft_markdown": draft.markdown}, payload["evidence_registry"],
+    )
+    fitted, count = fit_writing_messages(
+        messages, "openai:gpt-4.1", Configuration(), output_tokens=1024,
+        context_window=14000,
+    )
+    selected = json.loads(fitted[-1].content)["records"]
+    assert 0 < count < len(evidence)
+    assert selected[0]["evidence_id"] == cited["evidence_id"]
+    assert selected[0]["supporting_excerpt"] == cited["supporting_excerpt"]
+
+
 @pytest.mark.asyncio
 async def test_oversize_draft_fails_before_model_instead_of_silently_cutting(native_port):
     draft = ReportDraft(markdown="不可截断" * 10000)

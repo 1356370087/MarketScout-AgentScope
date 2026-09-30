@@ -53,7 +53,10 @@ class SummaryOutput(BaseModel):
 
 
 class SearchQueries(BaseModel):
-    """搜索工具的模型输入；max_results/topic 由运行时注入。"""
+    """Short, search-engine-ready queries. Begin broad on the first call when
+    unconstrained; refine later queries only to address evidence-backed gaps.
+    Explicit tool, URL and source restrictions always take precedence.
+    """
 
     queries: list[str] = Field(min_length=1)
 

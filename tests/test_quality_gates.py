@@ -335,7 +335,7 @@ def test_bounded_evidence_prioritizes_explicit_ids_over_fuzzy_matches() -> None:
     assert stats["explicit_citation_included_count"] == 1
 
 
-def test_bounded_evidence_fits_every_explicit_citation_in_tight_budget() -> None:
+def test_bounded_evidence_preserves_whole_excerpts_in_tight_budget() -> None:
     records = [
         {
             "evidence_id": f"ev_cited_{index:02d}",
@@ -357,11 +357,12 @@ def test_bounded_evidence_fits_every_explicit_citation_in_tight_budget() -> None
         priority_text=priority_text,
     )
 
-    assert {record["evidence_id"] for record in selected} == {
-        record["evidence_id"] for record in records
-    }
+    originals = {record["evidence_id"]: record for record in records}
+    assert selected and len(selected) < 12
+    for record in selected:
+        assert record["supporting_excerpt"] == originals[record["evidence_id"]]["supporting_excerpt"]
     assert stats["explicit_citation_count"] == 12
-    assert stats["explicit_citation_included_count"] == 12
+    assert stats["explicit_citation_included_count"] == len(selected)
     assert len(json.dumps(selected, ensure_ascii=False)) <= 12_000
 
 
@@ -768,7 +769,7 @@ async def test_tool_gate_malformed_contract_follows_fail_open_boundary(
 
 
 @pytest.mark.asyncio
-async def test_tool_gate_payload_closes_total_input_budget(monkeypatch) -> None:
+async def test_tool_gate_rejects_unfit_requirements_without_truncation(monkeypatch) -> None:
     captured: dict = {}
 
     async def capture_evaluation(_schema, _prompt, payload, _config, **_kwargs):
@@ -807,25 +808,27 @@ async def test_tool_gate_payload_closes_total_input_budget(monkeypatch) -> None:
     })
     limit = 2_000
 
-    await evaluate_tool_results(
-        "topic " + ("t" * 8_000),
-        [{"name": "tool", "content": "result " + ("x" * 8_000), "error": False}],
-        {
-            "configurable": {
-                "quality_evaluation_max_input_chars": limit,
-                "quality_evaluation_min_sources": 0,
+    from open_deep_research.quality.gate import QualityInputBudgetExceeded
+    with pytest.raises(QualityInputBudgetExceeded):
+        await evaluate_tool_results(
+            "topic " + ("t" * 8_000),
+            [{"name": "tool", "content": "result " + ("x" * 8_000), "error": False}],
+            {
+                "configurable": {
+                    "quality_evaluation_max_input_chars": limit,
+                    "quality_evaluation_min_sources": 0,
+                },
+                "metadata": {"quality_policy_version": "quality-gate-v4"},
             },
-            "metadata": {"quality_policy_version": "quality-gate-v4"},
-        },
-        coverage_contract=contract,
-        requirement_ids=["COV-01"],
-    )
+            coverage_contract=contract,
+            requirement_ids=["COV-01"],
+        )
 
-    assert len(json.dumps(captured, ensure_ascii=False)) <= limit
+    assert captured == {}
 
 
 @pytest.mark.asyncio
-async def test_handoff_payload_marks_text_truncation(monkeypatch) -> None:
+async def test_handoff_rejects_unfit_body_without_truncation(monkeypatch) -> None:
     captured: dict = {}
 
     async def capture_evaluation(_schema, _prompt, payload, _config, **_kwargs):
@@ -844,24 +847,25 @@ async def test_handoff_payload_marks_text_truncation(monkeypatch) -> None:
         capture_evaluation,
     )
 
-    await evaluate_subagent_handoff(
-        "topic",
-        {
-            "compressed_research": "c" * 8_000,
-            "raw_notes": ["n" * 2_000],
-            "evidence_registry": [],
-            "metrics": {"sources_read": 1},
-        },
-        {
-            "configurable": {
-                "quality_evaluation_max_input_chars": 1_000,
-                "quality_evaluation_min_sources": 0,
-            }
-        },
-    )
+    from open_deep_research.quality.gate import QualityInputBudgetExceeded
+    with pytest.raises(QualityInputBudgetExceeded):
+        await evaluate_subagent_handoff(
+            "topic",
+            {
+                "compressed_research": "c" * 8_000,
+                "raw_notes": ["n" * 2_000],
+                "evidence_registry": [],
+                "metrics": {"sources_read": 1},
+            },
+            {
+                "configurable": {
+                    "quality_evaluation_max_input_chars": 1_000,
+                    "quality_evaluation_min_sources": 0,
+                }
+            },
+        )
 
-    assert captured["compressed_research_truncated"] is True
-    assert captured["raw_notes_truncated"] is True
+    assert captured == {}
 
 
 @pytest.mark.asyncio

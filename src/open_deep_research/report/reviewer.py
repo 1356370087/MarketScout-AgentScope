@@ -392,6 +392,24 @@ def _accepted_reference_identities(
     }
 
 
+def _review_evidence(records: list[dict[str, Any]], draft: ReportDraft) -> list[dict[str, Any]]:
+    """Prioritize cited sources without letting one source crowd out the rest."""
+    from .references import parse_sources_from_text
+    from .writing import order_evidence, project_evidence
+
+    cited = {
+        _canonical_reference(source.url)
+        for source in [*draft.sources, *parse_sources_from_text(draft.markdown)]
+    }
+    return sorted(
+        order_evidence(project_evidence(records), {}),
+        key=lambda record: (
+            0 if record.get("evidence_id") and record["evidence_id"] in draft.markdown
+            else 1 if _canonical_reference(record.get("source_url")) in cited else 2
+        ),
+    )
+
+
 def build_reviewer_payload(
     draft: ReportDraft | Mapping[str, Any] | str,
     state: Mapping[str, Any] | None = None,
@@ -425,14 +443,12 @@ def build_reviewer_payload(
         for source in normalized_draft.sources
         if _canonical_reference(source.url) in accepted_references
     ]
-    from .writing import project_evidence
-
     # Single-shot review is a domain operation, not conversation compression.
     # Keep the draft and evidence intact; the native port budgets whole records.
     return {
         "research_brief": str(normalized_state.get("research_brief") or ""),
         "coverage_contract": {"requirements": requirements, "dimension_coverage": dimension_coverage},
-        "evidence_registry": project_evidence(records),
+        "evidence_registry": _review_evidence(records, normalized_draft),
         "draft_markdown": normalized_draft.markdown,
         "sources": [{"title": source.title, "url": source.url,
                      "source_type": source.source_type, "locator": source.locator}
@@ -1140,7 +1156,7 @@ def _normalize_candidate(
         decision = "fail" if protocol_failure else "revise"
     elif model_decision == "fail":
         decision = "fail"
-    elif issues or model_decision == "revise":
+    elif any(issue.severity != "info" for issue in issues) or model_decision == "revise":
         decision = "revise"
     else:
         decision = "pass"
@@ -1232,16 +1248,27 @@ async def review_report(
     resolved_attempt = int(attempt if attempt is not None else normalized_draft.attempt or 1)
     model_name = _model_name(cfg)
     try:
-        raw = await _invoke_reviewer(payload, runnable_config, cfg, attempt=resolved_attempt)
-        return _normalize_candidate(
-            raw,
-            draft=normalized_draft,
-            state=normalized_state,
-            config=runnable_config,
-            payload=payload,
-            model_name=model_name,
-            attempt=resolved_attempt,
-        )
+        protocol_codes = {
+            "unknown_requirement_id", "unknown_evidence_id", "review_protocol_invalid",
+            "review_dimensions_missing", "coverage_contract_rows_missing_or_invalid",
+            "citation_audit_missing",
+        }
+        for repair in range(max(1, cfg.max_structured_output_retries)):
+            raw = await _invoke_reviewer(payload, runnable_config, cfg, attempt=resolved_attempt)
+            result = _normalize_candidate(
+                raw, draft=normalized_draft, state=normalized_state,
+                config=runnable_config, payload=payload, model_name=model_name,
+                attempt=resolved_attempt,
+            )
+            errors = [code for code in result.deterministic_failures if code in protocol_codes]
+            if not errors or repair + 1 >= cfg.max_structured_output_retries:
+                return result
+            payload = {**payload, "review_protocol_feedback": {
+                "errors": errors,
+                "instruction": "Correct the review metadata, not the draft. Use the exact supplied "
+                "requirement and evidence IDs, cover every requirement, and include all score "
+                "dimensions and citation audits. Do not invent IDs or omit mandatory rows.",
+            }}
     except Exception as exc:  # noqa: BLE001 - fail-open policy is explicit
         if isinstance(exc, NativeReportRuntimeMissing):
             raise
@@ -1307,7 +1334,7 @@ def _revision_prompt(
 ) -> str | list[Any]:
     """Build a constrained Revisor prompt with no raw handoff/tool content."""
     requirements = _requirements(state)
-    from .writing import project_evidence, writing_messages
+    from .writing import writing_messages
 
     return writing_messages(
         getattr(_prompts, "report_revision_prompt", "{payload}"),
@@ -1315,7 +1342,7 @@ def _revision_prompt(
          "requirements": requirements, "draft_markdown": draft.markdown,
          "review": review.model_dump(mode="json"), "report_type": draft.report_type,
          "output_format": draft.output_format, "reference_style": draft.reference_style},
-        project_evidence(_state_evidence(state)),
+        _review_evidence(_state_evidence(state), draft),
         guidance="Use report_evidence.records as accepted_evidence. Preserve the complete draft; "
         "state evidence gaps explicitly rather than inventing missing support.",
     )

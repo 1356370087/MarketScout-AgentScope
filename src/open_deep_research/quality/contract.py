@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Iterable, Literal, Mapping, Sequence, cast
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from open_deep_research.documents.contracts import SourceSelection
+from open_deep_research.documents.contracts import SourceSelection, SourceMode
 
 from open_deep_research.report.coverage import (
     CoverageSection,
     derive_coverage_sections,
     derive_coverage_units,
     is_scope_exclusion,
+    source_directive_kind,
 )
 
 COVERAGE_CONTRACT_SCHEMA_VERSION = 2
@@ -88,6 +89,10 @@ _SINGLE_RESEARCH_TASK_RE = re.compile(
 # subtask can never prove them with web evidence ("至少并行两个研究员",
 # "不需要澄清", citation-scope rules).
 _PROCESS_REQUIREMENT_RE = re.compile(
+    r"^(?:请\s*)?(?:不要|不得|禁止|不)(?:把|将).{0,32}(?:当作|视为).{0,16}(?:性能)?基准\s*$|"
+    r"^(?:请\s*)?(?:不要|不得|禁止|不)(?:推测|编造|杜撰)(?:任何)?(?:未公开的?)?(?:性能数字|性能数据|性能指标)\s*$|"
+    r"^(?:请\s*)?(?:仅|只)(?:直接)?(?:读取|访问|使用)(?:所选|指定|该|此)\s*(?:URL|网址|网页|页面|来源)\s*$|"
+    r"^(?:不得|禁止|不要)(?:搜索|访问)(?:或(?:访问|搜索))?(?:任何)?(?:其他|额外|未指定)(?:网站|网页|页面|来源)\s*$|"
     r"(?:不可拆分|单一研究任务)|"
     r"(?:至少.{0,48}(?:并行.{0,16})?(?:Subagent|子智能体|研究员))|"
     r"(?:并行.{0,24}(?:委派|开展|执行|运行)?.{0,16}(?:两个|多个|多名|两名)?.{0,16}(?:Subagent|子智能体|研究员))|"
@@ -129,11 +134,13 @@ _TEAM_PROCESS_REQUIREMENT_RE = re.compile(
 # Output-format obligations owned by the final report stage ("风险矩阵",
 # "检查清单", "用中文输出"); evidence cannot prove a deliverable's existence.
 _DELIVERABLE_REQUIREMENT_RE = re.compile(
+    r"^(?:请\s*)?(?:包含|提供|给出|附上)(?:执行)?摘要\s*$|"
+    r"^(?:请\s*)?(?:保留|提供|附上)(?:该|此|所选|指定)?(?:网页|页面|来源)的?(?:引用|链接)\s*$|"
     r"(?:最终.{0,32}(?:中文.{0,16})?(?:对照表|比较表|对比表|表格|简报|报告|输出|呈现))|"
     r"(?:(?:用|使用|以).{0,12}(?:中文|英文).{0,24}(?:输出|撰写|呈现|回答|报告))|"
     r"(?:执行摘要|executive\s+summary)|"
     r"(?:风险矩阵|risk\s+matrix)|"
-    r"(?:(?:检查|核对|排查)清单|(?:pre-?)?(?:launch|production|go-?live).{0,24}checklist)|"
+    r"(?:(?:检查|核对|排查|验证)清单|(?:pre-?)?(?:launch|production|go-?live).{0,24}checklist)|"
     r"(?:(?:对照|比较)表|对比表格)|"
     r"(?:可点击.{0,8}(?:引用|链接)|clickable\s+(?:citation|link))|"
     r"(?:输出.{0,16}(?:表格|清单|矩阵|摘要))|"
@@ -193,6 +200,9 @@ def classify_requirement_kind(text: str) -> RequirementKind:
     requirements are output-format obligations owned by the final report.
     """
     value = str(text or "")
+    directive = source_directive_kind(value)
+    if directive is not None:
+        return cast(RequirementKind, directive)
     if is_scope_exclusion(value):
         return "process"
     if (_PROCESS_REQUIREMENT_RE.search(value)
@@ -329,6 +339,43 @@ class ResearchCoverageContract(BaseModel):
             ),
             None,
         )
+
+
+def task_coverage_contract(contract, requirement_ids):
+    """Narrow a Hybrid leaf only from user-authored source obligations.
+
+    Model task prose cannot change this boundary. Mixed or unclassified owners
+    retain the run contract, as does run-level completion without owned IDs.
+    """
+    if contract is None:
+        return None
+    contract = ResearchCoverageContract.model_validate(contract)
+    selection = contract.source_selection
+    if selection is None or selection.mode != SourceMode.HYBRID or not requirement_ids:
+        return contract
+    owned = set(requirement_ids) & set(contract.delegable_requirement_ids())
+    modes = {}
+    current = None
+    message_index = None
+    for requirement in sorted(contract.requirements, key=lambda r: (r.source_message_index, r.source_start)):
+        if requirement.source_message_index != message_index:
+            current, message_index = None, requirement.source_message_index
+        text = coverage_requirement_display_text(contract, requirement)
+        document = bool(re.search(r"(?:依据|基于|查阅|读取|使用).{0,12}(?:所选|指定|所提供|提供的).{0,12}(?:资料|文档|文件)", text))
+        web = bool(re.search(r"(?:查阅|读取|访问|检索).{0,40}(?:网页|网站|官方发布说明|https?://)|(?:公开网络|网页证据)", text))
+        explicit = "documents" if document and not web else "web" if web and not document else None
+        # Only an exclusive source directive carries across clauses. A source
+        # mentioned in one factual task cannot narrow an unrelated sibling.
+        if requirement.kind == "process" and re.match(r"^(?:请)?(?:仅|只)", requirement.text) and explicit:
+            current = explicit
+        if requirement.requirement_id in owned:
+            modes[requirement.requirement_id] = explicit or current
+    if owned and set(modes) == owned and set(modes.values()) == {"documents"} and selection.document_ids:
+        selected = SourceSelection.model_validate({"mode": "documents", "sources": [
+            source.model_dump(mode="json") for source in selection.sources if source.type == "document"
+        ]})
+        return contract.model_copy(update={"source_selection": selected})
+    return contract
 
 
 class DimensionCoverageSummary(BaseModel):
@@ -1003,6 +1050,20 @@ def _legacy_source_requirement_groups(
         factual_texts = [
             item.text for item in source_items if item.kind == "factual"
         ]
+        if len(source_items) > 1 and len(factual_texts) == len(source_items) and all(item.source_located for item in source_items):
+            # Keep shared objects, versions and quantifiers with every child.
+            start = min(item.source_start for item in source_items)
+            end = max(item.source_end for item in source_items)
+            parent = content[start:end]
+            dimension_ordinal += 1
+            dimension_id = _stable_dimension_id(message_index, parent, dimension_ordinal)
+            dimension = _SourceDimension(dimension_id=dimension_id, label=parent[:80], text=parent,
+                message_index=message_index, source_start=start, source_end=end)
+            source_items = tuple(replace(item, dimension_id=dimension_id) for item in source_items)
+            groups.append(_SourceRequirementGroup(items=source_items, dimension=dimension,
+                fallback=_source_requirement_from_span(message_index, content, start, end, "factual", dimension_id=dimension_id)))
+            dimensions.append(dimension)
+            continue
         fallback_text = (
             _aggregate_factual_items(factual_texts)
             if factual_texts

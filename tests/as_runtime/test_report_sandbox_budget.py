@@ -49,7 +49,9 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
         fields = json.loads(body["messages"][1]["content"][0]["text"])
         evidence = json.loads(body["messages"][2]["content"][0]["text"])
         assert fields["draft_markdown"] == payload["draft_markdown"]
-        assert evidence["records"] == payload["evidence_registry"]
+        assert sorted(evidence["records"], key=lambda row: row["evidence_id"]) == sorted(
+            payload["evidence_registry"], key=lambda row: row["evidence_id"]
+        )
         assert evidence["omitted_record_count"] == 0
         if role == "report_revisor":
             assert fields["review"]["issues"][0]["description"].endswith("ISSUE-END")

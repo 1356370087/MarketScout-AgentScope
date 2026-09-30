@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -35,8 +36,9 @@ from open_deep_research.prompts import lead_researcher_prompt, research_system_p
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
     merge_coverage_ledger,
+    task_coverage_contract,
 )
-from open_deep_research.quality.gate import count_traceable_sources
+from open_deep_research.quality.gate import count_traceable_sources, QualityInputBudgetExceeded
 from open_deep_research.tools.base import (
     ToolEffect,
     ToolExecutionZone,
@@ -101,7 +103,11 @@ class _Empty(BaseModel):
 
 
 class _Topic(BaseModel):
-    research_topic: str = Field(min_length=1)
+    research_topic: str = Field(min_length=1, description=(
+        "A complete, self-contained research objective focused on one independent direction. "
+        "Describe what the sub-agent needs to learn and essential constraints. This is "
+        "not a search-engine query to copy verbatim; queries are refined from evidence."
+    ))
     requirement_ids: list[str] = Field(default_factory=list)
 
 
@@ -125,6 +131,7 @@ class _Completion(MiddlewareBase):
         self.finished = False
         self.requested = False
         self.stopped = False
+        self.stop_reason = ""
         self.before_reasoning = None
         self.limit = limit
         self.reasoning_calls = 0
@@ -135,7 +142,7 @@ class _Completion(MiddlewareBase):
         if self.finished or self.stopped or self.reasoning_calls >= self.limit:
             yield AssistantMsg(
                 agent.name,
-                "ResearchComplete" if self.finished else "质量评估不可用，已停止研究。" if self.stopped else "研究轮次已达到上限。",
+                "ResearchComplete" if self.finished else (self.stop_reason or "质量评估不可用，已停止研究。") if self.stopped else "研究轮次已达到上限。",
             )
         else:
             self.reasoning_calls += 1
@@ -150,6 +157,8 @@ def _control_tool(name, schema, call, *, safe=True, idempotent=False):
         description=f"Research coordination: {name}.",
         prompt=lambda cfg: (
             f"Use `{name}` only within the assigned research requirements."
+            + (" Do not call it in parallel with a search or another tool; reflect after reading their results."
+               if name == "think_tool" else "")
         ),
         call=call,
         origin=ToolOrigin.SYSTEM,
@@ -302,6 +311,7 @@ class Researcher:
         coordination_tools=(),
         worker_middlewares=(),
     ) -> ResearchHandoff:
+        contract = task_coverage_contract(contract, assignment.requirement_ids).model_dump(mode="json")
         def scoped_config():
             config = self.config_provider()
             return {
@@ -310,6 +320,7 @@ class Researcher:
                     **config.get("metadata", {}),
                     "run_id": self.run_id,
                     "task_id": assignment.task_id,
+                    **({"source_selection": contract["source_selection"]} if contract.get("source_selection") else {}),
                 },
             }
 
@@ -373,11 +384,17 @@ class Researcher:
             await observations.capture(name, call_id, outcome)
 
         async def quality_boundary(agent):
-            assessment = await observations.assess_pending()
+            try:
+                assessment = await observations.assess_pending()
+            except QualityInputBudgetExceeded as error:
+                # The SDK must not convert an input-budget failure into another
+                # reasoning/search iteration.
+                raise ContextControlError(error) from error
             if assessment is not None:
                 feedback_view = {key: assessment.get(key) for key in (
                     "decision", "accepted", "reason", "missing_information", "suggested_queries",
                     "evaluator_error", "deterministic_checks",
+                    "gaps",
                 )}
                 agent.state.context.append(UserMsg(
                     "quality_gate",
@@ -385,6 +402,25 @@ class Researcher:
                     metadata={"research_protected": True},
                 ))
                 agent.state.middle_context["research_quality"] = feedback_view
+                gaps = assessment.get("gaps") or []
+                if any(gap.get("kind") == "input_projection" for gap in gaps):
+                    completion.stopped = True
+                    completion.stop_reason = "quality_input_incomplete"
+                elif gaps and assessment.get("decision") != "complete":
+                    evidence_view = [{key: row.get(key) for key in (
+                        "evidence_id", "claim", "supporting_excerpt", "source_url", "document_id",
+                        "locator", "source_authority", "security_status",
+                    )} for row in sorted(observations.evidence.values(), key=lambda row: row["evidence_id"])]
+                    progress = {
+                        "evidence_sha256": hashlib.sha256(json.dumps(evidence_view, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+                        "gaps": sorted([gap["requirement_id"], gap["kind"], gap.get("next_query", "")]
+                                       for gap in gaps if gap["kind"] in {"factual", "conflict"}),
+                    }
+                    previous = agent.state.middle_context.get("research_quality_progress")
+                    if progress == previous:
+                        completion.stopped = True
+                        completion.stop_reason = "research_no_progress"
+                    agent.state.middle_context["research_quality_progress"] = progress
                 if assessment.get("evaluator_error") and not cfg.quality_evaluation_fail_open:
                     completion.stopped = True
             if completion.requested:
@@ -491,7 +527,7 @@ class Researcher:
             compressed_research=notes,
             evidence_registry=evidence,
             assessment={"tool_batches": observations.assessments},
-            termination="quality_evaluator_failed" if completion.stopped else "research_complete" if completion.finished else str(reason),
+            termination=(completion.stop_reason or "quality_evaluator_failed") if completion.stopped else "research_complete" if completion.finished else str(reason),
             agent_state=agent.state.model_dump(mode="json"),
         )
 
@@ -547,7 +583,9 @@ class Supervisor:
         tasks: dict[str, asyncio.Task] = {}
         results: dict[str, ResearchHandoff] = {}
         semaphore = asyncio.Semaphore(cfg.max_concurrent_research_units)
-        coordination_limit = max(60, cfg.max_researcher_iterations) if teams_mode else cfg.max_researcher_iterations
+        # Both asynchronous modes spend turns dispatching, joining and reviewing
+        # workers; the leaf Researcher limit must not cut off that coordination.
+        coordination_limit = max(60, cfg.max_researcher_iterations) if cfg.enable_async_research else cfg.max_researcher_iterations
         completion = _Completion(coordination_limit)
         ledger = {}
         assessments = {}
@@ -768,7 +806,7 @@ class Supervisor:
             pending = [task for task in tasks.values() if not task.done()]
             if pending:
                 await asyncio.wait(
-                    pending, timeout=30.0, return_when=asyncio.FIRST_COMPLETED
+                    pending, return_when=asyncio.FIRST_COMPLETED
                 )
             return await task_list(input, context, progress)
 

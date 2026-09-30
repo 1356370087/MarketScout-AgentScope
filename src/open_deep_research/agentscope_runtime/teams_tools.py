@@ -7,6 +7,7 @@ from open_deep_research.agentscope_runtime.research_agents import (
     _control_tool,
     _Empty,
     _TaskId,
+    _Topic,
 )
 from open_deep_research.tasks.team_messages import SendMessageInput
 from open_deep_research.tasks.team_protocol import MemberIdentity
@@ -26,7 +27,7 @@ class SpawnInput(BaseModel):
 
 
 class TaskCreateInput(BaseModel):
-    research_topic: str = ""
+    research_topic: str = Field(default="", description=_Topic.model_fields["research_topic"].description)
     subject: str | None = None
     description: str | None = None
     activeForm: str | None = None

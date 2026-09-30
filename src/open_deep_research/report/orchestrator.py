@@ -1063,6 +1063,8 @@ def _review_has_recoverable_content_failure(review: ReportReview) -> bool:
     if "report_reviewer_unavailable" in review.hard_failures:
         return False
     protocol_failures = {
+        "unknown_requirement_id",
+        "unknown_evidence_id",
         "review_protocol_invalid",
         "review_dimensions_missing",
         "coverage_contract_rows_missing_or_invalid",
@@ -1240,7 +1242,13 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
     # A fail-open transport/protocol outage is explicitly marked ``skipped``;
     # it must not turn into a meaningless Revisor call with no review issues.
     while (
-        review.decision == "revise"
+        (
+            review.decision == "revise"
+            or (
+                review.decision == "fail"
+                and _review_has_recoverable_content_failure(review)
+            )
+        )
         and review.status != "skipped"
         and not getattr(review, "skipped", False)
         and revision_count < max_revisions

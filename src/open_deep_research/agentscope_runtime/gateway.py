@@ -26,6 +26,7 @@ from agentscope.model import (
     OpenAIChatModel,
 )
 from open_deep_research.sandbox.wire import GatewayModelRequestV2, GatewayModelOutcomeV2
+from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
 
 
 _operation_scope = ContextVar("native_gateway_operation", default=None)
@@ -45,6 +46,7 @@ def gateway_operation_scope(key):
 class GatewayCallError(RuntimeError):
     def __init__(self, code, *, status_code=None, uncertain=False):
         super().__init__(code)
+        self.code = code
         self.status_code, self.uncertain = status_code, uncertain
 
 
@@ -174,6 +176,8 @@ class SandboxChatModel(ChatModelBase):
         ):
             raise GatewayCallError("sandbox_gateway_response_mismatch", uncertain=True)
         if outcome.status != "completed":
+            if outcome.status == "failed" and outcome.error_code == GATEWAY_TOKEN_LIMIT_MARKER:
+                raise GatewayCallError(GATEWAY_TOKEN_LIMIT_MARKER, status_code=400)
             if (outcome.error_code or "").startswith("budget_exhausted:"):
                 from open_deep_research.budgets import BudgetDimension, BudgetExhausted
 
@@ -299,9 +303,9 @@ class SandboxChatModel(ChatModelBase):
         messages = list(messages)
         for attempt in range(max(1, self.structured_attempts)):
             outcome = await self._request(messages, structured_schema=schema, **kwargs)
-            if outcome.finish_reason in {"length", "max_tokens"}:
-                raise GatewayCallError("structured_output_truncated")
             try:
+                if outcome.finish_reason in {"length", "max_tokens"}:
+                    raise GatewayCallError("structured_output_truncated")
                 content = outcome.structured
                 if content is None:
                     calls = (outcome.message or {}).get("tool_calls") or []
@@ -328,7 +332,13 @@ class SandboxChatModel(ChatModelBase):
                     "every required property with the declared types. Required: "
                     + json.dumps(schema.get("required", []))
                     + "\nValidation error: "
-                    + (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:1000],
+                    + (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:1000]
+                    + (
+                        "\nThe output exceeded its token limit. Use concise field values "
+                        "and avoid duplicate entries; preserve all required coverage "
+                        "checks and evidence references."
+                        if str(exc) == "structured_output_truncated" else ""
+                    ),
                 ))
         return StructuredResponse(
             content=content,

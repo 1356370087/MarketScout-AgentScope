@@ -38,6 +38,7 @@ from open_deep_research.quality.contract import (
     coverage_requirement_display_text,
     is_delegable_requirement,
     resolve_handoff_admission,
+    task_coverage_contract,
 )
 from open_deep_research.quality.policy import (
     QualityRigorPolicy,
@@ -148,6 +149,16 @@ def count_traceable_sources(records: Iterable[Mapping[str, Any]]) -> int:
     return len({identity for record in records if (identity := _evidence_source_identity(record))})
 
 
+class ResearchGap(BaseModel):
+    """Bind feedback to a user requirement and already inspected evidence."""
+
+    requirement_id: str
+    kind: Literal["factual", "conflict", "advisory", "input_projection"]
+    reason: str = Field(min_length=1)
+    checked_evidence_ids: list[str] = Field(default_factory=list)
+    next_query: str = ""
+
+
 class ToolResultAssessment(BaseModel):
     """JSON decision produced after a researcher tool batch."""
 
@@ -159,6 +170,7 @@ class ToolResultAssessment(BaseModel):
     unresolved_conflicts: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
     suggested_queries: list[str] = Field(default_factory=list)
+    gaps: list[ResearchGap] = Field(default_factory=list)
     reason: str
     # Runtime-owned metadata is injected after the Judge response.  Keeping
     # these free-form maps in the synthetic function schema produces an
@@ -186,6 +198,7 @@ class HandoffAssessment(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
     follow_up_tasks: list[str] = Field(default_factory=list)
+    gaps: list[ResearchGap] = Field(default_factory=list)
     requirement_coverage: list[RequirementCoverage] = Field(
         default_factory=list
     )
@@ -226,6 +239,10 @@ class HandoffAssessment(BaseModel):
         return self
 
 
+class QualityInputBudgetExceeded(ValueError):
+    """The evaluator input cannot fit intact; more research cannot repair it."""
+
+
 class QualityProtocolError(ValueError):
     """Raised after a quality model repeats a contradictory decision."""
 
@@ -264,6 +281,9 @@ evidence exists but important gaps remain; complete only when the cumulative res
 answer the topic with adequate corroborated evidence.
 When coverage_contract is present, only its owned_requirement_ids are hard requirements.
 The advisory research_topic must not create new mandatory deliverables.
+Parent dimension text supplies context, not ownership of sibling requirements.
+Evaluate each owned requirement's atomic text; a request for one improvement does not
+require every example proposed in the brief, task description, or researcher notes.
 An owned requirement may be completed by a bounded negative finding when the original user
 explicitly permits unsupported claims or unavailable official details to be labelled unconfirmed.
 When accepted evidence documents the authoritative material checked and the researcher can state
@@ -275,8 +295,21 @@ or compact artifact reference.
 The payload's runtime_current_date is authoritative. Do not reject a source merely because its
 publication date is later than your training cutoff or unfamiliar to you. Judge traceability and
 support from the supplied evidence, and report uncertainty instead of claiming non-existence.
-input_truncated=true means oversized prose was shortened to fit the complete payload budget;
-machine-readable failure codes, requirement/evidence IDs, and source URLs remain authoritative.
+input_truncated=true means optional evidence records or advisory prose were omitted.
+An input_projection gap requires omitted evidence records (cumulative_evidence_stats.truncated).
+Insufficient traceable sources is a factual research gap, not missing evaluator input.
+The owned requirements and handoff are complete. If projected evidence is insufficient to review,
+report an input_projection gap; do not request more searches for an evaluator input limitation.
+
+For each follow-up, return a gaps entry with requirement_id from owned_requirement_ids,
+kind (factual, conflict, advisory, input_projection), reason, checked_evidence_ids from
+the supplied registry, and next_query. Only factual/conflict gaps can require new research.
+Supervisor suggestions and optional explanations are advisory, not mandatory facts.
+Do not demand a positive finding for a supervisor hypothesis that evidence contradicts;
+use another supported answer to the user's actual requirement. Put optional suggestions
+only in advisory gaps, not missing_information, suggested_queries or follow_up_tasks.
+An input_projection gap must have an empty next_query. Never invent an evidence ID.
+Legacy compressed_research_truncated/raw_notes_truncated markers describe missing evaluator input, not missing research.
 """
 
 
@@ -356,13 +389,18 @@ Return exactly one JSON object with:
 - caveats, missing_information, unsupported_claims, follow_up_tasks: arrays of strings
 - reason: string
 
-Use only owned_requirement_ids in requirement_coverage. owned_requirements gives each atomic child its parent-dimension context; sibling children in the same parent are not owned unless their IDs appear in owned_requirement_ids. Every supported factual requirement must cite at least one evidence_id present in evidence_registry. Requirements listed in evidence_optional_requirement_ids are process or deliverable-format checks; they are satisfied by the orchestration or the final report stage and excluded from owned_requirement_ids, so do not emit coverage rows for them, and never treat their absence from a subtask handoff as a gap. Do not invent IDs.
+Use only owned_requirement_ids in requirement_coverage. owned_requirements preserves each atomic child's original text; dimension_id links to parent context, not additional owned requirements. Sibling children in the same parent are not owned unless their IDs appear in owned_requirement_ids. Every supported factual requirement must cite at least one evidence_id present in evidence_registry. Requirements listed in evidence_optional_requirement_ids are process or deliverable-format checks; they are satisfied by the orchestration or the final report stage and excluded from owned_requirement_ids, so do not emit coverage rows for them, and never treat their absence from a subtask handoff as a gap. Do not invent IDs.
+The handoff's self-reported gaps do not define user requirements. A request for one improvement
+can be supported by one evidenced improvement; unverified examples proposed by the brief or
+Researcher (such as additional optimizations) are advisory unless the original atomic user text
+requires them. Do not turn those optional examples into partial coverage or hard rejection.
 
 Requirements in shared_requirement_ids are co-owned by sibling research tasks and are aggregated at the run level afterwards. For a shared requirement, evaluate ONLY what this handoff's evidence_registry actually supports: if this handoff provides no evidence for it, omit the coverage row or mark it partial -- never mark it unsupported, never lower evidence_coverage because of it, and never list its absence in unsupported_claims or missing_information. Requirements in exclusive_requirement_ids must be fully supported by this handoff alone.
 The candidate compressed_research is available only to evaluate its deliverable structure, explicit guarantee/inference labels, limitations, and requested checklist. Treat every factual statement in it as unsupported unless it is grounded by an evidence_id in the source-scoped evidence_registry. A URL in compressed_research that violates the user's source constraint is a deterministic rejection; do not use it as support.
 evidence_registry is a size-bounded, citation-prioritized projection. evidence_registry_stats.truncated=true means unrelated eligible records were omitted and is not, by itself, a gap. explicit_citation_count and explicit_citation_included_count report whether IDs explicitly cited by the handoff fit; priority_matched_count and priority_included_count report broader claim/excerpt matches. Continue to require an included evidence_id for every factual claim you mark supported.
 worker_budget_telemetry is deterministic runtime diagnostics, not factual evidence. When it reports zero physical fetches and budget-exhausted iterations, attribute the missing source content to the reported task/run fetch-budget boundary. Do not invent a source-authority rejection or retrieval failure that the payload does not report.
-input_truncated, compressed_research_truncated, or raw_notes_truncated=true means oversized prose was shortened for the evaluator budget. Machine-readable failure codes, requirement/evidence IDs, and source URLs remain authoritative; truncation alone is not a coverage gap.
+input_truncated=true means optional records or advisory text were omitted for the evaluator budget. The complete handoff and owned requirements are preserved. An inability to review projected input is an input_projection gap, never a reason to retrieve the same material again.
+An input_projection gap requires omitted evidence records (evidence_registry_stats.truncated); insufficient traceable sources is a factual gap, not missing evaluator input.
 
 Use these scoring anchors:
 - 1 = requirement not satisfied
@@ -375,6 +413,16 @@ Propose accepted only when every requirement in exclusive_requirement_ids is sup
 Propose accepted_with_caveats only when every requirement in exclusive_requirement_ids is supported and the remaining issues are optional details, explicitly qualified negative findings, unavailable advisory sources, or minor presentation differences. Do not require this handoff to complete shared requirements on behalf of sibling tasks.
 For a user request that explicitly permits unsupported claims or unavailable official details to be labelled unconfirmed, a traceable bounded negative finding can support that owned requirement. It must identify the authoritative material checked, avoid claiming universal non-existence, and preserve the limitation in the deliverable; do not require an invented positive finding.
 Propose rejected for unsupported exclusive requirements, unsupported factual claims, failed deterministic checks, or scores below policy. Score coverage against exclusive requirements and the actual contribution to shared requirements, never against missing sibling contributions. The runtime applies the final deterministic decision.
+
+For each follow-up, return a gaps entry with requirement_id from owned_requirement_ids,
+kind (factual, conflict, advisory, input_projection), reason, checked_evidence_ids from
+the supplied registry, and next_query. Only factual/conflict gaps can require new research.
+Supervisor suggestions and optional explanations are advisory, not mandatory facts.
+Do not demand a positive finding for a supervisor hypothesis that evidence contradicts;
+use another supported answer to the user's actual requirement. Put optional suggestions
+only in advisory gaps, not missing_information, suggested_queries or follow_up_tasks.
+An input_projection gap must have an empty next_query. Never invent an evidence ID.
+Legacy compressed_research_truncated/raw_notes_truncated markers describe missing evaluator input, not missing research.
 """
 
 
@@ -486,6 +534,8 @@ def _bounded_quality_payload(
     """Bound the complete JSON payload while preserving protocol identifiers."""
     bounded = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
     bounded["input_truncated"] = False
+    complete_fields = {"compressed_research", "coverage_contract", "owned_requirements",
+                       "evidence_registry", "cumulative_evidence"}
 
     def encoded_length() -> int:
         return len(json.dumps(bounded, ensure_ascii=False, default=str))
@@ -498,6 +548,8 @@ def _bounded_quality_payload(
         slots: list[tuple[Any, Any, str]] = []
         if isinstance(value, dict):
             for key, item in value.items():
+                if key in complete_fields:
+                    continue
                 if (
                     isinstance(item, str)
                     and key not in _PAYLOAD_IDENTITY_KEYS
@@ -532,27 +584,35 @@ def _bounded_quality_payload(
         return slots
 
     while encoded_length() > max_chars:
+        # Evidence is already ordered with cited records first. Evict optional
+        # whole records before touching any factual text or the complete handoff.
+        removed = False
+        for field, stats_field in (("evidence_registry", "evidence_registry_stats"),
+                                   ("cumulative_evidence", "cumulative_evidence_stats")):
+            records = bounded.get(field, [])
+            stats = bounded.get(stats_field, {})
+            pinned = max(1, stats.get("explicit_citation_included_count", 0))
+            if len(records) > pinned:
+                records.pop()
+                stats.update(included_count=len(records), truncated=True)
+                bounded["input_truncated"] = removed = True
+                break
+        if removed:
+            continue
         slots = string_slots(bounded)
         if not slots:
             break
         container, key, value = max(slots, key=lambda item: len(item[2]))
         excess = encoded_length() - max_chars
         keep = max(8, len(value) - excess - 1)
-        if key == "compressed_research":
-            # The handoff builder already uses a section-aware projection.
-            # Preserve that invariant when whole-payload JSON overhead (for
-            # example the coverage contract) requires a second reduction.
-            replacement = _bound_compressed_research(value, keep)
-            bounded["compressed_research_truncated"] = True
-        else:
-            replacement = value[:keep] + "…"
+        replacement = value[:keep] + "…"
         if len(replacement) >= len(value):
             replacement = value[:8]
         container[key] = replacement
         bounded["input_truncated"] = True
 
     if encoded_length() > max_chars:
-        raise ValueError("quality_payload_budget_too_small")
+        raise QualityInputBudgetExceeded("quality_payload_budget_too_small")
     return bounded
 
 
@@ -739,55 +799,6 @@ def _normalize_quality_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _fit_projected_evidence_record(
-    record: Mapping[str, Any],
-    *,
-    max_chars: int,
-) -> dict[str, Any] | None:
-    """Shrink one cited record while retaining its auditable identity."""
-    candidate = dict(record)
-    encoded = json.dumps(candidate, ensure_ascii=False, default=str)
-    if len(encoded) <= max_chars:
-        return candidate
-
-    shrinkable = (
-        "supporting_excerpt",
-        "claim",
-        "source_title",
-        "locator",
-        "conflict_group",
-    )
-    while len(encoded) > max_chars:
-        available = [
-            field_name
-            for field_name in shrinkable
-            if field_name in candidate
-            and len(str(candidate[field_name])) > 32
-        ]
-        if not available:
-            break
-        field_name = max(
-            available,
-            key=lambda name: len(str(candidate[name])),
-        )
-        value = str(candidate[field_name])
-        candidate[field_name] = value[: max(32, len(value) // 2)]
-        encoded = json.dumps(candidate, ensure_ascii=False, default=str)
-
-    for field_name in (
-        "conflict_group",
-        "source_title",
-        "locator",
-        "source_authority",
-        "confidence",
-    ):
-        if len(encoded) <= max_chars:
-            break
-        candidate.pop(field_name, None)
-        encoded = json.dumps(candidate, ensure_ascii=False, default=str)
-    return candidate if len(encoded) <= max_chars else None
-
-
 def _bounded_evidence_records(
     records: Any,
     *,
@@ -825,7 +836,7 @@ def _bounded_evidence_records(
             if isinstance(value, bool | int | float):
                 projected[field_name] = value
             else:
-                projected[field_name] = str(value)[:field_limit]
+                projected[field_name] = (value if field_name == "locator" else str(value)) if field_name in {"claim", "supporting_excerpt", "locator"} else str(value)[:field_limit]
         normalized_claim = _normalize_evidence_match_text(
             projected.get("claim", "")
         )
@@ -936,26 +947,6 @@ def _bounded_evidence_records(
             str(record["evidence_id"]),
         ),
     )
-    explicit_record_budget = (
-        max(
-            1,
-            (max_chars - 2 - 2 * (len(explicit_citation_records) - 1))
-            // len(explicit_citation_records),
-        )
-        if explicit_citation_records
-        else 0
-    )
-    fitted_explicit_citation_records = [
-        fitted
-        for record in explicit_citation_records
-        if (
-            fitted := _fit_projected_evidence_record(
-                record,
-                max_chars=explicit_record_budget,
-            )
-        )
-        is not None
-    ]
     priority_records: list[dict[str, Any]] = []
     if normalized_priority_text:
         priority_records = sorted(
@@ -983,7 +974,7 @@ def _bounded_evidence_records(
     selected_identities: set[tuple[str, ...]] = set()
     used_chars = 2
     for projected in [
-        *fitted_explicit_citation_records,
+        *explicit_citation_records,
         *priority_records,
         *candidate_order,
     ]:
@@ -1612,11 +1603,30 @@ def deterministic_handoff_checks(
     }
 
 
+def _gap_protocol_errors(result, owned_ids, evidence_ids, *, evidence_truncated=True):
+    errors = []
+    for gap in result.gaps:
+        if gap.requirement_id not in owned_ids:
+            errors.append("gap_requirement_not_owned:" + gap.requirement_id)
+        if set(gap.checked_evidence_ids) - set(evidence_ids):
+            errors.append("gap_evidence_not_in_payload:" + gap.requirement_id)
+        if gap.kind in {"factual", "conflict"} and evidence_ids and not gap.checked_evidence_ids:
+            errors.append("gap_requires_checked_evidence:" + gap.requirement_id)
+        if gap.kind == "input_projection" and gap.next_query:
+            errors.append("input_projection_cannot_request_research")
+        if gap.kind == "input_projection" and not evidence_truncated:
+            errors.append("input_projection_without_omitted_evidence")
+    return errors
+
+
 def _tool_protocol_errors(
     result: ToolResultAssessment,
     *,
     checks: dict[str, Any],
     policy: QualityRigorPolicy,
+    owned_requirement_ids: tuple[str, ...] = (),
+    evidence_ids: tuple[str, ...] = (),
+    evidence_truncated: bool = True,
 ) -> list[str]:
     """Return semantic contradictions in one tool-result Judge response."""
     scores = (
@@ -1644,7 +1654,16 @@ def _tool_protocol_errors(
         if result.suggested_queries:
             errors.append("complete_contains_follow_up_action")
     elif not gaps and not deterministic_failures:
-        errors.append("retry_or_continue_requires_gap_or_action")
+        if not result.gaps:
+            errors.append("retry_or_continue_requires_gap_or_action")
+    if owned_requirement_ids:
+        errors.extend(_gap_protocol_errors(result, owned_requirement_ids, evidence_ids,
+                                           evidence_truncated=evidence_truncated))
+        blocking = [g for g in result.gaps if g.kind in {"factual", "conflict", "input_projection"}]
+        if result.decision in {"retry", "continue"} and checks.get("passed") and not blocking:
+            errors.append("research_follow_up_requires_owned_gap")
+        if result.decision == "complete" and blocking:
+            errors.append("complete_contains_structured_gap")
     return errors
 
 
@@ -1654,6 +1673,8 @@ def _handoff_protocol_errors(
     checks: dict[str, Any],
     policy: QualityRigorPolicy,
     exclusive_requirement_ids: tuple[str, ...] = (),
+    evidence_ids: tuple[str, ...] = (),
+    evidence_truncated: bool = True,
 ) -> list[str]:
     """Return semantic contradictions in one handoff Judge response."""
     scores = (
@@ -1720,7 +1741,16 @@ def _handoff_protocol_errors(
         ):
             errors.append("caveat_acceptance_contains_unsupported_claim")
     elif not gaps and not deterministic_failures:
-        errors.append("rejected_requires_gap_or_failure_reason")
+        if not result.gaps:
+            errors.append("rejected_requires_gap_or_failure_reason")
+    if exclusive_requirement_ids:
+        errors.extend(_gap_protocol_errors(result, exclusive_requirement_ids, evidence_ids,
+                                           evidence_truncated=evidence_truncated))
+        if result.accepted and any(g.kind in {"factual", "conflict", "input_projection"} for g in result.gaps):
+            errors.append("accepted_contains_structured_gap")
+        if (not result.accepted and checks.get("passed") and result.follow_up_tasks
+                and not any(g.kind in {"factual", "conflict", "input_projection"} for g in result.gaps)):
+            errors.append("research_follow_up_requires_owned_gap")
     return errors
 
 
@@ -1910,6 +1940,7 @@ async def evaluate_tool_results(
     owned_requirement_ids = tuple(
         dict.fromkeys(str(item) for item in (requirement_ids or ()))
     )
+    resolved_contract = task_coverage_contract(resolved_contract, owned_requirement_ids)
     if use_v4_contract and resolved_contract is not None:
         evidence_optional = set(
             _evidence_optional_requirement_ids(resolved_contract)
@@ -1949,6 +1980,8 @@ async def evaluate_tool_results(
         scoped_evidence_registry,
         max_chars=evidence_budget,
     )
+    if evidence_stats["accepted_count"] and not cumulative_evidence:
+        raise QualityInputBudgetExceeded("quality_evidence_record_does_not_fit")
     bounded_tool_results = _bounded_tool_results(
         evaluator_tool_results,
         max_chars=max(500, input_limit - len(
@@ -1975,7 +2008,7 @@ async def evaluate_tool_results(
                 ),
                 "owned_requirement_ids": list(owned_requirement_ids),
                 "research_topic": (
-                    "Advisory task description: " + research_topic
+                    "Evaluate only the owned user requirements in coverage_contract."
                 ),
             }
         )
@@ -1986,6 +2019,8 @@ async def evaluate_tool_results(
                 payload,
                 max_chars=input_limit,
             )
+        except QualityInputBudgetExceeded:
+            raise
         except ValueError as exc:
             evaluation_input_error = str(exc)
     evaluator_failed = False
@@ -2003,11 +2038,16 @@ async def evaluate_tool_results(
                 ToolResultAssessment.model_validate(candidate),
                 checks=checks,
                 policy=policy,
+                owned_requirement_ids=owned_requirement_ids if use_v4_contract else (),
+                evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["cumulative_evidence"]),
+                evidence_truncated=bool(payload["cumulative_evidence_stats"]["truncated"]),
             ),
         )
         result = ToolResultAssessment.model_validate(result)
+        if any(gap.kind == "input_projection" for gap in result.gaps):
+            raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
-        if isinstance(exc, NativeQualityRuntimeMissing):
+        if isinstance(exc, (NativeQualityRuntimeMissing, QualityInputBudgetExceeded)):
             raise
         evaluator_failed = True
         protocol_errors = _protocol_errors_from_exception(exc)
@@ -2210,6 +2250,7 @@ async def evaluate_subagent_handoff(
     owned_requirement_ids = tuple(
         dict.fromkeys(str(item) for item in (requirement_ids or ()))
     )
+    resolved_contract = task_coverage_contract(resolved_contract, owned_requirement_ids)
     v4_policy_requested = (
         str(
             config.get("metadata", {}).get(
@@ -2284,10 +2325,7 @@ async def evaluate_subagent_handoff(
         )
     )
     raw_notes_reserve = min(len(raw_notes_text), max(0, limit // 10))
-    compressed_reserve = min(
-        len(full_compressed_research),
-        max(500, int(limit * 0.4)),
-    )
+    compressed_reserve = len(full_compressed_research)
     evidence_registry, evidence_stats = _bounded_evidence_records(
         scoped_handoff.get("evidence_registry", []),
         max_chars=max(
@@ -2296,14 +2334,14 @@ async def evaluate_subagent_handoff(
         ),
         priority_text=full_compressed_research,
     )
+    if (evidence_stats["accepted_count"] and not evidence_registry
+            or evidence_stats.get("explicit_citation_included_count", 0) < evidence_stats.get("explicit_citation_count", 0)):
+        raise QualityInputBudgetExceeded("quality_cited_evidence_does_not_fit")
     evidence_chars = len(
         json.dumps(evidence_registry, ensure_ascii=False, default=str)
     )
     remaining = max(0, limit - evidence_chars)
-    compressed_budget = max(0, remaining - raw_notes_reserve)
-    compressed_research = _bound_compressed_research(
-        full_compressed_research, compressed_budget
-    )
+    compressed_research = full_compressed_research
     remaining = max(0, remaining - len(compressed_research))
     raw_notes = raw_notes_text[:remaining]
     payload: dict[str, Any] = {
@@ -2344,10 +2382,8 @@ async def evaluate_subagent_handoff(
                 "owned_requirements": [
                     {
                         "requirement_id": requirement.requirement_id,
-                        "text": coverage_requirement_display_text(
-                            resolved_contract,
-                            requirement,
-                        ),
+                        "text": requirement.text,
+                        "dimension_id": requirement.dimension_id,
                     }
                     for requirement in resolved_contract.requirements
                     if requirement.requirement_id in owned_requirement_ids
@@ -2357,7 +2393,6 @@ async def evaluate_subagent_handoff(
                 "evidence_optional_requirement_ids": list(
                     evidence_optional_requirement_ids
                 ),
-                "advisory_task_description": research_topic,
                 "research_topic": (
                     "Advisory task description only; hard requirements come "
                     "from coverage_contract."
@@ -2371,6 +2406,9 @@ async def evaluate_subagent_handoff(
                 payload,
                 max_chars=limit,
             )
+            evidence_registry = payload["evidence_registry"]
+        except QualityInputBudgetExceeded:
+            raise
         except ValueError as exc:
             evaluation_input_error = str(exc)
     evaluator_failed = False
@@ -2394,11 +2432,16 @@ async def evaluate_subagent_handoff(
                 exclusive_requirement_ids=(
                     exclusive_requirement_ids if use_v4_contract else ()
                 ),
+                evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["evidence_registry"]),
+                evidence_truncated=bool(payload["evidence_registry_stats"]["truncated"]),
             ),
         )
         result = HandoffAssessment.model_validate(result)
+        if any(gap.kind == "input_projection" for gap in result.gaps):
+            raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
+        result.caveats = list(dict.fromkeys([*result.caveats, *(gap.reason for gap in result.gaps if gap.kind == "advisory")]))
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
-        if isinstance(exc, NativeQualityRuntimeMissing):
+        if isinstance(exc, (NativeQualityRuntimeMissing, QualityInputBudgetExceeded)):
             raise
         evaluator_failed = True
         protocol_errors = _protocol_errors_from_exception(exc)

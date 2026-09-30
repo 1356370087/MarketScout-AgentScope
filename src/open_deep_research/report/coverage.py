@@ -49,6 +49,18 @@ def is_scope_exclusion(text: str) -> bool:
     return bool(_SCOPE_EXCLUSION_RE.match(text.strip()))
 
 
+def source_directive_kind(text: str) -> str | None:
+    """Identify complete source/writing instructions before list splitting."""
+    value = text.strip(" 。；;")
+    if re.fullmatch(r"(?:请)?(?:不将|不要将|不得将).{1,100}(?:视为|当作|作为).{0,30}(?:基准|基准数据|基准结果)", value):
+        return "process"
+    if re.fullmatch(r"(?:请)?(?:仅|只)(?:依据|基于|使用|参考|读取)(?:所选|指定|所提供的?).{0,80}(?:页面|网页|资料|文档|来源)", value):
+        return "process"
+    if re.fullmatch(r"(?:请)?(?:分别)?(?:保留|提供|给出|附上)(?:(?:该|此|所选|指定|官方|可核验|可点击|相关|对应|原文|网页|页面|资料|文档|来源|的|与|和|以及)|[、，,\s])*(?:引用|链接)", value):
+        return "deliverable"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class CoverageSection:
     """One explicit source section with exact character offsets."""
@@ -247,6 +259,9 @@ def derive_coverage_units(text: str, *, max_clauses: int = 40) -> list[list[str]
         return groups[:max_clauses]
     groups = []
     for clause in _CLAUSE_RE.split(clean):
+        if source_directive_kind(clause):
+            groups.append([clause.strip(" ：:。. ")[:500]])
+            continue
         clause = _LEADING_RE.sub("", clause).strip(" ：:。. ")
         if not clause:
             continue
@@ -265,7 +280,7 @@ def derive_coverage_units(text: str, *, max_clauses: int = 40) -> list[list[str]
             expanded_parts = [
                 nested
                 for part in parts
-                for nested in _split_final_list_conjunction(part)
+                for nested in ([part] if source_directive_kind(part) else _split_final_list_conjunction(part))
             ]
         else:
             expanded_parts = parts

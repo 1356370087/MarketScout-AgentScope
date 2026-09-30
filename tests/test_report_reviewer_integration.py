@@ -694,6 +694,42 @@ def test_noncritical_readability_issue_is_not_counted_as_critical() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("severity,decision", [("info", "pass"), ("low", "revise")])
+async def test_informational_review_notes_do_not_override_a_valid_pass(monkeypatch, severity, decision):
+    async def fake_invoke(*_args, **_kwargs):
+        return _model_review_payload(issues=[{
+            "category": "unsupported_claims", "severity": severity,
+            "description": "A bounded inference is explicitly labelled.",
+        }])
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    result = await reviewer_module.review_report(_draft(), _state(), _config())
+    assert result.decision == decision
+    assert result.issues[0].severity == severity
+    assert not result.degraded
+
+
+@pytest.mark.asyncio
+async def test_reviewer_repairs_unknown_requirement_id_without_rewriting_draft(monkeypatch):
+    calls = []
+
+    async def fake_invoke(payload, *_args, **_kwargs):
+        calls.append(payload)
+        result = _model_review_payload()
+        if len(calls) == 1:
+            result["coverage"][0]["requirement_id"] = "COV-unknown"
+        return result
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    draft = _draft()
+    result = await reviewer_module.review_report(draft, _state(), _config())
+    assert result.decision == "pass"
+    assert len(calls) == 2
+    assert calls[0]["draft_markdown"] == calls[1]["draft_markdown"] == draft.markdown
+    assert "unknown_requirement_id" in calls[1]["review_protocol_feedback"]["errors"]
+
+
+@pytest.mark.asyncio
 async def test_aggregate_only_gate_failure_degrades_without_evidence_recovery(
     monkeypatch,
 ) -> None:
@@ -1015,12 +1051,13 @@ async def test_finalize_report_never_reuses_a_pre_review_artifact(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_enabled_build_report_runs_reviewer_revisor_then_finalizer(monkeypatch) -> None:
+@pytest.mark.parametrize("first_decision", ["revise", "fail"])
+async def test_enabled_build_report_runs_reviewer_revisor_then_finalizer(monkeypatch, first_decision) -> None:
     """A revise result must loop back through review before finalization."""
     draft = _draft()
     revised = _draft("# Final\n\nOption A is recommended [1].")
     first_review = _review(
-        "revise",
+        first_decision,
         issues=[
             ReportReviewIssue(
                 category="executive_readability",
@@ -1032,6 +1069,8 @@ async def test_enabled_build_report_runs_reviewer_revisor_then_finalizer(monkeyp
         ],
     )
     second_review = _review("pass", draft_sha256=revised.sha256)
+    if first_decision == "fail":
+        first_review.hard_failures = ["citation_without_admitted_evidence"]
     reviews = iter((first_review, second_review))
     calls: list[str] = []
 
@@ -1064,6 +1103,7 @@ async def test_enabled_build_report_runs_reviewer_revisor_then_finalizer(monkeyp
     assert calls == ["draft", "review", "revise", "review", "finalize"]
     assert result["final_report"] == revised.markdown
     assert result["report_review"]["decision"] == "pass"
+    assert result["report_review"]["degraded"] is False
 
 
 @pytest.mark.asyncio

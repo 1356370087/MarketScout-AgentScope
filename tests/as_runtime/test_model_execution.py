@@ -142,7 +142,7 @@ async def test_missing_model_receipt_stays_unknown_and_lookup_is_bounded(monkeyp
     assert "/v2/models/lookup" in paths
 
 
-@pytest.mark.parametrize("invalid", [None, {}])
+@pytest.mark.parametrize("invalid", [None, {}, "truncated"])
 @pytest.mark.parametrize("repair_succeeds", [True, False])
 async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(invalid, repair_succeeds):
     import jsonschema
@@ -159,8 +159,9 @@ async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(in
             "logical_operation_id": body["logical_operation_id"],
             "requested_model": "fixture", "status": "completed",
             "message": {"role": "assistant", "content": "output"},
-            "structured": {"value": 1} if repair_succeeds and len(seen) == 2 else invalid,
-            "finish_reason": "stop", "usage": {"input_tokens": 2, "output_tokens": 1},
+            "structured": {"value": 1} if repair_succeeds and len(seen) == 2 else None if invalid == "truncated" else invalid,
+            "finish_reason": "length" if invalid == "truncated" and not (repair_succeeds and len(seen) == 2) else "stop",
+            "usage": {"input_tokens": 2, "output_tokens": 1},
         })
 
     class Answer(BaseModel):
@@ -184,6 +185,8 @@ async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(in
         assert "Validation error:" in str(seen[1]["messages"])
         if invalid == {}:
             assert "'value' is a required property" in seen[1]["messages"][-1]["content"][0]["text"]
+        if invalid == "truncated":
+            assert "concise field values" in str(seen[1]["messages"])
 
 
 async def test_sandbox_uncertain_is_not_retried():
