@@ -8,7 +8,7 @@ adapted to domain-level egress decisions:
 - Reasoning-blind input: only the target host, the requesting tool, and a
   short user-intent anchor are visible. Tool outputs and page contents
   never enter the prompt (structural prompt-injection defense).
-- Fail-safe direction: any timeout, transport error, budget exhaustion, or
+- Fail-safe direction: any model timeout, model transport error, budget exhaustion, or
   repeated failure degrades to ``ask`` (manual approval), never to allow.
 
 The classifier talks to models only through the injected
@@ -242,7 +242,7 @@ _DEFAULT_ALLOW_EXCEPTIONS = """- Official documentation portals, standards bodie
 - Official vendor/company sites and their support knowledge bases
 - Public code hosting and issue trackers"""
 
-_DEFAULT_ENVIRONMENT = """- The data plane already enforces ports {allow_ports}, HTTP methods {allow_methods}, public-IP-only destinations, and an explicit deny list before this classifier runs
+_DEFAULT_ENVIRONMENT = """- The data plane enforces ports {allow_ports}, HTTP methods {allow_methods}, and an explicit deny list; public-IP-only DNS and connection checks run after authorization and before fetching
 - Domains already trusted by policy: {trusted_domains}
 - Requested capability: {capability_description}"""
 
@@ -432,7 +432,7 @@ class EgressClassifier:
         allow_ports: list[int] | tuple[int, ...] = (80, 443),
         allow_http_methods: list[str] | tuple[str, ...] = ("GET", "HEAD", "OPTIONS"),
     ) -> EgressClassification:
-        """Classify one target, fail-safe to ``ask`` on any failure."""
+        """Classify within the model deadline, then cache the completed verdict."""
         registered = registered_domain(host)
         key = classification_fingerprint(host, port, capability, intent_fingerprint(intent))
         lock = self._locks.setdefault(key, asyncio.Lock())
@@ -487,7 +487,6 @@ class EgressClassifier:
                     self._consecutive_failures = 0
                 elif result.detail == "stage1_unparseable":
                     self._register_failure()
-                return result
             except _ClassifierBudgetExhausted:
                 return EgressClassification(
                     verdict="ask", detail="classifier_budget_exhausted"
@@ -500,6 +499,13 @@ class EgressClassifier:
                 return EgressClassification(verdict="ask", detail="error")
             finally:
                 await self._save_state()
+            if result.entry is not None:
+                # Only completed classifications reach the durable cache. Keep
+                # best-effort cache I/O outside the model-call deadline: a late
+                # acknowledgement must not turn an already stored allow into ask.
+                await self._persist(result.entry)
+                self._entries[key] = result.entry
+            return result
 
     async def _classify_locked(
         self,
@@ -674,8 +680,6 @@ class EgressClassifier:
             model=model,
             classified_at=time.time(),
         )
-        self._entries[fingerprint] = entry
-        await self._persist(entry)
         return entry
 
     async def _persist(self, entry: EgressClassificationEntry) -> None:

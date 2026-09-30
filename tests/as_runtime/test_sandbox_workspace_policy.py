@@ -320,8 +320,8 @@ async def test_egress_mode_bridge_narrowest_and_capped(tmp_path):
     bridge = EgressModeBridge(baseline="open", mode_store=store)
     store.set(mode="manual", actor="user", fence_token=3)
     assert bridge.effective(fence_token=3).mode == "manual"
-    # fence 不匹配的覆盖视为缺席。
-    assert bridge.effective(fence_token=9).mode == "open"
+    # 执行租约更换不能放宽用户为本次研究选择的模式。
+    assert bridge.effective(fence_token=9).mode == "manual"
 
 
 # ------------------------------------------------- T032 目标判定权威

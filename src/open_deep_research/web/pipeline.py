@@ -343,9 +343,9 @@ async def _robots_allowed(
         return _ROBOTS_CACHE[key]
     robots_url = urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
     try:
-        await validate_public_http_url(robots_url)
         if egress_authorizer.get() is not None and await authorize_url(robots_url, consume=True) != "allow":
             raise PermissionError("egress_approval_required_or_denied")
+        await validate_public_http_url(robots_url)
         async with session.get(robots_url, allow_redirects=False) as response:
             validate_response_peer(response)
             if response.status >= 400:

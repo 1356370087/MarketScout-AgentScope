@@ -5,18 +5,28 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tomllib
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Literal
 
-import tomllib
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from open_deep_research.security.network import normalize_egress_host
 
 EGRESS_ALLOWLIST_ENV = "SANDBOX_EGRESS_ALLOW_DOMAINS"
 """Comma-separated preset egress domains merged into every profile's allow
 list at policy load time (exact / ``*.`` / ``**.`` patterns). Intended for
 E2E harnesses pre-approving known research domains; the merged set is part
 of the frozen per-run policy digest."""
+
+
+def _normalize_domain_pattern(pattern: str) -> str:
+    value = pattern.strip()
+    for prefix in ("**.", "*."):
+        if value.startswith(prefix):
+            return prefix + normalize_egress_host(value[len(prefix):])
+    return normalize_egress_host(value)
 
 
 class FilesystemPolicy(BaseModel):
@@ -65,10 +75,10 @@ class NetworkPolicy(BaseModel):
             {method.strip().upper() for method in self.allow_http_methods if method.strip()}
         )
         self.allow_domains = sorted(
-            {domain.strip().lower() for domain in self.allow_domains if domain.strip()}
+            {_normalize_domain_pattern(domain) for domain in self.allow_domains if domain.strip()}
         )
         self.deny_domains = sorted(
-            {domain.strip().lower() for domain in self.deny_domains if domain.strip()}
+            {_normalize_domain_pattern(domain) for domain in self.deny_domains if domain.strip()}
         )
         return self
 
@@ -157,8 +167,8 @@ PolicyDecision = Literal["deny", "ask", "allow"]
 
 def domain_matches(pattern: str, host: str) -> bool:
     """Match exact, one-label wildcard, or recursive wildcard domains."""
-    normalized_pattern = pattern.lower().strip().rstrip(".")
-    normalized_host = host.lower().strip().rstrip(".")
+    normalized_pattern = _normalize_domain_pattern(pattern)
+    normalized_host = normalize_egress_host(host)
     if normalized_pattern == normalized_host:
         return True
     if normalized_pattern.startswith("**."):

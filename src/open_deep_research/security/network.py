@@ -36,8 +36,17 @@ class PublicWebResolver(ThreadedResolver):
         return addresses
 
 
-async def validate_public_http_url(url: str) -> str:
-    """Validate scheme, credentials, host, port, and every resolved address."""
+def normalize_egress_host(host: str) -> str:
+    """Use the same hostname spelling at URL and policy boundaries."""
+    value = host.strip().rstrip(".").lower()
+    try:
+        return ipaddress.ip_address(value).compressed
+    except ValueError:
+        return value.encode("idna").decode("ascii")
+
+
+def validate_http_url_syntax(url: str) -> str:
+    """Reject invalid or explicitly private URLs without performing DNS I/O."""
     try:
         parsed = urlparse(url)
     except ValueError as exc:
@@ -48,6 +57,8 @@ async def validate_public_http_url(url: str) -> str:
         raise ValueError("URL must include a hostname")
     if parsed.username or parsed.password:
         raise ValueError("URL userinfo is not allowed")
+    # Accessing port validates its syntax and range without resolving the host.
+    _ = parsed.port
     host = parsed.hostname.rstrip(".").lower()
     if host in _BLOCKED_HOSTS or host.endswith(".localhost"):
         raise ValueError("Local and metadata hosts are not allowed")
@@ -60,6 +71,19 @@ async def validate_public_http_url(url: str) -> str:
         # explicit policy error.
         if "not allowed" in str(exc):
             raise
+    return url
+
+
+async def validate_public_http_url(url: str) -> str:
+    """Validate URL syntax and DNS answers after the caller authorizes egress."""
+    validate_http_url_syntax(url)
+    parsed = urlparse(url)
+    host = parsed.hostname.rstrip(".").lower()
+    try:
+        ipaddress.ip_address(host)
+        return url
+    except ValueError:
+        pass
 
     port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
     try:

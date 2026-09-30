@@ -942,15 +942,13 @@ def build_internal_sandbox_router(
 
     @router.post("/egress/mode/get")
     async def get_egress_mode(request: EgressModeGetRequest) -> dict[str, Any]:
-        """Return the runtime override; stale-fence overrides read as absent."""
+        """Return the run override after validating the request's live fence."""
         context = await authority(request, request.run_id, request.fence_token)
         override = await asyncio.to_thread(
             RunEgressModeStore(
                 request.run_id, runs_dir=context.configurable.runs_dir
             ).get
         )
-        if override is not None and override.fence_token != request.fence_token:
-            override = None
         return {"override": override.model_dump(mode="json") if override else None}
 
     @router.post("/task-activity")

@@ -1439,11 +1439,14 @@ class GatewayRuntime:
                     "message": "Tool declared an invalid outbound target.",
                 },
             )
-        from open_deep_research.security.network import validate_public_http_url
+        from open_deep_research.security.network import (
+            validate_http_url_syntax,
+            validate_public_http_url,
+        )
 
         try:
             for raw_url in raw_urls:
-                await validate_public_http_url(raw_url)
+                validate_http_url_syntax(raw_url)
         except ValueError as exc:
             return GatewayToolOutcomeV1(
                 logical_operation_id=request.logical_operation_id,
@@ -1596,15 +1599,11 @@ class GatewayRuntime:
 
         once_grants: dict[tuple[str, int, str], int] = {}
 
-        async def authorize_nested(url: str, capability: str, consume: bool = False) -> str:
+        async def authorize_nested_target(url: str, capability: str, consume: bool = False) -> str:
             target = egress_target_from_url(url)
             if target is None:
                 return "deny"
             host, port = target
-            try:
-                await validate_public_http_url(url)
-            except ValueError:
-                return "deny"
             if capability == "tool.egress" and "GET" not in profile.network.allow_http_methods:
                 return "deny"
             nested_request = request if capability in {"tool.egress", "tool.network"} else request.model_copy(
@@ -1631,6 +1630,8 @@ class GatewayRuntime:
             if state != "allowed":
                 return "ask" if state == "pending" else "deny"
             # Re-read authority after any human wait, including revocation races.
+            authority_request = self.internal.signed(EgressTargetCheckRequest, run_id=request.run_id,
+                fence_token=context.fence_token, capability=capability, target={"domain": host, "port": port})
             fresh = await self.internal.post("/internal/sandbox/egress/target/check", authority_request)
             if fresh.get("decision") == "block_run" or (fresh.get("decision") == "revoke"
                 and fresh.get("version", 0) != authority.get("version", 0)):
@@ -1644,6 +1645,18 @@ class GatewayRuntime:
             if consume and approval.decision == "allow_once":
                 once_grants[grant_key] = fresh.get("version", 0)
             return "allow"
+
+        async def authorize_nested(url: str, capability: str, consume: bool = False) -> str:
+            try:
+                validate_http_url_syntax(url)
+                decision = await authorize_nested_target(url, capability, consume)
+                if decision != "allow":
+                    return decision
+                await validate_public_http_url(url)
+            except ValueError:
+                return "deny"
+            # DNS may yield to a concurrent revocation or mode change.
+            return await authorize_nested_target(url, capability, consume)
 
         async def execute_authorized():
             token = egress_authorizer.set(authorize_nested)
@@ -2230,7 +2243,10 @@ class GatewayRuntime:
             budget.fail_model_call(operation_key, uncertain=uncertain)
             with suppress(httpx.HTTPError, ValueError, KeyError):
                 await budget.flush_pending()
+            from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
             error_code = exc.code if isinstance(exc, ModelGatewayError) else "gateway_model_failed"
+            if getattr(exc, "provider_error_code", None) == GATEWAY_TOKEN_LIMIT_MARKER:
+                error_code = GATEWAY_TOKEN_LIMIT_MARKER
             if not dispatched and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
                 detail = exc.response.json().get("detail", "")
                 if isinstance(detail, str) and detail.startswith("budget_exhausted:"):

@@ -8,11 +8,11 @@ Docker SDK. :func:`allowed_domains` mirrors the former
 
 from __future__ import annotations
 
-import ipaddress
 from urllib.parse import urlparse
 
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.sandbox.schema import NetworkPolicy, resolve_profile
+from open_deep_research.security.network import normalize_egress_host
 
 
 def network_policy(configurable: Configuration) -> NetworkPolicy:
@@ -77,15 +77,6 @@ def allowed_domains(configurable: Configuration) -> list[str]:
             domains.add(host)
 
     return sorted(domain for domain in domains if domain)
-
-
-def normalize_egress_host(host: str) -> str:
-    """Normalize URL-boundary host spelling without broadening its authority."""
-    value = host.strip().rstrip(".").lower()
-    try:
-        return ipaddress.ip_address(value).compressed
-    except ValueError:
-        return value.encode("idna").decode("ascii")
 
 
 def egress_host_from_url(url: str) -> str | None:

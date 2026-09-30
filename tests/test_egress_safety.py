@@ -114,7 +114,7 @@ async def test_auto_proxy_unknown_target_never_calls_model():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode,expected_calls", [("manual", 0), ("auto", 1)])
+@pytest.mark.parametrize("mode,expected_calls", [("manual", 0), ("auto", 1), ("manual-approved", 1)])
 async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monkeypatch, mode, expected_calls):
     from types import SimpleNamespace
 
@@ -126,6 +126,8 @@ async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monke
 
     class Authority(FakeInternal):
         async def post(self, path, request):
+            assert request.service_nonce not in nonces, "internal request nonce replayed after approval"
+            nonces.add(request.service_nonce)
             if path.endswith("/approvals/request"):
                 return store.request(task_id=request.task_id, fence_token=request.fence_token,
                     kind=request.kind, capability=request.capability, target=request.target,
@@ -134,7 +136,16 @@ async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monke
                 return {}
             return await super().post(path, request)
 
-    runtime = _runtime_with_run(Authority(override={"mode": mode}))
+    nonces = set()
+    runtime = _runtime_with_run(Authority(override={"mode": "manual" if mode == "manual-approved" else mode}))
+    # Exercise the actual signed request shape, including one-use nonces.
+    from open_deep_research.sandbox.internal_api import SandboxInternalClient
+    from tests.test_egress_gateway_wiring import ROOT_KEY
+    runtime.internal.signed = SandboxInternalClient("http://authority", ROOT_KEY).signed
+    if mode == "manual-approved":
+        async def approved(*args, **kwargs):
+            return "allowed", SimpleNamespace(decision="allow_once")
+        monkeypatch.setattr(runtime, "_request_network_approval", approved)
     tool = SimpleNamespace(name="fetch_url", execution_zone=ToolExecutionZone.GATEWAY,
         effect="read_only", egress_urls=lambda args: [args["url"]])
 

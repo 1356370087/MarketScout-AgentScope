@@ -97,13 +97,11 @@ class EgressModeBridge:
         self.mode_store = mode_store
 
     def effective(self, *, fence_token: int | None = None) -> Any:
-        """合成当前有效模式；运行时覆盖按 fence 隔离（不匹配视为缺席）。"""
+        """合成当前有效模式；运行级覆盖在执行租约更换后仍然有效。"""
         runtime_override = None
         if self.mode_store is not None:
             override = self.mode_store.get()
-            if override is not None and (
-                fence_token is None or override.fence_token == fence_token
-            ):
+            if override is not None:
                 runtime_override = override.mode
         return effective_egress_mode(
             self.baseline,

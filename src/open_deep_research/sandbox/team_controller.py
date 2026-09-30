@@ -112,7 +112,14 @@ def install_team_routes(app, runtime):
     async def ensure_team(request: TeamRequest):
         try:
             async with lock:
-                return await asyncio.to_thread(execute, request)
+                operation = asyncio.create_task(asyncio.to_thread(execute, request))
+                try:
+                    return await asyncio.shield(operation)
+                except asyncio.CancelledError:
+                    # Docker's synchronous create keeps running after cancellation.
+                    # Retain the lock until it ends so a subsequent stop can see it.
+                    await asyncio.gather(operation, return_exceptions=True)
+                    raise
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, str(exc)) from exc
 

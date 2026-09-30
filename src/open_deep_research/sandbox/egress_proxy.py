@@ -90,7 +90,6 @@ class GatewayEgressProxy:
         )
         if method != "CONNECT" and method not in profile.network.allow_http_methods:
             return False, None, profile.network.allow_private_destinations
-        await self._resolve(host, port, profile.network.allow_private_destinations)
         async def check():
             return await self.runtime._egress_precheck(run_id=claims.run_id,
                 task_id=claims.task_id, fence_token=claims.fence_token, stage="researching",

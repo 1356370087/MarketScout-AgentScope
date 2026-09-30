@@ -68,9 +68,9 @@ def _runtime_egress_override(
     *,
     fence_token: int,
 ) -> str | None:
-    """Read the stored override; stale-fence overrides read as absent."""
+    """Read the run-scoped override after the caller checks the live authority."""
     override = RunEgressModeStore(run_id, runs_dir=runs_dir).get()
-    if override is None or override.fence_token != fence_token:
+    if override is None:
         return None
     return override.mode
 

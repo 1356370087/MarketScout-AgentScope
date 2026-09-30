@@ -88,11 +88,19 @@ class SecurityApprovalStore:
         target_id = cls.fingerprint("network", capability, target)
         targets = data.setdefault("egress_targets", {})
         current = targets.get(target_id)
-        if current is None or current["fence_token"] != fence_token:
+        if current is None:
             current = {"target_id": target_id, "target": target, "capability": capability,
                        "fence_token": fence_token, "version": 0, "decision": None,
                        "reason": "", "updated_at": time.time()}
             targets[target_id] = current
+        elif current["fence_token"] > fence_token:
+            raise ValueError("stale_fence")
+        elif current["fence_token"] < fence_token:
+            # Restrictions belong to the research run, not the process lease.
+            # Positive grants still require fresh authorization after recovery.
+            if current["decision"] not in {"block_run", "revoke"}:
+                current.update(decision=None, reason="", updated_at=time.time())
+            current.update(fence_token=fence_token, version=current["version"] + 1)
         return current
 
     def observe_target(self, capability: str, target: dict[str, Any],
@@ -102,14 +110,15 @@ class SecurityApprovalStore:
             data, capability, target, fence_token)))
 
     def target_state(self, fence_token: int) -> dict[str, Any]:
-        """Read observed targets for the current ownership epoch."""
-        return self._locked(lambda data: {
-            "version": data.get("version", 0),
-            "targets": [dict(item) for item in data.get("egress_targets", {}).values()
-                        if item["fence_token"] == fence_token],
-            "target_history": [dict(item) for item in data.get("egress_history", [])
-                               if item["fence_token"] == fence_token],
-        })
+        """Carry run restrictions into the live epoch, including before first use."""
+        def read(data):
+            targets = [dict(self._observe_target(data, item["capability"], item["target"],
+                                                fence_token))
+                       for item in data.get("egress_targets", {}).values()]
+            return {"version": data.get("version", 0), "targets": targets,
+                    "target_history": [dict(item) for item in data.get("egress_history", [])]}
+
+        return self._locked(read)
 
     def check_target(self, capability: str, target: dict[str, Any], fence_token: int) -> dict[str, Any]:
         """Read target overrides and operation decisions in one authority snapshot."""
@@ -130,8 +139,8 @@ class SecurityApprovalStore:
             current = data.get("egress_targets", {}).get(target_id)
             if current is None:
                 raise KeyError(target_id)
-            if current["fence_token"] != fence_token:
-                raise ValueError("stale_fence")
+            current = self._observe_target(data, current["capability"], current["target"],
+                                           fence_token)
             if current["version"] != expected_version:
                 raise ValueError("egress_version_conflict")
             current.update(decision=decision, reason=reason[:1000], actor=actor,

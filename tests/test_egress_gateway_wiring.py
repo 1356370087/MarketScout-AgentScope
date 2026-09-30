@@ -476,7 +476,7 @@ class TestInternalEgressEndpoints:
         override = response.json()["override"]
         assert override is not None and override["mode"] == "auto"
 
-    def test_mode_get_stale_fence_reads_absent(self, tmp_path):
+    def test_mode_get_keeps_run_restriction_after_recovery(self, tmp_path):
         client, signed, keys = _internal_test_client(tmp_path, fence_token=2)
         RunEgressModeStore("run-x", runs_dir=str(tmp_path)).set(
             mode="manual", actor="user-1", fence_token=1
@@ -486,7 +486,7 @@ class TestInternalEgressEndpoints:
         )
         response = _post(client, "/internal/sandbox/egress/mode/get", request)
         assert response.status_code == 200
-        assert response.json()["override"] is None
+        assert response.json()["override"]["mode"] == "manual"
 
     def test_classification_record_and_load_roundtrip(self, tmp_path):
         client, signed, keys = _internal_test_client(tmp_path)
