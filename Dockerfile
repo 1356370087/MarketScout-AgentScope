@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md alembic.ini ./
 COPY src ./src
 # 应用与工具入口仅安装原生依赖；LangSmith 评估 SDK 通过独立可选依赖启用。
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked uv sync --frozen --no-dev
 # 与 publisher-worker 使用同一 uid，保证共享卷上 0600 的 Job/工件双向可读写。
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \
