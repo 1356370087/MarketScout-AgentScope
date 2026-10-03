@@ -51,6 +51,38 @@ async def create(store, **kwargs):
     return state, lease
 
 
+async def test_litellm_frozen_cost_limit_reaches_sql_budget(store, monkeypatch):
+    from open_deep_research.agentscope_runtime.run_config import RunConfig
+
+    requested = {
+        "model_backend": "litellm",
+        "max_run_cost_micro_usd": 1_000_000,
+        "run_deadline_seconds": 1500,
+        "max_fetches_per_run": 40,
+    }
+    for name in requested:
+        monkeypatch.delenv(name.upper(), raising=False)
+    run_config = RunConfig.compile({"configurable": requested})
+    run_id = uuid4().hex
+    started = time.time()
+    await store.create_from_config(
+        "owner", run_id, run_config,
+        application={"configuration": run_config.snapshot()},
+    )
+    state, _ = await store.load(run_id, "owner")
+    restored = RunConfig.restore(state.application["configuration"])
+    assert restored.get("max_run_cost_micro_usd") == 1_000_000
+    budget = await store.budget(run_id, "owner")
+    assert budget["limits"] == {"cost_micro_usd": 1_000_000, "fetch_calls": 40}
+    assert started + 1500 <= budget["deadline"] <= time.time() + 1500
+    lease = await store.acquire(run_id, "owner")
+    with pytest.raises(BudgetExhausted):
+        await store.begin_operation(
+            lease, "over-cost-limit", "model", {},
+            reserve={"cost_micro_usd": 1_000_001},
+        )
+
+
 async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
     import jsonschema
     from pydantic import BaseModel
@@ -1296,3 +1328,76 @@ async def test_tool_settlement_uses_reported_physical_fetches(store):
     budget = await store.budget(state.run_id, "owner")
     assert budget["used"] == {"tool_calls": 2, "fetch_calls": 4}
     await session.close()
+
+
+@pytest.mark.parametrize("control", ["budget", "deadline", "fence", "unknown"])
+@pytest.mark.parametrize("retryable", [False, True])
+async def test_governed_runtime_controls_mark_native_recovery_problem(
+    store, control, retryable
+):
+    from types import SimpleNamespace
+
+    from pydantic import BaseModel
+
+    from open_deep_research.agentscope_runtime.recovery import ApprovalPending
+    from open_deep_research.budgets import BudgetDimension
+    from open_deep_research.tools.base import ToolOrigin, build_tool
+    from open_deep_research.tools.governance import (
+        AgentRole,
+        execute_governed_tool_call_native,
+    )
+
+    class Empty(BaseModel):
+        pass
+
+    state, lease = await create(store, limits={"tool_calls": 5})
+    session = RecoverySession(store, lease, state)
+    error = {
+        "budget": BudgetExhausted(BudgetDimension.MODEL_CALLS),
+        "deadline": DeadlineExceeded("fixture deadline"),
+        "fence": FenceLost("fixture fence"),
+        "unknown": UnknownOperation("fixture unknown outcome"),
+    }[control]
+    calls = []
+
+    async def interrupted(input, context, on_progress=None):
+        calls.append(1)
+        raise error
+
+    tool = build_tool(
+        name="runtime_control_fixture", input_schema=Empty, description="fixture",
+        origin=ToolOrigin.SYSTEM, effect=ToolEffect.READ_ONLY, call=interrupted,
+        retryable=retryable,
+    )
+    recorder = SimpleNamespace(active_span=lambda: SimpleNamespace(record_outcome=lambda **kwargs: None))
+
+    async def governed():
+        return await execute_governed_tool_call_native(
+            {"name": tool.name, "id": "control-fixture-call", "args": {}},
+            {tool.name: tool},
+            AgentRole.SUPERVISOR,
+            {"configurable": {}},
+            recorder=recorder,
+        )
+
+    expected = ApprovalPending if control == "budget" else type(error)
+    try:
+        with pytest.raises(expected) as raised:
+            await session.tool(tool, "control-fixture-call", {}, governed)
+        assert session.problem is raised.value
+        if control == "budget":
+            assert raised.value.kind == "budget"
+            assert raised.value.payload["dimension"] == "model_calls"
+        else:
+            assert raised.value is error
+        record = await store.operation_record(
+            lease,
+            f"{session.stage.get()}:{session.task_id.get()}:tool:control-fixture-call",
+        )
+        assert record["state"] != "committed"
+        with pytest.raises(expected) as repeated:
+            await session.tool(tool, "control-next-call", {}, governed)
+        assert repeated.value is raised.value
+        assert calls == [1]
+    finally:
+        await session.close()

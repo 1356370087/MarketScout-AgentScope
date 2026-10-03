@@ -5,6 +5,12 @@ test.skip(
   "This scenario only applies when the explicit local authentication bypass is enabled.",
 );
 
+// Keep intake checks independent of backend authentication and model services.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/research/runs**", (route) => route.fulfill({ json: { items: [] } }));
+  await page.route("**/api/research/capabilities", (route) => route.fulfill({ json: { defaults: {}, editable_config_keys: [], features: {} } }));
+});
+
 test("local bypass opens the research intake at all breakpoints", async ({ page }) => {
   await page.goto("/research/new");
   await expect(page.getByRole("heading", { name: /今天，想深入了解什么/ })).toBeVisible();

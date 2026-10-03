@@ -219,8 +219,8 @@ class RecoveryStore:
             for item in BudgetDimension
             if policy and policy.limit_for(item) is not None
         }
-        if (application or {}).get("evaluation_capture") and cfg.max_run_cost_micro_usd is not None:
-            # Offline experiments may use service credentials: enforce their cap here too.
+        if cfg.max_run_cost_micro_usd is not None:
+            # Native SQL accounting also supplies the remaining LiteLLM Run Key budget.
             limits["cost_micro_usd"] = cfg.max_run_cost_micro_usd
         state = ResearchSnapshot(
             run_id=run_id,

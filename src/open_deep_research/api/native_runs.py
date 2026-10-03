@@ -102,7 +102,7 @@ class NativeRuns:
             self.history(run_id, owner)
             raise RecoveryConflict("legacy_checkpoint_read_only") from None
         RunConfig.restore(state.application["configuration"], overrides=overrides)
-        await self.start(run_id, owner)
+        await self.start(run_id, owner, resume_failed=True)
 
     async def create(self, request, principal, *, idempotency_key=None):
         async with self.creation_lock:
@@ -207,7 +207,7 @@ class NativeRuns:
             await self.start(run_id, owner)
         return run_id
 
-    async def start(self, run_id, owner, *, automatic=False):
+    async def start(self, run_id, owner, *, automatic=False, resume_failed=False):
         if self.closed:
             raise RecoveryConflict("runtime_shutting_down")
         state, _ = await self.store.load(run_id, owner)
@@ -217,9 +217,45 @@ class NativeRuns:
         if previous is not None and not previous.done():
             return False
         recovery = await RecoverySession.open(self.store, run_id, owner)
-        if automatic and recovery.snapshot.status not in {"ready", "running", "waiting"}:
+        try:
+            if resume_failed and state.status == "failed":
+                async with self.store.transaction(recovery.lease) as (connection, row):
+                    persisted = row["snapshot"]
+                    has_operations = await connection.scalar(select(exists().where(
+                        self.store.ops.c.run_id == run_id
+                    )))
+                    budget_exhausted = any(
+                        row["used"].get(dimension, 0)
+                        + row["reserved"].get(dimension, 0) >= maximum
+                        for dimension, maximum in row["limits"].items()
+                    )
+                    deadline_exceeded = (
+                        row["deadline"] is not None
+                        and await self.store._now(connection) >= row["deadline"]
+                    )
+                    # 显式重试仅重开尚未进入研究阶段或外部操作的初始化失败。
+                    if (
+                        persisted["status"] != "failed"
+                        or persisted.get("completed")
+                        or persisted.get("inflight")
+                        or persisted.get("completion_outcome", {}).get("action") == "terminate"
+                        or persisted.get("error") in {
+                            "UnknownOperation", "BudgetExhausted", "DeadlineExceeded", "ResearchTerminated"
+                        }
+                        or has_operations
+                        or budget_exhausted
+                        or deadline_exceeded
+                    ):
+                        raise RecoveryConflict("run_not_recoverable")
+                ready = recovery.snapshot.model_copy(deep=True)
+                ready.status, ready.error = "ready", None
+                await recovery.save(ready)
+            if automatic and recovery.snapshot.status not in {"ready", "running", "waiting"}:
+                await recovery.close()
+                return False
+        except BaseException:
             await recovery.close()
-            return False
+            raise
         task = asyncio.create_task(self._execute(recovery))
         self.tasks[run_id] = task
 

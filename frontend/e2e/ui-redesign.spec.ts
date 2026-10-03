@@ -8,10 +8,11 @@ const runId = "design-e2e";
 const title = "企业 AI 搜索市场研究：产品能力、商业模式与竞争机会";
 const artifactDir = path.resolve("../output/ui-redesign");
 
-async function fixture(page: Page) {
+async function fixture(page: Page, detailed = false) {
   let complete = false;
   let feedbackFails = true;
   const feedbacks: unknown[] = [];
+  const createdRequests: unknown[] = [];
   const task = { task_id: "product", title: "产品能力与差异", status: "running", wave_id: "wave-1", source_count: 4, activity_label: "正在核验产品文档" };
   const document = { id: "document-1", filename: "产品功能与安全说明.pdf", status: "ready", media_type: "application/pdf", size_bytes: 248000, page_count: 8, chunk_count: 16, ocr_pages: 0, sha256: "abcdef123456", created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-22T09:00:00Z" };
   await page.route("**/api/**", async (route) => {
@@ -19,14 +20,20 @@ async function fixture(page: Page) {
     const endpoint = url.pathname;
     let result: unknown = {};
     if (endpoint.endsWith("/events")) return route.fulfill({ status: 200, contentType: "text/event-stream", body: ": connected\n\n" });
+    if (endpoint.endsWith("/runs") && route.request().method() === "POST") createdRequests.push(route.request().postDataJSON());
     if (endpoint.endsWith("/capabilities")) result = { editable_config_keys: ["allow_clarification", "research_model", "max_concurrent_research_units", "search_api"], defaults: { allow_clarification: true, research_model: "openai:gpt-test", max_concurrent_research_units: 5, search_api: "tavily" }, features: { document_research: { enabled: true, database: "ready" } }, config_schema: { properties: { allow_clarification: { type: "boolean", title: "开始前澄清问题" }, research_model: { type: "string", title: "研究模型" }, max_concurrent_research_units: { type: "integer", title: "并行任务上限", minimum: 1, maximum: 20 }, search_api: { type: "string", title: "搜索服务", enum: ["tavily", "none"] } } } };
     else if (endpoint.endsWith("/models")) result = { backend: "litellm", models: [{ name: "openai:gpt-test" }, { name: "anthropic:test-model" }] };
     else if (endpoint.endsWith("/runs")) result = route.request().method() === "POST" ? { run_id: runId } : { items: [{ run_id: runId, title, status: complete ? "completed" : "running" }] };
-    else if (endpoint.endsWith(`/runs/${runId}`)) result = { run_id: runId, title, status: complete ? "completed" : "running", last_event_id: 10, progress: { current_stage: complete ? "finalizing" : "researching", task_items: { product: task }, sources: [{ source_id: "s1", title: "产品白皮书", domain: "example.com", url: "https://example.com/product", task_id: "product" }], latest_findings: [{ task_id: "product", summary: "已记录产品能力与访问控制方面的发现。" }] }, output: complete ? { markdown: "# 企业搜索研究\n\n## 核心判断\n\n企业方案需要核对资料权限。[来源](https://example.com/product)\n\n## 证据缺口\n\n定价仍需进一步核验。", publications: [] } : {} };
+    else if (endpoint.endsWith(`/runs/${runId}`)) result = { run_id: runId, title, status: complete ? "completed" : "running", last_event_id: 10, progress: { current_stage: complete ? "finalizing" : "researching", task_items: { product: { ...task, status: complete ? "completed" : "running" } }, sources: [{ source_id: "s1", title: "产品白皮书", domain: "example.com", url: "https://example.com/product", task_id: "product" }], latest_findings: [{ task_id: "product", summary: "已记录产品能力与访问控制方面的发现。" }] }, output: complete ? { markdown: "# 企业搜索研究\n\n## 核心判断\n\n企业方案需要核对资料权限。[来源](https://example.com/product)\n\n## 证据缺口\n\n定价仍需进一步核验。", publications: [] } : {} };
     else if (endpoint.endsWith("/usage")) result = { accounting_status: "unavailable", unavailable_reason: "no_usage_events", task_operations: { product: { model_call_count: 7, tool_call_count: 3 } } };
-    else if (endpoint.endsWith("/activity")) result = { items: [], source: "summary_only", detail_level: "summary", last_event_id: 0, oldest_sequence: 0, has_more: false };
+    else if (endpoint.endsWith("/activity")) result = { items: detailed ? [
+      { schema_version: 1, event_id: "tool-1", sequence: 1, run_id: runId, task_id: "product", timestamp: "2026-10-03T00:00:00Z", iteration: 1, type: "tool.started", kind: "tool", phase: "tool_execution", status: "running", title: "搜索产品资料", summary: "开始搜索", payload: { tool_call_id: "call-1", tool_name: "web_search", args_summary: "企业搜索 官方产品文档" } },
+      { schema_version: 1, event_id: "tool-2", sequence: 2, run_id: runId, task_id: "product", timestamp: "2026-10-03T00:00:01Z", iteration: 1, duration_ms: 1000, type: "tool.completed", kind: "tool", phase: "tool_execution", status: "success", title: "搜索产品资料", summary: "检索到相关产品资料", payload: { tool_call_id: "call-1", tool_name: "web_search", source_count: 1 } },
+      { schema_version: 1, event_id: "source-3", sequence: 3, run_id: runId, task_id: "product", timestamp: "2026-10-03T00:00:02Z", iteration: 1, type: "source.discovered", kind: "source", phase: "evidence_review", status: "success", title: "产品白皮书", summary: "已记录来源", payload: { source_id: "s1", title: "产品白皮书", url: "https://example.com/product" } },
+      { schema_version: 1, event_id: "task-4", sequence: 4, run_id: runId, task_id: "product", timestamp: "2026-10-03T00:00:03Z", iteration: 1, type: "task.completed", kind: "lifecycle", phase: "terminal", status: "success", title: "研究完成", summary: "已记录任务产出", payload: {} }
+    ] : [], source: detailed ? "native" : "summary_only", detail_level: "summary", last_event_id: detailed ? 4 : 0, oldest_sequence: detailed ? 1 : 0, has_more: false };
     else if (endpoint.endsWith("/security-approvals")) result = { approvals: [] };
-    else if (endpoint.endsWith("/team")) result = { enabled: true, mode: "teams", status: "active", name: "研究团队", members: [{ member_id: "r1", name: "产品研究员", purpose: "核验产品能力", status: "active" }], tasks: [], messages: [], plans: [] };
+    else if (endpoint.endsWith("/team")) result = { enabled: true, mode: "teams", status: "active", name: "研究团队", members: [{ member_id: "r1", name: "产品研究员", purpose: "核验产品能力", status: "active" }], tasks: [{ task_id: "product", version: 1, display_title: "产品能力与差异", status: "completed", owner: "r1", admission_status: "accepted", blocked_by: [], blocks: ["pricing"] }, { task_id: "pricing", version: 1, display_title: "定价证据补充", status: "pending", owner: null, admission_status: "pending", blocked_by: ["product"], unresolvedBlockedBy: [] }], messages: [], plans: [] };
     else if (endpoint.endsWith("/feedback")) {
       feedbacks.push(route.request().postDataJSON());
       if (feedbackFails) { feedbackFails = false; return route.fulfill({ status: 503, json: { detail: "稍后重试" } }); }
@@ -43,10 +50,12 @@ async function fixture(page: Page) {
     else if (endpoint.endsWith("/admin/users")) result = [{ id: "user-1", email: "researcher@example.com", display_name: "研究员", status: "active", role_codes: ["researcher"], created_at: "2026-09-20T10:00:00Z" }];
     else if (endpoint.endsWith("/admin/roles")) result = [{ id: "role-1", code: "researcher", name: "研究员", description: "创建与管理研究", is_system: true, permission_codes: [] }];
     else if (endpoint.endsWith("/me")) result = { id: "user-1", email: "researcher@example.com", display_name: "研究员", roles: ["researcher"], permissions: [], status: "active" };
-    else if (/\/(users|roles|permissions|audit|sessions)$/.test(endpoint)) result = [];
+    else if (/\/(users|roles|permissions|audit-events|sessions)$/.test(endpoint)) result = [];
+    else if (endpoint.endsWith("/knowledge/search")) result = { query_id: "q1", rerank_completed: true, documents: [{ document_id: "document-1", filename: document.filename, generation_id: "g1" }], results: [{ document_id: "document-1", filename: document.filename, generation_id: "g1", segment_id: "segment-1", text: "企业访问控制与来源引用。", context_after: "支持基于角色的访问控制。", relevance: 3, score: 0.8, source_uri: "document://document-1" }] };
+    else if (endpoint.endsWith("/knowledge/answer")) result = { query_id: "q2", status: "answered", answer: "## 资料结论\n\n企业支持访问控制 [1]，未映射标记 [2] 保留原文。", citations: [{ marker: "[1]", segment_ids: ["segment-1"] }], evidence: [{ document_id: "document-1", filename: document.filename, generation_id: "g1", segment_id: "segment-1", text: "企业访问控制与来源引用。", context_after: "支持基于角色的访问控制。", relevance: 3, score: 0.8, source_uri: "document://document-1" }] };
     return route.fulfill({ status: 200, json: result });
   });
-  return { finish: () => { complete = true; }, feedbacks };
+  return { finish: () => { complete = true; }, feedbacks, createdRequests };
 }
 
 test.beforeEach(async () => { await mkdir(artifactDir, { recursive: true }); });
@@ -64,7 +73,7 @@ test("research flow retains URL state, feedback failures and report downloads", 
   await expect(page).toHaveURL(new RegExp(`/research/${runId}`));
   await page.getByRole("tab", { name: "研究团队", exact: true }).focus();
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "用量", exact: true })).toBeFocused();
+  await expect(page.getByRole("tab", { name: "来源证据", exact: true })).toBeFocused();
   await page.keyboard.press("Home");
   await expect(page.getByRole("tab", { name: "研究进展", exact: true })).toBeFocused();
   const task = page.locator('[data-task-id="product"]');
@@ -87,7 +96,7 @@ test("research flow retains URL state, feedback failures and report downloads", 
   api.finish();
   await page.goto(`/research/${runId}?view=report`);
   await expect(page.locator(".report-shell")).toContainText("证据缺口");
-  await page.screenshot({ path: path.join(artifactDir, "report-1440.png"), fullPage: true });
+  await page.screenshot({ path: path.join(artifactDir, "report-1440.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: "导出报告" }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Markdown", exact: true }).click();
@@ -95,7 +104,7 @@ test("research flow retains URL state, feedback failures and report downloads", 
   await page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("button", { name: "切换到深色模式" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.screenshot({ path: path.join(artifactDir, "report-dark-1440.png"), fullPage: true });
+  await page.screenshot({ path: path.join(artifactDir, "report-dark-1440.png"), fullPage: true, animations: "disabled" });
   expect(errors).toEqual([]);
 });
 
@@ -150,7 +159,7 @@ for (const width of [390, 768, 1024, 1440]) {
       await expect(page.locator("body")).toHaveCSS("font-family", /IBM Plex Sans/);
       if (name === "run") await expect(page.locator('[data-task-id="product"]')).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${name} overflows at ${width}`).toBe(true);
-      await page.screenshot({ path: path.join(artifactDir, `${name}-${width}.png`), fullPage: true });
+      await page.screenshot({ path: path.join(artifactDir, `${name}-${width}.png`), fullPage: true, animations: "disabled" });
     }
     if (width === 390) {
       await page.goto(`/research/${runId}`);
@@ -164,3 +173,66 @@ for (const width of [390, 768, 1024, 1440]) {
     }
   });
 }
+
+
+test("source cards, citations and team tasks share a consistent context", async ({ page }, testInfo) => {
+  const api = await fixture(page, true);
+  api.finish();
+  await page.goto(`/research/${runId}?view=evidence`);
+  await page.locator(".research-content .evidence-title").click();
+  await expect(page).toHaveURL(/source=s1/);
+  const detail = page.locator(".source-detail:visible");
+  await expect(detail).toContainText("产品能力与差异");
+  await detail.getByRole("button", { name: "在报告中查找引用" }).click();
+  await expect(page.locator('[data-report-source="s1"]')).toBeFocused();
+  await page.locator('[data-report-source="s1"]').click();
+  await detail.getByRole("button", { name: "查看关联任务" }).click();
+  await expect(page.getByRole("dialog")).toContainText("原生执行记录");
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "搜索产品资料" })).toHaveCount(1);
+  await expect(page.getByRole("dialog")).toContainText("企业搜索 官方产品文档");
+  await expect(page.getByRole("dialog")).toContainText("1 个返回来源");
+  await page.screenshot({ path: path.join(artifactDir, `activity-${testInfo.project.name}.png`), fullPage: false, animations: "disabled" });
+  await page.getByRole("dialog").getByRole("button", { name: "产品白皮书", exact: true }).click();
+  await expect(detail).toBeVisible();
+  if (testInfo.project.name !== "desktop") await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: "研究团队", exact: true }).click();
+  await expect(page.getByRole("region", { name: "执行完成", exact: true })).toContainText("交接已接纳");
+  await page.getByText("任务依赖", { exact: true }).last().click();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(artifactDir, `team-${testInfo.project.name}.png`), fullPage: true, animations: "disabled" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
+test("ready documents are carried into a validated research selection", async ({ page }) => {
+  const api = await fixture(page);
+  await page.goto("/documents");
+  await page.getByRole("checkbox", { name: "选择 产品功能与安全说明.pdf" }).check();
+  await page.getByRole("link", { name: "用于新研究" }).click();
+  await expect(page).toHaveURL(/document=document-1/);
+  await expect(page.getByRole("button", { name: "企业资料", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("研究问题", { exact: true }).fill("核对访问控制能力");
+  await page.getByRole("button", { name: "启动研究" }).click();
+  expect(api.createdRequests[0]).toMatchObject({ source_selection: { mode: "documents", sources: [{ type: "document", id: "document-1" }] } });
+  await page.goto("/research/new?document=missing&query=test");
+  await expect(page.getByRole("button", { name: "启动研究" })).toBeDisabled();
+  await expect(page.locator(".composer-selected-docs")).toContainText("资料不可用");
+});
+
+test("knowledge answers link only explicit citations and carry the submitted question", async ({ page }, testInfo) => {
+  await fixture(page);
+  await page.goto("/knowledge");
+  await page.getByRole("tab", { name: "资料问答", exact: true }).click();
+  await page.getByLabel("检索 / 提问内容").fill("企业如何控制访问权限？");
+  await page.getByRole("button", { name: "提问", exact: true }).click();
+  await page.getByRole("button", { name: "查看引用 [1]", exact: true }).click();
+  await expect(page.locator(".knowledge-evidence-card")).toHaveAttribute("data-selected", "true");
+  await expect(page.locator(".knowledge-evidence-card")).toBeFocused();
+  await expect(page.getByRole("button", { name: "查看引用 [2]", exact: true })).toHaveCount(0);
+  await page.getByText("查看前后文", { exact: true }).click();
+  await expect(page.getByText("支持基于角色的访问控制。", { exact: true })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.screenshot({ path: path.join(artifactDir, `knowledge-answer-${testInfo.project.name}.png`), fullPage: true, animations: "disabled" });
+  await page.getByLabel("检索 / 提问内容").fill("未提交的问题");
+  await page.getByRole("link", { name: "用这个问题继续研究" }).click();
+  await expect(page.getByLabel("研究问题", { exact: true })).toHaveValue("企业如何控制访问权限？");
+});

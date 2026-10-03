@@ -1,0 +1,20 @@
+.password-input { display: flex; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+.auth-form .password-input input { border: 0; background: transparent; min-width: 0; flex: 1; width: 100%; }
+.password-input > button { display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 12px; }
+.identity-filters { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 18px; }
+.identity-filters > .insight-search { flex: 1; }
+.identity-filters > select { min-width: 120px; font-size: 13px; }
+.admin-page > .insight-metrics, .account-page > .insight-metrics { margin-bottom: 22px; }
+.admin-role-grid > .insight-disclosure { grid-column: 1 / -1; }
+.permission-matrix-scroll { overflow: auto; }
+.permission-matrix { width: 100%; border-collapse: collapse; font-size: 12px; }
+.permission-matrix th, .permission-matrix td { border-bottom: 1px solid var(--line); padding: 12px; text-align: left; min-width: 90px; }
+.permission-matrix th small { display: block; color: var(--muted); font-weight: 400; margin-top: 4px; }
+.permission-matrix td svg { color: var(--cyan); }
+.identity-audit { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+.identity-audit header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; font-size: 13px; }
+.identity-audit time, .identity-audit p { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.session-list .identity-session { grid-template-columns: 36px minmax(0,1fr) auto 34px; }
+.identity-session-icon { color: var(--cyan); }
+.session-list .identity-session b { white-space: normal; overflow-wrap: anywhere; line-height: 1.7; }
+@media (max-width: 560px) { .session-list .identity-session { grid-template-columns: 24px minmax(0,1fr) 34px; gap: 10px; } .identity-session .session-state { grid-column: 2; grid-row: 2; justify-self: start; } .identity-session > button { grid-column: 3; grid-row: 1 / 3; } }

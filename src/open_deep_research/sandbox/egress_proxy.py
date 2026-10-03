@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import re
 import socket
 import time
 from contextlib import suppress
@@ -88,7 +89,9 @@ class GatewayEgressProxy:
         _bundle, _profile_id, profile = resolve_profile(
             Configuration.from_runnable_config(context.config)
         )
-        if method != "CONNECT" and method not in profile.network.allow_http_methods:
+        # An opaque CONNECT tunnel cannot enforce the HTTP verbs inside TLS.
+        # Administrators must explicitly allow CONNECT to grant that capability.
+        if method not in profile.network.allow_http_methods:
             return False, None, profile.network.allow_private_destinations
         async def check():
             return await self.runtime._egress_precheck(run_id=claims.run_id,
@@ -194,13 +197,31 @@ class GatewayEgressProxy:
             if len(raw) > 65_536:
                 raise ValueError("sandbox_proxy_headers_too_large")
             lines = raw.decode("iso-8859-1").split("\r\n")
+            if any(ord(character) < 32 or ord(character) == 127 for character in lines[0]):
+                raise ValueError("sandbox_proxy_invalid_request_line")
             method, target, version = lines[0].split(" ", 2)
             headers = {}
             for line in lines[1:]:
-                if not line or ":" not in line:
+                if not line:
                     continue
+                if ":" not in line:
+                    raise ValueError("sandbox_proxy_invalid_header")
                 key, value = line.split(":", 1)
-                headers[key.strip().lower()] = value.strip()
+                # Bare line breaks must not become a second upstream request.
+                if not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", key) or any(
+                    (ord(character) < 32 and character != "\t") or ord(character) == 127
+                    for character in value
+                ):
+                    raise ValueError("sandbox_proxy_invalid_header")
+                key = key.lower()
+                if key in {"content-length", "transfer-encoding"} and key in headers:
+                    raise ValueError("sandbox_proxy_ambiguous_body")
+                headers[key] = value.strip()
+            if "transfer-encoding" in headers:
+                raise ValueError("sandbox_proxy_chunked_body_denied")
+            content_length = int(headers.get("content-length", "0"))
+            if content_length < 0:
+                raise ValueError("sandbox_proxy_invalid_body_length")
             authorization = headers.get("proxy-authorization", "")
             if not authorization.startswith("Bearer "):
                 await self._reply(writer, 407, "Proxy Authentication Required")
@@ -256,13 +277,13 @@ class GatewayEgressProxy:
                 filtered = [
                     f"{method} {path} {version}",
                     *[
-                        line
-                        for line in lines[1:]
-                        if line
-                        and not line.lower().startswith(
-                            ("proxy-authorization:", "x-sandbox-timestamp:", "x-sandbox-nonce:")
-                        )
+                        f"{key}: {str(content_length) if key == 'content-length' else value}"
+                        for key, value in headers.items()
+                        if key not in {"proxy-authorization", "x-sandbox-timestamp", "x-sandbox-nonce",
+                                       "connection", "proxy-connection", "host", "upgrade"}
                     ],
+                    f"Host: {'[' + host + ']' if ':' in host else host}:{port}",
+                    "Connection: close",
                     "",
                     "",
                 ]
@@ -278,10 +299,22 @@ class GatewayEgressProxy:
                     with suppress(Exception):
                         destination.close()
 
-            await asyncio.gather(
-                copy(reader, upstream_writer),
-                copy(upstream_reader, writer),
-            )
+            if method.upper() == "CONNECT":
+                await asyncio.gather(
+                    copy(reader, upstream_writer),
+                    copy(upstream_reader, writer),
+                )
+            else:
+                # Forward exactly one framed request. Bytes after its body may
+                # be a pipelined request with a different method or destination.
+                while content_length:
+                    data = await asyncio.wait_for(
+                        reader.readexactly(min(content_length, 64 * 1024)), timeout=10
+                    )
+                    upstream_writer.write(data)
+                    await upstream_writer.drain()
+                    content_length -= len(data)
+                await copy(upstream_reader, writer)
         except Exception as exc:  # noqa: BLE001 - proxy must return a bounded denial
             with suppress(Exception):
                 await self._reply(writer, 403, str(exc)[:200])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import pathlib
 from dataclasses import dataclass, field
@@ -161,6 +162,109 @@ async def test_workspace_lifecycle_path_root_and_artifacts(tmp_path):
     # 幂等 close。
     await workspace.close()
     assert controller.stopped == ["container-1"]
+
+
+def _fail_first_stop(controller):
+    original = controller.stop_task
+    failed = False
+
+    async def stop(container_id):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError("fixture cleanup failure")
+        await original(container_id)
+
+    controller.stop_task = stop
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+async def test_workspace_cancelled_close_stops_and_preserves_retry(tmp_path, stop_fails):
+    controller = FakeController()
+    manager = _manager(controller, tmp_path)
+    workspace = await manager.get_workspace("user", "agent", "session")
+    ready = asyncio.Event()
+    original_collect = controller.collect_archive
+
+    async def blocked_archive(container_id):
+        ready.set()
+        await asyncio.Event().wait()
+
+    controller.collect_archive = blocked_archive
+    if stop_fails:
+        _fail_first_stop(controller)
+    task = asyncio.create_task(manager.close(workspace.workspace_id))
+    await ready.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert workspace.container_id == ("container-1" if stop_fails else None)
+    assert controller.stopped == ([] if stop_fails else ["container-1"])
+    controller.collect_archive = original_collect
+    await manager.close_all()
+    assert controller.stopped == ["container-1"]
+    assert workspace.container_id is None
+    assert not manager._workspaces
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+async def test_workspace_archive_write_error_still_stops(tmp_path, stop_fails):
+    controller = FakeController()
+    manager = _manager(controller, tmp_path)
+    workspace = await manager.get_workspace("user", "agent", "session")
+    artifact_file = tmp_path / "not-directory"
+    artifact_file.write_text("file")
+    workspace.artifact_dir = artifact_file
+    if stop_fails:
+        _fail_first_stop(controller)
+    with pytest.raises(FileExistsError):
+        await manager.close(workspace.workspace_id)
+    assert workspace.container_id == ("container-1" if stop_fails else None)
+    assert controller.stopped == ([] if stop_fails else ["container-1"])
+    workspace.artifact_dir = None
+    await manager.close_all()
+    assert controller.stopped == ["container-1"]
+    assert not manager._workspaces
+
+
+@pytest.mark.parametrize("stop_fails", [False, True])
+@pytest.mark.parametrize("error_type", [TimeoutError, asyncio.CancelledError])
+async def test_workspace_failed_start_cleans_created_container(tmp_path, stop_fails, error_type):
+    controller = FakeController()
+    manager = _manager(controller, tmp_path)
+
+    async def failed_start(container_id):
+        raise error_type("fixture startup failure")
+
+    controller.start_task = failed_start
+    if stop_fails:
+        _fail_first_stop(controller)
+    with pytest.raises(error_type, match="fixture startup failure"):
+        await manager.get_workspace("user", "agent", "session", workspace_id="failed-start")
+    assert len(controller.created) == 1
+    assert controller.stopped == ([] if stop_fails else ["container-1"])
+    if stop_fails:
+        retained = manager._workspaces["failed-start"]
+        assert retained.container_id == "container-1"
+        assert not retained.is_alive
+    await manager.close_all()
+    assert controller.stopped == ["container-1"]
+    assert not manager._workspaces
+
+
+async def test_workspace_stop_failure_keeps_manager_cleanup_entry(tmp_path):
+    controller = FakeController()
+    manager = _manager(controller, tmp_path)
+    workspace = await manager.get_workspace("user", "agent", "session")
+    _fail_first_stop(controller)
+    with pytest.raises(RuntimeError, match="fixture cleanup failure"):
+        await manager.close(workspace.workspace_id)
+    assert workspace.container_id == "container-1"
+    assert manager._workspaces[workspace.workspace_id] is workspace
+    await manager.close_all()
+    assert controller.stopped == ["container-1"]
+    assert not workspace.is_alive
+    assert not manager._workspaces
 
 
 async def test_manager_reuses_workspace_per_agent(tmp_path):

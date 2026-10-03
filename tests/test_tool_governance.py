@@ -1258,3 +1258,89 @@ class TestEgressAllowlist:
         assert result is None  # SEARCH tool -> no egress interception
 
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control", ["budget", "deadline", "fence", "unknown", "cancel"])
+@pytest.mark.parametrize("retryable", [False, True])
+async def test_runtime_controls_propagate_without_retry(control, retryable):
+    from open_deep_research.agentscope_runtime.recovery_store import (
+        FenceLost,
+        UnknownOperation,
+    )
+    from open_deep_research.budgets import (
+        BudgetDimension,
+        BudgetExhausted,
+        DeadlineExceeded,
+    )
+
+    error = {
+        "budget": BudgetExhausted(BudgetDimension.TOOL_CALLS),
+        "deadline": DeadlineExceeded("fixture deadline"),
+        "fence": FenceLost("fixture fence"),
+        "unknown": UnknownOperation("fixture unknown outcome"),
+        "cancel": asyncio.CancelledError("fixture cancellation"),
+    }[control]
+    calls = []
+
+    async def interrupted():
+        calls.append(1)
+        raise error
+
+    tool = _make_tool(
+        interrupted, origin=ToolOrigin.SYSTEM, effect=ToolEffect.READ_ONLY,
+        retryable=retryable,
+    )
+    sleeper = AsyncMock()
+    with pytest.raises(type(error)) as raised:
+        await _execute_governed_tool_call(
+            {"name": tool.name, "id": "control-fixture-call", "args": {}},
+            {tool.name: tool},
+            AgentRole.SUPERVISOR,
+            _config(event_log_enabled=False, sqlite_observability_enabled=False),
+            max_retries=3,
+            sleeper=sleeper,
+        )
+    assert raised.value is error
+    assert calls == [1]
+    sleeper.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("control", ["budget", "deadline", "fence", "unknown"])
+async def test_retry_helper_preserves_runtime_control_exception(control):
+    from open_deep_research.agentscope_runtime.recovery_store import (
+        FenceLost,
+        UnknownOperation,
+    )
+    from open_deep_research.budgets import (
+        BudgetDimension,
+        BudgetExhausted,
+        DeadlineExceeded,
+    )
+
+    error = {
+        "budget": BudgetExhausted(BudgetDimension.TOOL_CALLS),
+        "deadline": DeadlineExceeded("fixture deadline"),
+        "fence": FenceLost("fixture fence"),
+        "unknown": UnknownOperation("fixture unknown outcome"),
+    }[control]
+    calls = []
+
+    async def interrupted():
+        calls.append(1)
+        raise error
+
+    tool = _make_tool(interrupted, origin=ToolOrigin.SYSTEM, retryable=True)
+    sleeper = AsyncMock()
+    with pytest.raises(type(error)) as raised:
+        await _invoke_tool_with_retry(
+            tool,
+            tool.input_schema.model_validate({}),
+            ToolContext(config=_config(), role="supervisor", tool_call_id="fixture-call"),
+            max_retries=3,
+            sleeper=sleeper,
+        )
+    assert raised.value is error
+    assert calls == [1]
+    sleeper.assert_not_awaited()

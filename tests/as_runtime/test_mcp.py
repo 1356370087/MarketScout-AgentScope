@@ -192,6 +192,43 @@ async def test_stdio_cancel_keeps_session_and_close_releases():
         await _invoke(server, "echo", {"text": "closed"})
 
 
+@pytest.mark.parametrize("outcome", ["error", "cancel", "browser-loader-error"])
+async def test_stdio_discovery_failure_closes_session(monkeypatch, outcome):
+    import open_deep_research.agentscope_runtime.mcp as native_mcp
+
+    opened = []
+
+    async def failing_discovery(server):
+        await server.open()
+        opened.append(server)
+        if outcome == "cancel":
+            raise asyncio.CancelledError()
+        raise RuntimeError("fixture-list-tools-failed")
+
+    monkeypatch.setattr(NativeMcpServer, "discover", failing_discovery)
+    connection = _stdio_connection()
+    try:
+        if outcome == "browser-loader-error":
+            config = _config(
+                browser_mcp_enabled=True,
+                browser_mcp_config={
+                    **connection,
+                    "tools": ["echo"],
+                    "tool_effects": {"echo": "read_only"},
+                },
+            )
+            assert await load_native_browser_mcp_tools(config, set()) == []
+        else:
+            error = asyncio.CancelledError if outcome == "cancel" else RuntimeError
+            with pytest.raises(error):
+                await native_mcp._discover_via_server(connection)
+        assert len(opened) == 1
+        assert opened[0].client.is_connected is False
+    finally:
+        for server in opened:
+            await server.close()
+
+
 # ----------------------------------------------------------------- T026 http
 
 
@@ -308,7 +345,7 @@ async def test_token_cache_expiry_and_refresh_isolation(monkeypatch):
 
     exchanged = []
 
-    async def fake_exchange(subject_token, base_url):
+    async def fake_exchange(subject_token, base_url, **kwargs):
         exchanged.append((subject_token, base_url))
         return {"access_token": "tok-new", "expires_in": 60}
 
@@ -380,6 +417,140 @@ async def test_sse_transport_roundtrip():
         proc.wait(10)
 
 
+@pytest.mark.parametrize("transport", ["streamable-http", "sse"])
+async def test_guarded_mcp_transport_preserves_native_sdk_roundtrip(monkeypatch, transport):
+    """Real SDK sessions use the guarded transport for every HTTP request."""
+    from open_deep_research.agentscope_runtime import mcp as native_mcp
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    port = _free_port()
+    proc = _spawn(port, transport)
+    calls = []
+
+    async def authorized(url, capability, consume):
+        calls.append((url, capability))
+        assert url.startswith(f"http://public-mcp.example:{port}/")
+        return "allow"
+
+    async def fixture_resolver(self, host, port=0, family=socket.AF_INET):
+        assert host == "public-mcp.example"
+        return [{"hostname": host, "host": "127.0.0.1", "port": port,
+                 "family": socket.AF_INET, "proto": 0, "flags": 0}]
+
+    # Only this positive transport fixture substitutes its loopback service
+    # for a public destination. Private DNS denial is tested separately.
+    monkeypatch.setattr(native_mcp.PublicWebResolver, "resolve", fixture_resolver)
+    monkeypatch.setattr(native_mcp, "validate_response_peer", lambda response: None)
+    token = egress_authorizer.set(authorized)
+    try:
+        await _wait_port(port)
+        suffix = "sse" if transport == "sse" else "mcp"
+        server = NativeMcpServer({
+            "transport": "sse" if transport == "sse" else "streamable_http",
+            "url": f"http://public-mcp.example:{port}/{suffix}",
+            "headers": {"Host": f"127.0.0.1:{port}"},
+            "restricted_network": True,
+        }, name="guarded-fixture")
+        assert (await _invoke(server, "greet", {"name": "guarded"})).output == "hello guarded"
+        assert calls and all(capability == "tool.network" for _, capability in calls)
+        await server.close()
+    finally:
+        egress_authorizer.reset(token)
+        proc.terminate()
+        proc.wait(10)
+
+
+async def test_guarded_mcp_transport_blocks_rebinding_before_credentials_are_sent(monkeypatch):
+    import httpx
+    from aiohttp import web
+    from aiohttp.resolver import ThreadedResolver
+
+    from open_deep_research.agentscope_runtime import mcp as native_mcp
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    requests = []
+    async def handler(request):
+        requests.append(request.headers.get("Authorization"))
+        return web.Response(status=403)
+
+    app = web.Application()
+    app.router.add_post("/mcp", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+
+    async def rebound(self, host, port=0, family=socket.AF_INET):
+        return [{"hostname": host, "host": "127.0.0.1", "port": port,
+                 "family": socket.AF_INET, "proto": 0, "flags": 0}]
+
+    async def authorized(*args):
+        return "allow"
+
+    monkeypatch.setattr(ThreadedResolver, "resolve", rebound)
+    token = egress_authorizer.set(authorized)
+    try:
+        async with httpx.AsyncClient(transport=native_mcp._PublicMcpTransport()) as client:
+            with pytest.raises(ValueError, match="private"):
+                await client.post(f"http://public-mcp.example:{port}/mcp",
+                                  headers={"Authorization": "Bearer fixture-review-token"}, json={})
+        assert requests == []
+    finally:
+        egress_authorizer.reset(token)
+        await runner.cleanup()
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+async def test_guarded_token_exchange_does_not_forward_subject_token_on_redirect(monkeypatch, redirect):
+    from aiohttp import web
+
+    from open_deep_research.agentscope_runtime import mcp as native_mcp
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    requests = []
+    async def handler(request):
+        form = await request.post()
+        requests.append((request.path, form.get("subject_token")))
+        if redirect:
+            raise web.HTTPTemporaryRedirect(location="/steal")
+        return web.json_response({"access_token": "fixture-access-token"})
+
+    async def steal(request):
+        requests.append((request.path, "unexpected"))
+        return web.Response(status=500)
+
+    app = web.Application()
+    app.router.add_post("/oauth/token", handler)
+    app.router.add_post("/steal", steal)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = runner.addresses[0][1]
+    async def fixture_resolver(self, host, port=0, family=socket.AF_INET):
+        assert host == "public-mcp.example"
+        return [{"hostname": host, "host": "127.0.0.1", "port": port,
+                 "family": socket.AF_INET, "proto": 0, "flags": 0}]
+
+    async def authorized(url, capability, consume):
+        assert capability == "tool.network" and consume
+        return "allow"
+
+    monkeypatch.setattr(native_mcp.PublicWebResolver, "resolve", fixture_resolver)
+    monkeypatch.setattr(native_mcp, "validate_response_peer", lambda response: None)
+    token = egress_authorizer.set(authorized)
+    try:
+        result = await native_mcp.exchange_mcp_subject_token(
+            "fixture-subject-token", f"http://public-mcp.example:{port}", restricted=True,
+        )
+        assert result == (None if redirect else {"access_token": "fixture-access-token"})
+        assert requests == [("/oauth/token", "fixture-subject-token")]
+    finally:
+        egress_authorizer.reset(token)
+        await runner.cleanup()
+
+
 # ------------------------------------------------------- T026/T028 loaders
 
 
@@ -440,7 +611,16 @@ async def test_loader_blocks_untrusted_configurations(monkeypatch):
     cfg["metadata"]["deployment_surface"] = "http"
     assert await load_native_mcp_tools(cfg, set()) == []
     cfg["configurable"]["allowed_mcp_servers"] = ["https://mcp.example/"]
-    tools = await load_native_mcp_tools(cfg, set())
+    # The server allowlist does not replace live network authorization.
+    assert await load_native_mcp_tools(cfg, set()) == []
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+    async def authorized(*args):
+        return "allow"
+    token = egress_authorizer.set(authorized)
+    try:
+        tools = await load_native_mcp_tools(cfg, set())
+    finally:
+        egress_authorizer.reset(token)
     assert [tool.name for tool in tools] == ["echo"]
 
 
@@ -482,7 +662,7 @@ async def test_loader_maps_policy_and_auth_headers(monkeypatch):
     captured.clear()
     import open_deep_research.agentscope_runtime.mcp as native_mcp
 
-    async def fake_fetch(config):
+    async def fake_fetch(config, **kwargs):
         return {"access_token": "tok-1"}
 
     monkeypatch.setattr(native_mcp, "fetch_tokens", fake_fetch)
@@ -514,6 +694,46 @@ async def test_loader_skips_instruction_shaped_descriptions(monkeypatch):
         }
     )
     assert await load_native_mcp_tools(cfg, set()) == []
+
+
+@pytest.mark.parametrize("role", list(AgentRole))
+async def test_oauth_discovery_uses_the_authorized_agent_role(monkeypatch, role):
+    from open_deep_research.agentscope_runtime import mcp as native_mcp
+    from open_deep_research.sandbox.egress_context import egress_authorizer
+
+    captured = []
+    exchanges = []
+    _patch_discovery(monkeypatch, [_descriptor("echo")], captured)
+
+    async def exchange(subject, base_url, **kwargs):
+        exchanges.append((subject, base_url, kwargs["restricted"]))
+        return {"access_token": "fixture-access-token"}
+
+    async def authorized(*args):
+        return "allow"
+
+    monkeypatch.setattr(native_mcp, "exchange_mcp_subject_token", exchange)
+    config = _config(
+        sandbox_policy_path="config/sandbox-policy.toml",
+        allowed_mcp_servers=["https://mcp.example"],
+        supervisor_tool_whitelist=["echo"] if role is AgentRole.SUPERVISOR else [],
+        researcher_tool_whitelist=["echo"] if role is AgentRole.RESEARCHER else [],
+        mcp_subject_token="fixture-subject-token",
+        mcp_config={"url": "https://mcp.example", "tools": ["echo"],
+                    "tool_effects": {"echo": "read_only"}, "auth_required": True},
+    )
+    config["metadata"]["deployment_surface"] = "http"
+    token = egress_authorizer.set(authorized)
+    try:
+        tools = await load_native_mcp_tools(config, set(), role=role)
+        assert [tool.name for tool in tools] == ["echo"]
+        other_role = AgentRole.RESEARCHER if role is AgentRole.SUPERVISOR else AgentRole.SUPERVISOR
+        assert await load_native_mcp_tools(config, set(), role=other_role) == []
+        assert exchanges == [("fixture-subject-token", "https://mcp.example", True)]
+        assert captured[0]["headers"] == {"Authorization": "Bearer fixture-access-token"}
+        await close_native_mcp_tools(tools)
+    finally:
+        egress_authorizer.reset(token)
 
 
 async def test_browser_loader_policy(monkeypatch):
@@ -611,3 +831,160 @@ async def test_disabled_and_trimmed_tools_stay_out_of_guidance(monkeypatch):
     assert await toolkit.get_tool_schemas() == []
     assert await toolkit.get_guidance() == ""
     await close_native_mcp_tools(tools)
+
+
+@pytest.mark.parametrize("destination", ["loopback", "public"])
+@pytest.mark.parametrize("nested", [False, True])
+async def test_mcp_external_schema_reference_rejected_before_dispatch(
+    monkeypatch, destination, nested
+):
+    import json
+    import threading
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from pydantic import ValidationError
+
+    from open_deep_research.agentscope_runtime.mcp import NativeMcpTool
+    from open_deep_research.tools.governance import execute_governed_tool_call_native
+
+    requests = []
+    retrievals = []
+
+    class SchemaHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            body = json.dumps({"type": "object"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SchemaHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    original_urlopen = urllib.request.urlopen
+
+    def track_retrieval(url, *args, **kwargs):
+        target = getattr(url, "full_url", url)
+        retrievals.append(target)
+        if str(target).startswith(f"http://127.0.0.1:{server.server_port}/"):
+            return original_urlopen(url, *args, **kwargs)
+        raise AssertionError("External schema retrieval attempted")
+
+    monkeypatch.setattr(urllib.request, "urlopen", track_retrieval)
+    reference = (
+        f"http://127.0.0.1:{server.server_port}/fixture-schema"
+        if destination == "loopback"
+        else "https://schemas.example.test/fixture-schema"
+    )
+    schema = {"$ref": reference}
+    args = {}
+    if nested:
+        schema = {
+            "type": "object",
+            "properties": {"payload": schema},
+            "required": ["payload"],
+        }
+        args = {"payload": {}}
+    tool = NativeMcpTool(
+        SimpleNamespace(),
+        McpToolDescriptor(name="schema_reference_fixture", inputSchema=schema),
+        origin=ToolOrigin.MCP,
+        effect=ToolEffect.READ_ONLY,
+        retryable=False,
+        egress_urls_url=None,
+        auth_satisfied=True,
+    )
+    dispatch = AsyncMock(side_effect=AssertionError("Invalid input reached MCP server"))
+    monkeypatch.setattr(tool, "call", dispatch)
+    recorder = SimpleNamespace(active_span=lambda: SimpleNamespace(record_outcome=lambda **kwargs: None))
+    try:
+        with pytest.raises(ValidationError, match="cannot be resolved locally"):
+            tool.input_schema.model_validate(args)
+        result = await execute_governed_tool_call_native(
+            {"name": tool.name, "id": "schema-reference-call", "args": args},
+            {tool.name: tool},
+            AgentRole.RESEARCHER,
+            {"configurable": {}},
+            recorder=recorder,
+        )
+        assert result.error.error_type is ToolErrorType.validation_error
+        assert requests == []
+        assert retrievals == []
+        dispatch.assert_not_awaited()
+        assert tool.model_definition["parameters"] is tool.descriptor.inputSchema
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+@pytest.mark.parametrize(
+    ("draft", "definitions", "reference", "anchor"),
+    [
+        ("https://json-schema.org/draft/2020-12/schema", "$defs", "#/$defs/payload", False),
+        ("http://json-schema.org/draft-07/schema#", "definitions", "#/definitions/payload", False),
+        ("https://json-schema.org/draft/2020-12/schema", "$defs", "#payload", True),
+    ],
+    ids=["local-defs", "legacy-definitions", "local-anchor"],
+)
+async def test_mcp_local_schema_references_keep_nested_constraints(
+    draft, definitions, reference, anchor
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from open_deep_research.agentscope_runtime.mcp import NativeMcpTool
+    from open_deep_research.tools.governance import execute_governed_tool_call_native
+
+    payload = {
+        "type": "object",
+        "properties": {"code": {"type": "string", "pattern": "^[A-Z]{3}$"}},
+        "required": ["code"],
+        "additionalProperties": False,
+    }
+    if anchor:
+        payload["$anchor"] = "payload"
+    ensure = AsyncMock(side_effect=AssertionError("Invalid input reached MCP server"))
+    tool = NativeMcpTool(
+        SimpleNamespace(ensure=ensure),
+        McpToolDescriptor(
+            name="local_reference_fixture",
+            inputSchema={
+                "$schema": draft,
+                "$id": "https://schemas.example.test/local.json",
+                "type": "object",
+                "properties": {"payload": {"$ref": reference}},
+                "required": ["payload"],
+                definitions: {"payload": payload},
+            },
+        ),
+        origin=ToolOrigin.MCP,
+        effect=ToolEffect.READ_ONLY,
+        retryable=False,
+        egress_urls_url=None,
+    )
+    schema = tool.input_schema
+    assert schema.model_validate({"payload": {"code": "ABC"}}).payload == {"code": "ABC"}
+    with pytest.raises(ValueError, match="MCP JSON Schema"):
+        schema.model_validate({"payload": {"code": "abc"}})
+    with pytest.raises(ValueError, match="MCP JSON Schema"):
+        schema.model_validate({"payload": {"code": "ABC", "unexpected": True}})
+    recorder = SimpleNamespace(active_span=lambda: SimpleNamespace(record_outcome=lambda **kwargs: None))
+    result = await execute_governed_tool_call_native(
+        {"name": tool.name, "id": "local-reference-call", "args": {"payload": {"code": "abc"}}},
+        {tool.name: tool},
+        AgentRole.RESEARCHER,
+        {"configurable": {}},
+        recorder=recorder,
+    )
+    assert result.error.error_type is ToolErrorType.validation_error
+    ensure.assert_not_awaited()

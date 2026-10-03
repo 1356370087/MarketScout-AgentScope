@@ -137,6 +137,18 @@ class FakeStore:
         self.decay = decay
 
 
+class UnfilteredListingStore(FakeStore):
+    """Simulate an external store that ignores requested tenant filters."""
+
+    async def list(
+        self,
+        user_id: str,
+        filters: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        return list(self.items)
+
+
 def observation(
     memory_id: str,
     *,
@@ -192,14 +204,61 @@ def test_open_conflicts_fail_closed_during_ranking() -> None:
 
 def test_v2_listing_enforces_user_project_and_app_boundaries() -> None:
     config = memory_config()
-    store = FakeStore([
+    store = UnfilteredListingStore([
         observation("good"),
         observation("wrong-app", app_id="other.v2"),
         observation("wrong-project", project_id="project-b"),
+        observation("wrong-user").model_copy(update={"user_id": "user-b"}),
+        observation("missing-user"),
     ])
+    store.items[-1]["metadata"].pop("user_id")
     records = asyncio.run(list_v2_records(store, "user-a", config))
     assert [record.memory_id for record in records] == ["good"]
     assert v2_filters(config)["app_id"] == "research-app.v2"
+
+
+def test_unfiltered_response_cannot_expose_or_modify_another_users_memory() -> None:
+    config = memory_config()
+    owned = observation("owned", content="User prefers English reports")
+    foreign = observation(
+        "foreign",
+        content="Another user prefers Japanese reports",
+    ).model_copy(update={"user_id": "user-b"})
+    store = UnfilteredListingStore([owned, foreign])
+    candidate = MemoryCandidate(
+        category=MemoryCategory.USER_RESEARCH_PREFERENCE,
+        content="User now prefers Chinese reports",
+        confidence=0.98,
+    )
+
+    async def decide(
+        _candidate: MemoryCandidate,
+        existing: list[MemoryRecord],
+    ) -> MemoryConflictDecisionModel:
+        assert [(record.memory_id, record.user_id) for record in existing] == [
+            ("owned", "user-a"),
+        ]
+        return MemoryConflictDecisionModel(
+            action="SUPERSEDE",
+            target_memory_ids=["owned", "foreign"],
+        )
+
+    action, memory_id = asyncio.run(write_observation(
+        store,
+        candidate,
+        user_id="user-a",
+        config=config,
+        run_id="run-response-boundary",
+        decide=decide,
+    ))
+    assert action == "SUPERSEDE"
+    assert memory_id == "memory-3"
+    assert store.updates == ["owned"]
+    assert MemoryRecord.from_mem0(store.items[0]).status == MemoryStatus.SUPERSEDED
+    assert store.items[1] == raw_record(foreign)
+    new_record = MemoryRecord.from_mem0(store.items[2])
+    assert new_record.user_id == "user-a"
+    assert new_record.supersedes_ids == ["owned"]
 
 
 def test_user_correction_supersedes_old_record() -> None:

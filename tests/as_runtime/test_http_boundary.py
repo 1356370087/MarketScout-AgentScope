@@ -287,12 +287,12 @@ async def test_native_usage_archive_dispatch_never_reconciles(tmp_path, monkeypa
     monkeypatch.setattr(run_usage, "_load_run_usage_response", forbidden)
     monkeypatch.setattr(run_usage, "_reconcile_litellm_usage", forbidden)
     before = hashes(tmp_path)
-    usage = await server.get_run_usage_accounting("old", principal)
+    usage = await server._usage_routes.get_run_usage_accounting("old", principal)
     assert usage["accounting_status"] == "unavailable"
     assert usage["status"] == "completed"
     assert not (tmp_path / "missing").exists()
     assert hashes(tmp_path) == before
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as denied:
-        await server.get_run_usage_accounting("old", research_principal("bob"))
+        await server._usage_routes.get_run_usage_accounting("old", research_principal("bob"))
     assert denied.value.status_code == 404

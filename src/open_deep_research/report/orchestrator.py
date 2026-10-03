@@ -1217,6 +1217,44 @@ async def finalize_report(
     return update
 
 
+async def _publish_report_progress(
+    config: RunnableConfig,
+    event_type: str,
+    draft: ReportDraft,
+    *,
+    attempt: int,
+    revision_count: int,
+    review: ReportReview | None = None,
+) -> None:
+    """Publish content-free progress through the bound native event ledger."""
+    publisher = config.get("_event_publisher")
+    if publisher is None:
+        return
+    payload = {
+        "status": (
+            review.status if review is not None
+            else "completed" if event_type.endswith(".completed")
+            else "revising" if event_type.startswith("report.revision.")
+            else "running"
+        ),
+        "attempt": attempt,
+        "revision_count": revision_count,
+        "draft_sha256": draft.sha256,
+    }
+    if review is not None:
+        payload.update(
+            decision=review.decision,
+            issue_count=review.issue_count,
+            critical_issue_count=review.critical_issue_count,
+        )
+    await publisher.publish(
+        event_type,
+        stage="finalizing",
+        payload=payload,
+        dedupe_key=f"{event_type}:{attempt}:{revision_count}:{draft.sha256}",
+    )
+
+
 async def build_report(state: dict, config: RunnableConfig) -> dict:
     """Build a final report, optionally running the Reviewer -> Revisor loop.
 
@@ -1230,6 +1268,9 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         return await _build_report_legacy(state, config)
 
     draft = await build_report_draft(state, config)
+    await _publish_report_progress(
+        config, "report.review.started", draft, attempt=1, revision_count=0
+    )
     review = await review_report(draft, state, config, attempt=1)
     history: list[dict[str, Any]] = [review.model_dump(mode="json")]
     revision_count = 0
@@ -1253,6 +1294,14 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         and not getattr(review, "skipped", False)
         and revision_count < max_revisions
     ):
+        await _publish_report_progress(
+            config, "report.review.completed", draft, attempt=len(history),
+            revision_count=revision_count, review=review,
+        )
+        await _publish_report_progress(
+            config, "report.revision.started", draft,
+            attempt=revision_count + 1, revision_count=revision_count,
+        )
         revised_markdown = await revise_report(draft, review, state, config)
         revision_count += 1
         draft = draft.model_copy(
@@ -1264,6 +1313,14 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
                     revised_markdown.encode("utf-8", errors="replace")
                 ).hexdigest(),
             }
+        )
+        await _publish_report_progress(
+            config, "report.revision.completed", draft,
+            attempt=revision_count, revision_count=revision_count,
+        )
+        await _publish_report_progress(
+            config, "report.review.started", draft,
+            attempt=revision_count + 1, revision_count=revision_count,
         )
         review = await review_report(
             draft,
@@ -1293,6 +1350,10 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
                 ]
             )
         )
+        await _publish_report_progress(
+            config, "report.review.completed", draft, attempt=len(history),
+            revision_count=revision_count, review=review,
+        )
         draft = await recover_report_draft(
             draft,
             state,
@@ -1300,6 +1361,10 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             reason_codes=reason_codes,
         )
         recovered = True
+        await _publish_report_progress(
+            config, "report.review.started", draft, attempt=len(history) + 1,
+            revision_count=revision_count,
+        )
         review = await review_report(
             draft,
             state,
@@ -1308,29 +1373,35 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         )
         history.append(review.model_dump(mode="json"))
 
-    if review.decision == "fail":
-        if recovered:
-            raise RuntimeError("insufficient_evidence")
-        raise RuntimeError("report_review_failed")
-    if review.status in {"failed", "error"} and not getattr(review, "skipped", False):
-        raise RuntimeError("report_review_failed")
-    if review.status == "skipped" or getattr(review, "skipped", False):
-        # A skipped review is publishable only when the draft itself passed the
-        # deterministic safety checks.  ``fail_open`` cannot waive an
-        # unallowlisted URL, missing evidence, or malformed review protocol.
-        if review.hard_failure:
-            raise RuntimeError("report_review_failed")
-        review.decision = "pass"
-    elif review.decision == "revise":
-        if review.hard_failure:
+    try:
+        if review.decision == "fail":
             if recovered:
                 raise RuntimeError("insufficient_evidence")
-            raise RuntimeError("report_review_revision_limit_exceeded")
-        review.status = "degraded"
-        review.degraded = True
-    if recovered:
-        review.status = "degraded"
-        review.degraded = True
+            raise RuntimeError("report_review_failed")
+        if review.status in {"failed", "error"} and not getattr(review, "skipped", False):
+            raise RuntimeError("report_review_failed")
+        if review.status == "skipped" or getattr(review, "skipped", False):
+            # A skipped review is publishable only when the draft itself passed the
+            # deterministic safety checks.  ``fail_open`` cannot waive an
+            # unallowlisted URL, missing evidence, or malformed review protocol.
+            if review.hard_failure:
+                raise RuntimeError("report_review_failed")
+            review.decision = "pass"
+        elif review.decision == "revise":
+            if review.hard_failure:
+                if recovered:
+                    raise RuntimeError("insufficient_evidence")
+                raise RuntimeError("report_review_revision_limit_exceeded")
+            review.status = "degraded"
+            review.degraded = True
+        if recovered:
+            review.status = "degraded"
+            review.degraded = True
+    finally:
+        await _publish_report_progress(
+            config, "report.review.completed", draft, attempt=len(history),
+            revision_count=revision_count, review=review,
+        )
     history[-1] = review.model_dump(mode="json")
 
     update = await finalize_report(draft, state, config)

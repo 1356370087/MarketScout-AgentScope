@@ -1,0 +1,4 @@
+.shell-top-actions .shell-inspector-trigger { display: inline-grid; }
+.page-header .heading-actions { flex-shrink: 0; }
+.heading-actions > :is(button, a) { white-space: nowrap; }
+@media (max-width: 560px) { .page-header { flex-wrap: wrap; } .page-header > div:first-child { flex-basis: 100%; } }

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { PasswordField } from "./identity-components";
 import { AuthShell } from "@/components/auth-shell";
 import { authFetch } from "@/lib/auth";
 
@@ -20,8 +21,8 @@ export default function RegisterPage() {
     {message ? <div className="auth-success"><b>申请已接收</b><p>{message}</p><Link className="secondary" href="/login">返回登录</Link></div> : <form action={submit} className="auth-form">
       <div className="field"><label htmlFor="display_name">显示名称</label><input id="display_name" name="display_name" maxLength={160} autoComplete="name" /></div>
       <div className="field"><label htmlFor="email">工作邮箱</label><input id="email" name="email" type="email" required autoComplete="email" /></div>
-      <div className="field"><label htmlFor="password">密码</label><input id="password" name="password" type="password" minLength={15} maxLength={128} required autoComplete="new-password" /><small>15–128 个 Unicode 字符，可使用密码管理器生成的长口令。</small></div>
-      <div className="field"><label htmlFor="confirm">确认密码</label><input id="confirm" name="confirm" type="password" minLength={15} maxLength={128} required autoComplete="new-password" /></div>
+      <PasswordField label="密码" id="password" name="password" minLength={15} maxLength={128} required autoComplete="new-password" hint="15–128 个字符，可使用密码管理器生成的长口令。" />
+      <PasswordField label="确认密码" id="confirm" name="confirm" minLength={15} maxLength={128} required autoComplete="new-password" />
       {error && <p className="form-alert error" role="alert">{error}</p>}<button className="primary auth-submit">提交申请</button>
     </form>}
   </AuthShell>;

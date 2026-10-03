@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import secrets
 import time
@@ -12,9 +13,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from open_deep_research.config_types import RuntimeConfig
 from open_deep_research.sandbox.wire import (
     GatewayCatalogToolV1,
     GatewayToolCatalogOutcomeV1,
@@ -133,13 +134,21 @@ async def load_gateway_catalog_tools(
         "X-Sandbox-Nonce": secrets.token_urlsafe(24),
     }
     async with httpx.AsyncClient(base_url=gateway_url, timeout=60) as client:
-        response = await client.post(
-            "/v1/tools/catalog",
-            content=request.model_dump_json(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        outcome = GatewayToolCatalogOutcomeV1.model_validate(response.json())
+        while True:
+            # Discovery may itself need a human network grant. Keep it pending
+            # before binding the Agent, with fresh replay headers on each RPC.
+            headers["X-Sandbox-Timestamp"] = str(time.time())
+            headers["X-Sandbox-Nonce"] = secrets.token_urlsafe(24)
+            response = await client.post(
+                "/v1/tools/catalog",
+                content=request.model_dump_json(),
+                headers=headers,
+            )
+            response.raise_for_status()
+            outcome = GatewayToolCatalogOutcomeV1.model_validate(response.json())
+            if outcome.status != "approval_required":
+                break
+            await asyncio.sleep(0.25)
     return [
         GatewayCatalogTool(item)
         for item in outcome.tools

@@ -288,6 +288,7 @@ async def list_v2_records(
             continue
         if (
             record.schema_version == MEMORY_SCHEMA_VERSION
+            and record.user_id == user_id
             and record.app_id == advanced_app_id(config)
             and record.project_id == config.memory_project_id
         ):

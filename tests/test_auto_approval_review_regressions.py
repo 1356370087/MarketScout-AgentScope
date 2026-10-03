@@ -20,7 +20,7 @@ from open_deep_research.sandbox.egress_ledger_store import RunEgressModeStore
 from open_deep_research.sandbox.policy import egress_target_from_url
 from open_deep_research.sandbox.schema import NetworkPolicy, domain_matches
 from open_deep_research.sandbox.wire import GatewayToolRequestV1
-from open_deep_research.tools.base import ToolExecutionZone
+from open_deep_research.tools.base import ToolExecutionZone, ToolOrigin
 from tests.test_egress_gateway_wiring import (
     FakeInternal,
     _precheck,
@@ -46,6 +46,7 @@ async def test_authorization_precedes_dns(monkeypatch, nested, verdict):
     url = "https://synthetic-confidential-marker.receiver.example/document"
     tool = SimpleNamespace(
         name="web_research" if nested else "fetch_url", effect="read_only",
+        origin=ToolOrigin.SEARCH,
         execution_zone=ToolExecutionZone.GATEWAY,
         egress_urls=lambda args: [] if nested else [url],
     )

@@ -5,8 +5,10 @@ import sys
 
 import httpx
 import pytest
+from agentscope.message import UserMsg
 
 from open_deep_research.agentscope_runtime.sandbox_worker import execute_worker
+from open_deep_research.quality.contract import build_research_coverage_contract
 from open_deep_research.sandbox.wire import SandboxTaskPayloadV1
 
 
@@ -119,7 +121,9 @@ async def test_worker_native_model_loop_and_gateway_tool(monkeypatch):
         run_id="r",
         task_id="t",
         research_topic="topic",
-        researcher_state={},
+        researcher_state={"coverage_contract": build_research_coverage_contract(
+            [UserMsg("user", "topic")]
+        ).model_dump(mode="json")},
         runtime_config={},
         profile_id="p",
         policy_digest="d",

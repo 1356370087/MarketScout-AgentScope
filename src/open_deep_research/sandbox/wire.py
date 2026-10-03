@@ -373,5 +373,7 @@ class GatewayToolCatalogOutcomeV1(BaseModel):
     """Authoritative schema catalog for one role/run/fence."""
 
     model_config = ConfigDict(extra="forbid")
+    status: Literal["completed", "approval_required"] = "completed"
+    approval_id: str | None = None
 
     tools: list[GatewayCatalogToolV1] = Field(default_factory=list)

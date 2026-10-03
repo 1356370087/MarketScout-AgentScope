@@ -47,6 +47,7 @@ from .models import (
     ReportReview,
     ReportReviewIssue,
 )
+from .references import numbered_source_urls
 from .runtime import RunnableConfig, native_report, require_report_runtime, NativeReportRuntimeMissing
 
 _URL_RE = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
@@ -700,8 +701,9 @@ def _safe_candidate_citations(
     allowed_references: set[str],
     issues: list[ReportReviewIssue],
     *,
+    numbered_references: Mapping[str, str],
+    protocol_errors: list[str],
     evidence_references: Mapping[str, str] | None = None,
-    reference_order: Sequence[str] = (),
 ) -> list[ReportCitationReview]:
     """Validate citation audit IDs and targets against accepted evidence.
 
@@ -723,6 +725,7 @@ def _safe_candidate_citations(
             citation = ReportCitationReview.model_validate(dict(raw))
         except ValidationError:
             continue
+        issue_count = len(issues)
         ids = list(dict.fromkeys(str(item) for item in citation.evidence_ids if str(item).strip()))
         if not ids:
             issues.append(
@@ -749,20 +752,40 @@ def _safe_candidate_citations(
             ids = [item for item in ids if item in valid_evidence_ids]
         target = str(citation.citation_target or "").strip()
         identity = _canonical_reference(target)
-        number_match = re.fullmatch(r"\[(\d{1,3})\]", target)
+        identities = [identity] if identity else []
+        number_match = re.fullmatch(
+            r"(?P<markers>(?:\[\d{1,3}\]\s*)+)(?P<url>https?://\S+)?",
+            target,
+            flags=re.IGNORECASE,
+        )
         if number_match:
-            number = int(number_match.group(1))
-            if number < 1 or number > len(reference_order):
-                issues.append(
-                    _issue(
-                        "citation_correctness",
-                        "critical",
-                        f"Citation marker {target} has no corresponding accepted source.",
-                        citation_target=target,
+            provided_url = number_match.group("url")
+            provided_identity = _canonical_reference(provided_url) if provided_url else ""
+            identities = [provided_identity] if provided_identity else []
+            for number in _NUMBERED_CITATION_RE.findall(number_match.group("markers")):
+                identity = numbered_references.get(str(int(number)), "")
+                if not identity:
+                    issues.append(
+                        _issue(
+                            "citation_correctness",
+                            "critical",
+                            f"Citation marker [{number}] has no corresponding accepted source.",
+                            citation_target=target,
+                        )
                     )
-                )
-            else:
-                identity = reference_order[number - 1]
+                    citation.supported = False
+                    continue
+                identities.append(identity)
+                if provided_url and provided_identity != identity:
+                    issues.append(
+                        _issue(
+                            "citation_correctness",
+                            "critical",
+                            "Citation marker does not match the supplied URL.",
+                            citation_target=target,
+                        )
+                    )
+                    citation.supported = False
         elif not identity:
             evidence_marker = re.fullmatch(
                 r"\[(EV-[A-Za-z0-9_.:-]{1,199})\]", target, flags=re.IGNORECASE
@@ -780,50 +803,49 @@ def _safe_candidate_citations(
                         )
                     )
                 identity = evidence_references.get(marker_id, "")
-            elif target:
-                issues.append(
-                    _issue(
-                        "citation_correctness",
-                        "critical",
-                        "Citation target is not a valid URL, local document link, or citation number.",
-                        citation_target=target,
-                    )
-                )
+                identities = [identity] if identity else []
             else:
                 issues.append(
                     _issue(
                         "citation_correctness",
                         "critical",
-                        "Citation audit row omitted citation_target.",
-                        revision_instruction="Provide the exact accepted URL or numbered citation target.",
+                        "Citation target is not a valid URL, local document link, or citation number."
+                        if target else "Citation audit row omitted citation_target.",
+                        citation_target=target or None,
+                        revision_instruction="Provide an exact accepted URL or numbered citation target.",
                     )
                 )
-        if identity and identity not in allowed_references:
-            issues.append(
-                _issue(
-                    "citation_correctness",
-                    "critical",
-                    "Citation target is outside the accepted source allowlist.",
-                    citation_target=target,
-                )
-            )
-            citation.supported = False
+                citation.supported = False
         bound_references = {
             evidence_references[item]
             for item in ids
             if evidence_references.get(item)
         }
-        if identity and bound_references and identity not in bound_references:
-            issues.append(
-                _issue(
-                    "citation_correctness",
-                    "critical",
-                    "Citation target does not match the source attached to its evidence binding.",
-                    citation_target=target,
-                    evidence_ids=ids,
+        for identity in dict.fromkeys(identities):
+            if identity not in allowed_references:
+                issues.append(
+                    _issue(
+                        "citation_correctness",
+                        "critical",
+                        "Citation target is outside the accepted source allowlist.",
+                        citation_target=target,
+                    )
                 )
-            )
-            citation.supported = False
+                citation.supported = False
+            if identity not in bound_references:
+                issues.append(
+                    _issue(
+                        "citation_correctness",
+                        "critical",
+                        "Citation target does not match the source attached to its evidence binding.",
+                        citation_target=target,
+                        evidence_ids=ids,
+                    )
+                )
+                citation.supported = False
+        if len(issues) > issue_count:
+            # Repair audit metadata, never rewrite the draft to match a bad audit.
+            protocol_errors.append("review_protocol_invalid")
         citation.evidence_ids = ids
         result.append(citation)
     return result
@@ -834,7 +856,7 @@ def _deterministic_source_checks(
     draft: ReportDraft,
     records: Sequence[Mapping[str, Any]],
     issues: list[ReportReviewIssue],
-) -> tuple[set[str], set[str], int, list[str], dict[str, str]]:
+) -> tuple[set[str], set[str], int, dict[str, str], dict[str, str]]:
     """Check all report URLs, fenced code URLs, and numeric citation markers."""
     allowed_references: set[str] = {
         identity
@@ -863,16 +885,15 @@ def _deterministic_source_checks(
         identity = _canonical_reference(_source_url(record))
         if evidence_id and identity:
             evidence_references.setdefault(evidence_id, identity)
-    reference_order: list[str] = []
-    for source in draft.sources:
-        identity = _canonical_reference(source.url)
-        if identity in accepted_source_references and identity not in reference_order:
-            reference_order.append(identity)
-    if not reference_order:
-        for record in records:
-            identity = _canonical_reference(_source_url(record))
-            if identity and identity not in reference_order:
-                reference_order.append(identity)
+    prose = "".join(region for code, region in _markdown_regions(markdown) if not code)
+    try:
+        numbered_references = {
+            number: _canonical_reference(url)
+            for number, url in numbered_source_urls(prose).items()
+        }
+    except ValueError:
+        # The shared citation check below records ambiguous source numbers.
+        numbered_references = {}
     source_count = sum(
         _canonical_reference(source.url) in accepted_source_references
         for source in draft.sources
@@ -892,7 +913,7 @@ def _deterministic_source_checks(
         allowed_references,
         valid_ids,
         source_count,
-        reference_order,
+        numbered_references,
         evidence_references,
     )
 
@@ -954,7 +975,7 @@ def _normalize_candidate(
         allowed_references,
         valid_evidence_ids,
         _source_count,
-        reference_order,
+        numbered_references,
         evidence_references,
     ) = _deterministic_source_checks(
         draft.markdown,
@@ -1005,7 +1026,8 @@ def _normalize_candidate(
             allowed_references,
             issues,
             evidence_references=evidence_references,
-            reference_order=reference_order,
+            numbered_references=numbered_references,
+            protocol_errors=deterministic_failures,
         )
         if model_error is None
         else []

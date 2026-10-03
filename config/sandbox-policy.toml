@@ -23,6 +23,7 @@ mode = "gateway-only"
 allow_domains = []
 deny_domains = []
 allow_ports = [80, 443]
+# HTTP 代理逐请求校验方法；默认禁止 CONNECT。显式加入 CONNECT 会授权透明 TCP/TLS 隧道，无法限制隧道内的 HTTP 方法。
 allow_http_methods = ["GET", "HEAD", "OPTIONS"]
 allow_private_destinations = false
 # Unknown-target baseline (narrowest to widest):
@@ -87,6 +88,7 @@ mode = "allowlist"
 allow_domains = []
 deny_domains = []
 allow_ports = [80, 443]
+# Shell 的 HTTPS 代理需要显式加入 CONNECT；这会授权透明 TCP/TLS 隧道，无法保证仅使用 GET/HEAD/OPTIONS。
 allow_http_methods = ["GET", "HEAD", "OPTIONS"]
 allow_private_destinations = false
 unknown_target = "auto"

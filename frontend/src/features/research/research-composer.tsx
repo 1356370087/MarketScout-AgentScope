@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
   FileText,
@@ -18,9 +18,10 @@ import {
   X,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { ChoiceGroup, SurfaceDialog, StatusBadge } from "@/components/ui/workspace";
+import { UploadQueue, useDocumentUploads } from "@/features/documents/document-upload";
 import { Button } from "@/components/ui/button";
 import { researchApi } from "@/lib/api";
 import { loadPublicationTheme, loadSettings } from "@/lib/settings";
@@ -66,11 +67,11 @@ function DocumentPicker({ documents, selected, onToggle }: { documents: Research
 
 export function ResearchComposer() {
   const router = useRouter();
-  const queryClient = useQueryClient();
+  const searchParams = useSearchParams();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SourceMode>("web");
-  const [selected, setSelected] = useState<string[]>([]);
+  const [query, setQuery] = useState(searchParams.get("query") ?? "");
+  const [mode, setMode] = useState<SourceMode>(searchParams.has("document") ? "documents" : "web");
+  const [selected, setSelected] = useState<string[]>(() => [...new Set(searchParams.getAll("document").filter(Boolean))]);
   const [urls, setUrls] = useState("");
   const [domains, setDomains] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -90,15 +91,12 @@ export function ResearchComposer() {
     retry: false,
     refetchInterval: (state) => state.state.data?.items.some((item) => ["queued", "processing"].includes(item.status)) ? 2_000 : false,
   });
-  const upload = useMutation({
-    mutationFn: researchApi.uploadDocument,
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: ["documents"] });
-      if (result.document.status === "ready") setSelected((current) => [...new Set([...current, result.document.id])]);
-    },
+  const upload = useDocumentUploads((document) => {
+    if (document.status === "ready") setSelected((current) => [...new Set([...current, document.id])]);
   });
+  const selectedDocumentsReady = !selected.length || (docsEnabled && documents.isSuccess && selected.every((id) => documents.data.items.some((document) => document.id === id && document.status === "ready")));
   const refs = buildSourceRefs(mode, selected, urls, domains);
-  const validSources = sourceSelectionIsValid(mode, refs);
+  const validSources = sourceSelectionIsValid(mode, refs) && selectedDocumentsReady && (mode !== "documents" && mode !== "hybrid" || docsEnabled);
   const selection = useMemo<SourceSelection>(() => ({ mode, sources: refs }), [mode, refs]);
   const activeSettings = loadSettings(capabilities.data?.defaults);
   const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
@@ -110,7 +108,7 @@ export function ResearchComposer() {
     setMode(value);
     if (value === "web") setSelected([]);
   };
-  const addFiles = (files: FileList | File[]) => Array.from(files).forEach((file) => upload.mutate(file));
+  const addFiles = (files: FileList | File[]) => { if (docsEnabled) upload.addFiles(files); if (fileRef.current) fileRef.current.value = ""; };
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -142,7 +140,7 @@ export function ResearchComposer() {
       <p className="empty-note">Lead 创建团队，启动成员时可单独调整。</p>
     </SurfaceDialog></div>
     {!query && <div className="composer-template-row" aria-label="竞品分析模板">
-      {promptTemplates.map(({ label, icon: Icon, prompt }) => <button key={label} type="button" onClick={() => setQuery(prompt)}><Icon size={14} /><span>{label}</span></button>)}
+      {promptTemplates.map(({ label, icon: Icon, prompt }) => <button key={label} type="button" onClick={() => setQuery(prompt)}><Icon size={16} /><span>{label}<small>{prompt.split("，")[0]}</small></span></button>)}
     </div>}
     <textarea
       aria-label="研究问题"
@@ -172,19 +170,22 @@ export function ResearchComposer() {
         onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}
       >
         <UploadCloud size={17} />
-        <span>{upload.isPending ? "正在上传并校验…" : "拖入文件，或从企业资料库选择"}</span>
-        <button type="button" title="上传文件" onClick={() => fileRef.current?.click()}><Paperclip size={15} /></button>
+        <span>{docsEnabled ? "拖入文件，或从企业资料库选择" : "当前服务尚未开放资料上传"}</span>
+        <button type="button" title="上传文件" disabled={!docsEnabled} onClick={() => fileRef.current?.click()}><Paperclip size={15} /></button>
         <input ref={fileRef} hidden type="file" multiple accept=".pdf,.docx,.xlsx,.pptx,.csv,.md,.txt,.png,.jpg,.jpeg,.tif,.tiff" onChange={(event) => event.target.files && addFiles(event.target.files)} />
       </div>
-      {upload.isError && <p className="source-error">{upload.error.message}</p>}
+      <UploadQueue items={upload.queue} />
       <SurfaceDialog title="选择研究资料" description="只有已完成处理的资料可以加入研究。" open={pickerOpen} onOpenChange={setPickerOpen} trigger={<button type="button" className="secondary composer-picker-trigger" disabled={!docsEnabled}><FileText size={15} /> 从资料库选择 · 已选 {selected.length} 份</button>}>
         <label className="ui-search"><input aria-label="搜索研究资料" placeholder="搜索文件名…" value={docSearch} onChange={(event) => setDocSearch(event.target.value)} /></label>
         {documents.isLoading ? <p className="empty-note"><LoaderCircle className="spin" size={13} /> 正在读取资料库…</p> : documents.isError ? <p role="alert">资料库读取失败，请刷新重试。</p> : <DocumentPicker documents={(documents.data?.items ?? []).filter((document) => document.filename.toLocaleLowerCase().includes(docSearch.toLocaleLowerCase()))} selected={selected} onToggle={(id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} />}
         <div className="ui-actions"><button type="button" className="primary" onClick={() => setPickerOpen(false)}>完成选择</button></div>
       </SurfaceDialog>
+      <div className="composer-selected-docs" aria-label="已选研究资料">{selected.map((id) => <span key={id}><FileText size={13} /><b>{documents.data?.items.find((document) => document.id === id)?.filename ?? (documents.isLoading ? "读取资料中…" : "资料不可用")}</b><button type="button" aria-label={`移除 ${documents.data?.items.find((document) => document.id === id)?.filename ?? id}`} onClick={() => setSelected((current) => current.filter((item) => item !== id))}><X size={13} /></button></span>)}</div>
+      {!selectedDocumentsReady && <p className="source-error" role="status">正在核对已选资料，尚未就绪或不可访问的资料需移除后继续。</p>}
       <div className="source-config-footer"><span>{selected.length} 个文件已选择</span><button type="button" onClick={() => void documents.refetch()} title="刷新状态"><RefreshCw size={13} /></button>{selected.length > 0 && <button type="button" onClick={() => setSelected([])} title="清空已选文件"><X size={13} /></button>}</div>
     </div>}
     {(createError || (!validSources && mode !== "web")) && <p className="composer-error" role="alert">{createError || "请选择符合当前模式的研究来源。"}</p>}
+    <dl className="composer-config-summary" aria-label="本次研究配置"><div><dt>研究方式</dt><dd>{{ sync: "同步研究", collaborator: "异步委派", teams: "团队协作" }[selectedResearchMode]}</dd></div><div><dt>研究模型</dt><dd>{String(activeSettings.research_model ?? "服务端默认")}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}{selected.length ? ` · ${selected.length} 份资料` : ""}</dd></div></dl>
     <div className="composer-footer">
       <div className="composer-context">
         <span className="source-ready"><i />{sourceLabel}</span>

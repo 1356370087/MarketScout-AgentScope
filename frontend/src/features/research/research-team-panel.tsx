@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { EmptyState, SearchSelect, Tabs } from "@/components/ui/workspace";
+import { Disclosure, MetricStrip, StructuredContent, LoadingSkeleton } from "@/components/ui/insight";
+import { TeamBoard } from "./agents/team-board";
+import { StatusBadge } from "@/components/ui/workspace";
 import { apiFetch } from "@/lib/api";
 
 type Team = {
@@ -18,7 +21,7 @@ type Team = {
   proposals?: { event_id: string; member_id: string; status: string; task_id?: string; content: { subject: string; description: string; rejection_reason?: string } }[];
 };
 
-export function ResearchTeamPanel({ runId, revision, terminal }: { runId: string; revision: number; terminal: boolean }) {
+export function ResearchTeamPanel({ runId, revision, terminal, onTask, activityTaskIds = [] }: { runId: string; revision: number; terminal: boolean; onTask?: (taskId: string) => void; activityTaskIds?: string[] }) {
   const [tab, setTab] = useState("members");
   const [team, setTeam] = useState<Team>();
   const [error, setError] = useState("");
@@ -45,7 +48,6 @@ export function ResearchTeamPanel({ runId, revision, terminal }: { runId: string
   const name = (id: string | null) => team?.members?.find((member) => member.member_id === id)?.name || id || "未领取";
   const labels: Record<string, string> = { pending: "等待中", running: "执行中", waiting_for_confirmation: "等待确认", completed: "已完成", failed: "失败", cancelled: "已取消", timed_out: "已超时", accepted: "已接纳", accepted_with_caveats: "附保留意见", rejected: "需补证", active: "协作中", closed: "已关闭" };
   Object.assign(labels, { direct: "直接执行", plan_approval: "先规划再审批", planning: "规划中", awaiting_plan_review: "等待 Lead 审核", awaiting_human: "需要人工介入", executing: "研究执行中", assessing: "质量评估", idle: "空闲", stopping: "正在退出", approved: "已批准", superseded: "已失效", delivered: "已送达", applied: "已应用" });
-  const cell = { padding: "10px 12px", verticalAlign: "top", borderBottom: "1px solid var(--border, #e5e5e5)" };
   async function send() {
     if (!message.trim()) return;
     setSending(true);
@@ -71,18 +73,13 @@ export function ResearchTeamPanel({ runId, revision, terminal }: { runId: string
     <div className="panel-header"><h2>{team?.name || "研究团队"}</h2><span>{team?.mode === "teams" ? "Agent Teams" : "Collaborator"} · {terminal ? "已结束" : labels[team?.status || ""] || "等待 Lead 创建"}</span></div>
     <div className="panel-body" style={{ display: "grid", gap: 16 }}>
       {error && <p role="alert">团队状态暂不可用：{error}</p>}
-      {team?.mode === "teams" && team.metrics && <p>领取冲突 {team.metrics.claim_conflicts} 次 · 消息积压 {team.metrics.message_backlog} 条 · 成员恢复 {team.metrics.member_recoveries} 次 · 平均计划审核 {team.metrics.plan_review_seconds == null ? "暂无" : `${Number(team.metrics.plan_review_seconds).toFixed(1)} 秒`}</p>}
+      {team?.mode === "teams" && team.metrics && <Disclosure title="协作运行指标"><MetricStrip label="协作指标" items={[
+        { label: "领取冲突", value: team.metrics.claim_conflicts }, { label: "消息积压", value: team.metrics.message_backlog },
+        { label: "成员恢复", value: team.metrics.member_recoveries }, { label: "平均计划审核", value: team.metrics.plan_review_seconds == null ? "未提供" : `${team.metrics.plan_review_seconds.toFixed(1)} 秒` },
+      ]} /></Disclosure>}
       <Tabs label="团队详情" value={tab} onChange={setTab} items={[{ value: "members", label: "成员与任务" }, { value: "plans", label: "计划" }, { value: "quality", label: "质量记录" }, { value: "messages", label: "消息" }]}>
-        {!team && !error && <EmptyState title="正在读取团队状态" />}
-        {tab === "members" && <>      <div className="task-grid">{team?.members?.map((member) => <div className="task-card" key={member.member_id}>
-        <h3>{member.name}</h3><p>{member.purpose || "团队协调者"}</p>
-        {member.member_id !== "lead" && <p>{labels[member.execution_mode || "direct"]} · {member.mode_override ? "成员单独设置" : "继承团队默认"}</p>}
-        <small>{labels[team.tasks?.find((task) => task.owner === member.member_id && ["running", "waiting_for_confirmation"].includes(task.status))?.phase || member.status] || member.status}</small>
-      </div>)}</div>
-      {!!team?.tasks?.length && <div style={{ overflowX: "auto" }}><table style={{ width: "100%", minWidth: 640, textAlign: "left", borderCollapse: "collapse", fontSize: 14 }}><thead><tr><th style={cell}>任务</th><th style={cell}>负责人</th><th style={cell}>状态</th><th style={cell}>证据准入</th><th style={cell}>依赖</th></tr></thead><tbody>
-        {team.tasks.map((task) => <tr key={task.task_id}><td style={cell}>{task.display_title || task.task_id}</td><td style={cell}>{name(task.owner)}</td><td style={cell}>{labels[task.status] || task.status}{task.phase && <small><br />{labels[task.phase] || task.phase}</small>}</td><td style={cell}>{labels[task.admission_status] || task.admission_status}</td><td style={cell}>前置：{task.blocked_by.map((id) => team.tasks.find((item) => item.task_id === id)?.display_title || id).join("、") || "无"}<br />仍阻塞：{task.unresolvedBlockedBy?.join("、") || "无"}<br />阻塞下游：{task.blocks?.join("、") || "无"}</td></tr>)}
-      </tbody></table></div>}
-</>}
+        {!team && !error && <LoadingSkeleton label="正在读取团队状态" />}
+        {tab === "members" && team && <><TeamBoard tasks={team.tasks} members={team.members} onTask={onTask} activityTaskIds={activityTaskIds} />{!team.tasks.length && <EmptyState title="等待研究任务分配" description="任务开始后，会按真实执行状态与交接情况分组。" />}</>}
         {tab === "plans" && <>      {!terminal && team?.tasks.filter((task) => task.phase === "awaiting_human").map((task) => <form key={task.task_id} onSubmit={(event) => { event.preventDefault(); void revise(task); }}>
         <p>{task.display_title}：计划已达到自动修订上限。请补充指导；成员重新规划后仍须 Lead 审核。</p>
         <textarea aria-label={`计划修订指导 ${task.task_id}`} value={planFeedback[task.task_id] || ""} maxLength={12000}
@@ -90,9 +87,9 @@ export function ResearchTeamPanel({ runId, revision, terminal }: { runId: string
         <button disabled={sending || !planFeedback[task.task_id]?.trim()}>允许继续修订计划</button>
       </form>)}
       {!!team?.plans?.length && <section className="team-records"><h3>成员计划与 Lead 审核</h3>{team.plans.map((plan) => <article key={`${plan.task_id}:${plan.version}`}>
-        <h3>{plan.task_id} · 计划 v{plan.version} · {labels[plan.status] || plan.status}</h3>
+        <h3>{team.tasks.find((task) => task.task_id === plan.task_id)?.display_title || plan.task_id} · 计划 v{plan.version}</h3><StatusBadge status={plan.status} label={labels[plan.status] || plan.status} />
         <p>成员：{name(plan.owner)}；审核：{plan.reviewed_by || "待 Lead 审核"}</p>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(plan.content, null, 2)}</pre>
+        <StructuredContent value={plan.content} />
         {plan.feedback && <p>审核意见：{plan.feedback}</p>}
       </article>)}</section>}
 {!team?.plans?.length && <EmptyState title="尚无成员计划" description="计划与审核记录会显示在这里。" />}</>}
@@ -111,7 +108,7 @@ export function ResearchTeamPanel({ runId, revision, terminal }: { runId: string
         </article>)}
       </section>
 </>}
-        {tab === "messages" && <>      <section className="team-records"><h3>团队消息（最近 {team?.messages?.length || 0} 条）</h3>{team?.messages?.map((item) => <p key={item.event_id}><b>{name(item.sender)} → {item.recipients.map(name).join("、")}</b> · {item.delivery_status === "accepted" ? "已受理" : labels[item.delivery_status || ""] || "已记录"}<br />{typeof item.payload.message === "object" ? JSON.stringify(item.payload.message) : item.payload.message ?? item.payload.content}</p>)}</section>
+        {tab === "messages" && <>      <section className="team-message-list" aria-label="团队消息"><h3>团队消息（最近 {team?.messages?.length || 0} 条）</h3>{team?.messages?.map((item) => <article className="team-message" key={item.event_id}><header><b>{name(item.sender)} → {item.recipients.map(name).join("、")}</b><span>{item.delivery_status === "accepted" ? "已受理" : labels[item.delivery_status || ""] || "已记录"}</span></header><StructuredContent value={item.payload.message ?? item.payload.content} /></article>)}{!team?.messages?.length && <EmptyState title="尚无协作消息" description="指导与交接消息会保留送达状态。" />}</section>
       {!terminal && team?.status === "active" && <form onSubmit={(event) => { event.preventDefault(); void send(); }} style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
         <SearchSelect label="消息接收成员" value={recipient} onChange={setRecipient} options={[{ value: "*", label: "全体成员" }, ...team.members.filter((member) => member.member_id !== "lead" && member.status !== "closed").map((member) => ({ value: member.member_id, label: member.name }))]} />
         <input aria-label="团队消息" placeholder="发送研究方向或补充信息" value={message} maxLength={12000} onChange={(event) => setMessage(event.target.value)} style={{ flex: 1 }} />

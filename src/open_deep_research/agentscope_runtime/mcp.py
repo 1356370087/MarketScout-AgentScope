@@ -23,22 +23,41 @@ import logging
 import re
 import warnings
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Self
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
+import httpx
 from agentscope.mcp import HttpMCPConfig, MCPClient, StdioMCPConfig
 from agentscope.message import ToolResultState
 from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
 from mcp import McpError
+from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import URL_ELICITATION_REQUIRED
 from mcp.types import Tool as McpToolDescriptor
 from pydantic import BaseModel, ConfigDict, Field, create_model, model_validator
+from pydantic_core import PydanticCustomError
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 from open_deep_research.configuration import BrowserMCPConfig, Configuration
+from open_deep_research.sandbox.egress_context import authorize_url, egress_authorizer
+from open_deep_research.sandbox.policy import egress_target_from_url
+from open_deep_research.sandbox.schema import (
+    network_target_decision,
+    resolve_profile,
+    tool_policy_decision,
+)
 from open_deep_research.security.content import inspect_untrusted_content
+from open_deep_research.security.network import (
+    PublicWebResolver,
+    validate_http_url_syntax,
+    validate_response_peer,
+)
 from open_deep_research.security.redaction import redact_text
 from open_deep_research.skills import get_skill_researcher_context
 from open_deep_research.tools.base import (
@@ -49,6 +68,7 @@ from open_deep_research.tools.base import (
     ToolOrigin,
     ToolResult,
 )
+from open_deep_research.tools.governance import AgentRole, filter_tools_by_permission
 from open_deep_research.tools.token_store import get_token_store
 
 logger = logging.getLogger(__name__)
@@ -81,6 +101,85 @@ class MCPInteractionRequired(Exception):
 
 class NativeMcpToolError(RuntimeError):
     """远端工具返回 ``isError`` 结果；由治理层分类展示。"""
+
+
+class _McpResponseStream(httpx.AsyncByteStream):
+    def __init__(self, response):
+        self.response = response
+
+    async def __aiter__(self):
+        async for chunk in self.response.content.iter_any():
+            yield chunk
+
+    async def aclose(self):
+        self.response.close()
+
+
+class _PublicMcpTransport(httpx.AsyncBaseTransport):
+    """Use the shared public resolver for the exact socket dialed by MCP."""
+
+    def __init__(self):
+        self.session = None
+
+    async def handle_async_request(self, request):
+        url = str(request.url)
+        validate_http_url_syntax(url)
+        if egress_authorizer.get() is not None and await authorize_url(url, "tool.network") != "allow":
+            raise PermissionError("mcp_network_authorization_denied")
+        if self.session is None:
+            self.session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(resolver=PublicWebResolver(), use_dns_cache=False),
+                auto_decompress=False,
+                trust_env=False,
+            )
+        timeout = request.extensions.get("timeout", {})
+        response = await self.session.request(
+            request.method, url, headers=request.headers.multi_items(),
+            data=await request.aread(), allow_redirects=False,
+            timeout=aiohttp.ClientTimeout(total=None, sock_connect=timeout.get("connect"), sock_read=timeout.get("read")),
+        )
+        try:
+            validate_response_peer(response)
+        except ValueError:
+            response.close()
+            raise
+        return httpx.Response(response.status, headers=response.raw_headers, stream=_McpResponseStream(response))
+
+    async def aclose(self):
+        if self.session is not None:
+            await self.session.close()
+
+
+class _PublicMcpClient(MCPClient):
+    """Keep AgentScope sessions and SDK origin checks with a guarded transport.
+
+    HttpMCPConfig has no transport injection point in the pinned AgentScope
+    version, so this override is confined to its HTTP session factory.
+    """
+
+    @staticmethod
+    def _new_http_client(**kwargs):
+        return httpx.AsyncClient(transport=_PublicMcpTransport(), trust_env=False, **kwargs)
+
+    def _create_http_client(self):
+        config = self.mcp_config
+        if self._is_sse:
+            return sse_client(config.url, headers=config.headers, timeout=config.timeout,
+                              httpx_client_factory=self._new_http_client)
+        return self._public_streamable_client()
+
+    @asynccontextmanager
+    async def _public_streamable_client(self):
+        config = self.mcp_config
+        async with self._new_http_client(headers=config.headers, timeout=config.timeout) as client:
+            self._static_headers = httpx.Headers(client.headers)
+            client.headers.update(self._runtime_headers)
+            self._http_client = client
+            try:
+                async with streamable_http_client(config.url, http_client=client) as transport:
+                    yield transport
+            finally:
+                self._http_client = None
 
 
 def build_native_mcp_client(connection: dict[str, Any], *, name: str = "server") -> MCPClient:
@@ -126,7 +225,8 @@ def build_native_mcp_client(connection: dict[str, Any], *, name: str = "server")
                 "SSE MCP endpoint must end with '/sse' or '/messages/'; the native "
                 "client selects the SSE transport by URL path only"
             )
-    return MCPClient(
+    client_type = _PublicMcpClient if connection.get("restricted_network") else MCPClient
+    return client_type(
         name=name,
         is_stateful=False,
         mcp_config=HttpMCPConfig(
@@ -183,7 +283,8 @@ def build_args_schema(tool_name: str, input_schema: dict[str, Any]) -> type:
     """
     validator_class = validator_for(input_schema)
     validator_class.check_schema(input_schema)
-    schema_validator = validator_class(input_schema)
+    # Remote schema references must not open an ungoverned HTTP connection.
+    schema_validator = validator_class(input_schema, registry=Registry())
 
     class SchemaValidatedMCPArgs(BaseModel):
         model_config = ConfigDict(extra="allow")
@@ -196,8 +297,14 @@ def build_args_schema(tool_name: str, input_schema: dict[str, Any]) -> type:
             except JSONSchemaValidationError as exc:
                 path = ".".join(str(item) for item in exc.absolute_path)
                 location = f" at '{path}'" if path else ""
-                raise ValueError(
-                    f"Input does not match MCP JSON Schema{location}: {exc.message}"
+                raise PydanticCustomError(
+                    "mcp_schema_validation",
+                    f"Input does not match MCP JSON Schema{location}: {exc.message}",
+                ) from exc
+            except Unresolvable as exc:
+                raise PydanticCustomError(
+                    "mcp_schema_reference",
+                    "MCP JSON Schema reference cannot be resolved locally",
                 ) from exc
             return value
 
@@ -337,6 +444,8 @@ def translate_mcp_interaction(exc: BaseException) -> MCPInteractionRequired | No
 async def exchange_mcp_subject_token(
     subject_token: str,
     base_mcp_url: str,
+    *,
+    restricted: bool = False,
 ) -> dict[str, Any] | None:
     """Exchange a trusted server-side subject token for an MCP access token."""
     form_data = {
@@ -347,21 +456,31 @@ async def exchange_mcp_subject_token(
         "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
     }
     try:
-        async with aiohttp.ClientSession() as session:
-            token_url = base_mcp_url.rstrip("/") + "/oauth/token"
-            async with session.post(
+        token_url = base_mcp_url.rstrip("/") + "/oauth/token"
+        if restricted:
+            validate_http_url_syntax(token_url)
+            if await authorize_url(token_url, "tool.network", True) != "allow":
+                return None
+        connector = aiohttp.TCPConnector(resolver=PublicWebResolver(), use_dns_cache=False) if restricted else None
+        async with (
+            aiohttp.ClientSession(connector=connector, trust_env=False) as session,
+            session.post(
                 token_url,
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data=form_data,
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                response_body = redact_text(await response.text())[:512]
-                logger.warning(
-                    "MCP token exchange failed status=%s response=%s",
-                    response.status,
-                    response_body,
-                )
+                allow_redirects=False,
+            ) as response,
+        ):
+            if restricted:
+                validate_response_peer(response)
+            if response.status == 200:
+                return await response.json()
+            response_body = redact_text(await response.text())[:512]
+            logger.warning(
+                "MCP token exchange failed status=%s response=%s",
+                response.status,
+                response_body,
+            )
     except Exception as exc:  # noqa: BLE001 - exchange 失败按无令牌处理并脱敏告警
         logger.warning(
             "MCP token exchange error: %s",
@@ -428,7 +547,9 @@ async def set_tokens(config: dict[str, Any], tokens: dict[str, Any]) -> None:
         await get_token_store().set(str(user_id), tokens)
 
 
-async def fetch_tokens(config: dict[str, Any]) -> dict[str, Any] | None:
+async def fetch_tokens(
+    config: dict[str, Any], *, role: AgentRole = AgentRole.RESEARCHER
+) -> dict[str, Any] | None:
     """Return cached tokens or perform RFC 8693 exchange when configured."""
     current_tokens = await get_tokens(config)
     if current_tokens:
@@ -437,7 +558,12 @@ async def fetch_tokens(config: dict[str, Any]) -> dict[str, Any] | None:
     mcp_config = config.get("configurable", {}).get("mcp_config")
     if not subject_token or not mcp_config or not mcp_config.get("url"):
         return None
-    tokens = await exchange_mcp_subject_token(subject_token, mcp_config["url"])
+    restricted = _restricted_network(config)
+    if restricted and (not _discovery_tool_names(config, set(mcp_config.get("tools") or []),
+                                               mcp_config.get("tool_effects") or {}, ToolOrigin.MCP, role)
+                       or not await _authorize_discovery_url(mcp_config["url"], config)):
+        return None
+    tokens = await exchange_mcp_subject_token(subject_token, mcp_config["url"], restricted=restricted)
     if tokens:
         await set_tokens(config, tokens)
     return tokens
@@ -575,9 +701,11 @@ class NativeMcpTool:
         return True
 
     def egress_urls(self, input: dict[str, Any]) -> list[str]:
-        if not self._egress_urls_url:
-            return []
-        return _constant_egress_url(self._egress_urls_url, input)
+        urls = [self._egress_urls_url] if self._egress_urls_url else []
+        if self.origin is ToolOrigin.BROWSER:
+            urls.extend(input[key] for key in ("url", "target_url", "href")
+                        if isinstance(input.get(key), str) and input[key])
+        return list(dict.fromkeys(urls))
 
     async def call(
         self,
@@ -626,7 +754,11 @@ async def _discover_via_server(
 ) -> tuple[NativeMcpServer, list[McpToolDescriptor]]:
     """发现后保持连接打开；有状态服务器由工具共享、显式关闭。"""
     server = NativeMcpServer(connection, name="server")
-    return server, await server.discover()
+    try:
+        return server, await server.discover()
+    except BaseException:
+        await server.close()
+        raise
 
 
 async def close_native_mcp_tools(tools: Iterable[Tool]) -> None:
@@ -639,9 +771,54 @@ async def close_native_mcp_tools(tools: Iterable[Tool]) -> None:
             await server.close()
 
 
+def _restricted_network(config):
+    return (Configuration.from_runnable_config(config).sandbox_enabled
+            or config.get("metadata", {}).get("deployment_surface") == "http")
+
+
+def _discovery_tool_names(config, names, effects, origin, role=AgentRole.RESEARCHER):
+    """Authorize configured tool metadata before contacting its server."""
+    declared = [NativeMcpTool(None, McpToolDescriptor(name=name, inputSchema={"type": "object"}),
+                              origin=origin, effect=ToolEffect(effects[name]), retryable=False,
+                              egress_urls_url=None, auth_satisfied=True)
+                for name in names if name in effects]
+    permitted = filter_tools_by_permission(declared, role, config)
+    if _restricted_network(config):
+        _, _, profile = resolve_profile(Configuration.from_runnable_config(config))
+        if profile.network.mode == "offline":
+            return set()
+        permitted = [tool for tool in permitted if tool_policy_decision(
+            profile, tool_name=tool.name, effect=tool.effect.value) != "deny"]
+    # auth_satisfied here bypasses only the not-yet-fetched credential check;
+    # these metadata stubs are never exposed or executed as loaded tools.
+    return {tool.name for tool in permitted}
+
+
+async def _authorize_discovery_url(url, config):
+    if not _restricted_network(config):
+        return True
+    try:
+        validate_http_url_syntax(url)
+        target = egress_target_from_url(url)
+        if target is None:
+            return False
+        _, _, profile = resolve_profile(Configuration.from_runnable_config(config))
+        if network_target_decision(profile.network, *target) == "deny":
+            return False
+        if egress_authorizer.get() is not None:
+            return await authorize_url(url, "tool.network", True) == "allow"
+        # An HTTP/sandbox loader without the live Gateway authority cannot
+        # honor approvals, revocations or run-mode overrides.
+        return False
+    except (ValueError, PermissionError):
+        return False
+
+
 async def load_native_mcp_tools(
     config: dict[str, Any],
     existing_tool_names: set[str],
+    *,
+    role: AgentRole = AgentRole.RESEARCHER,
 ) -> list[Tool]:
     """按旧 loader 的信任边界发现通用 MCP 工具（原生客户端）。"""
     configurable = Configuration.from_runnable_config(config)
@@ -661,7 +838,11 @@ async def load_native_mcp_tools(
             logger.warning("Blocked non-allowlisted MCP server on HTTP surface")
             return []
 
-    tokens = await fetch_tokens(config) if mcp_config.auth_required else None
+    configured_names = _discovery_tool_names(config, configured_names, mcp_config.tool_effects, ToolOrigin.MCP, role)
+    if not configured_names or not await _authorize_discovery_url(mcp_config.url, config):
+        return []
+
+    tokens = await fetch_tokens(config, role=role) if mcp_config.auth_required else None
     if mcp_config.auth_required and not tokens:
         return []
     headers = (
@@ -671,6 +852,7 @@ async def load_native_mcp_tools(
         "url": mcp_config.url.rstrip("/") + "/mcp",
         "headers": headers,
         "transport": "streamable_http",
+        "restricted_network": _restricted_network(config),
     }
     try:
         server, available_tools = await _discover_via_server(connection)
@@ -715,6 +897,8 @@ async def load_native_mcp_tools(
 async def load_native_browser_mcp_tools(
     config: dict[str, Any],
     existing_tool_names: set[str],
+    *,
+    role: AgentRole = AgentRole.RESEARCHER,
 ) -> list[Tool]:
     """按旧浏览器 loader 的信任边界发现浏览器 MCP 工具（原生客户端）。"""
     configurable = Configuration.from_runnable_config(config)
@@ -745,6 +929,12 @@ async def load_native_browser_mcp_tools(
     connection = _build_browser_connection(browser_config)
     if not connection:
         return []
+    allowed_names = _discovery_tool_names(config, allowed_names, browser_config.tool_effects, ToolOrigin.BROWSER, role)
+    if not allowed_names:
+        return []
+    if browser_config.url and not await _authorize_discovery_url(browser_config.url, config):
+        return []
+    connection["restricted_network"] = _restricted_network(config)
     try:
         server, available_tools = await _discover_via_server(connection)
     except Exception:  # noqa: BLE001 - 发现失败按无工具装载（fail-closed）

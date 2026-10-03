@@ -13,8 +13,9 @@ by the AgentScope runtime in this project:
   ``ToolError`` (machine-readable JSON) to the model when retries are exhausted.
 
 The public entry point is :func:`execute_governed_tool_call`. It returns both a
-transport message and the original ``ToolResult`` while containing failures so
-one call cannot abort a concurrent batch.
+transport message and the original ``ToolResult`` while containing tool failures
+so one call cannot abort a concurrent batch. Run lifecycle interruptions propagate
+to the owning recovery session.
 """
 
 from __future__ import annotations
@@ -603,6 +604,18 @@ def validate_tool_args(
 ##########################
 
 
+def _is_runtime_control_error(exc: Exception) -> bool:
+    """Preserve lifecycle interruptions for the run's recovery session."""
+    # RecoveryStore imports domain stages; defer this import to tool execution.
+    from open_deep_research.agentscope_runtime.recovery_store import (
+        FenceLost,
+        UnknownOperation,
+    )
+    from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
+
+    return isinstance(exc, (BudgetExhausted, DeadlineExceeded, FenceLost, UnknownOperation))
+
+
 async def invoke_tool_with_retry(
     tool: Tool,
     input: BaseModel,
@@ -631,6 +644,8 @@ async def invoke_tool_with_retry(
         try:
             return await tool.call(input, replace(context, attempt=context.attempt + attempt))
         except Exception as exc:  # noqa: BLE001 -- classify then decide
+            if _is_runtime_control_error(exc):
+                raise
             error_type, retryable = classify_retryable_error(exc)
             if not retryable or attempt >= max_retries:
                 final_type = (
@@ -1028,7 +1043,9 @@ async def execute_governed_tool_call_native(
 ) -> GovernedToolCallResult:
     """Execute a single tool call under full governance.
 
-    Pipeline (each branch returns a ``GovernedToolCallResult``, never raises):
+    Tool errors return a ``GovernedToolCallResult``; runtime controls propagate.
+
+    Pipeline:
     1. ``tool_not_found`` if the named tool is not registered for this role.
     2. Permission gate (whitelist + origin + MCP auth).
     3. Configured constraints and Pydantic input validation.
@@ -1171,7 +1188,9 @@ async def execute_governed_tool_call_native(
                 ),
                 result=result,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            if _is_runtime_control_error(exc):
+                raise
             error_type, _ = classify_retryable_error(exc)
             recorder.active_span().record_outcome(
                 error_type=error_type.value,
@@ -1214,7 +1233,9 @@ async def execute_governed_tool_call_native(
                 "interaction_url": getattr(failure.inner, "interaction_url", None),
             },
         ), tool_call_id)
-    except Exception as exc:  # noqa: BLE001 -- non-retryable, surfaced directly
+    except Exception as exc:  # non-retryable, surfaced directly
+        if _is_runtime_control_error(exc):
+            raise
         error_type, _ = classify_retryable_error(exc)
         recorder.active_span().record_outcome(
             error_type=error_type.value,

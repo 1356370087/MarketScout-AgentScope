@@ -1,18 +1,38 @@
 "use client";
 
 import { ClipboardCheck } from "lucide-react";
-import ReactMarkdown from "react-markdown";
+import { createContext, useContext, type ComponentPropsWithoutRef } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import type { ReportReviewSummary } from "@/lib/contracts/publications";
+import type { ResearchSource } from "@/lib/types";
+import { matchSource, sourceHref, sourceKey } from "./activity/presentation";
 
-export function MarkdownReport({ value }: { value: string }) {
-  return <ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{
-    h1: ({ node, children }) => <h1 id={`report-line-${node?.position?.start.line}`}>{children}</h1>,
-    h2: ({ node, children }) => <h2 id={`report-line-${node?.position?.start.line}`}>{children}</h2>,
-    h3: ({ node, children }) => <h3 id={`report-line-${node?.position?.start.line}`}>{children}</h3>,
-    a: ({ href, children }) => { const localDocument = Boolean(href && /^\/documents\/[0-9a-f-]+(?:\?chunk=[0-9a-f-]+)?$/i.test(href)); const safe = href?.startsWith("http://") || href?.startsWith("https://") || href?.startsWith("#") || localDocument; return safe ? <a href={href} target={href?.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer">{children}</a> : <span>{children}</span>; }
-  }}>{value}</ReactMarkdown>;
+type ReportSourceContext = { sources: ResearchSource[]; selectedSource?: string | null; onSource?: (source: ResearchSource) => void };
+const ReportSources = createContext<ReportSourceContext>({ sources: [] });
+
+function ReportLink({ href, children }: ComponentPropsWithoutRef<"a">) {
+  const { sources, selectedSource, onSource } = useContext(ReportSources);
+  const safe = sourceHref(href) || (href?.startsWith("#") ? href : undefined);
+  const source = matchSource(href, sources);
+  return safe ? <a href={safe} target={safe.startsWith("http") ? "_blank" : undefined} rel="noopener noreferrer"
+    className={source ? "report-citation" : undefined} data-report-source={source ? sourceKey(source) : undefined}
+    data-selected={source && sourceKey(source) === selectedSource || undefined}
+    title={source ? `查看来源：${source.title || source.domain || source.url}` : undefined}
+    onClick={source && onSource ? (event) => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); onSource(source); } } : undefined}>{children}</a> : <span>{children}</span>;
+}
+
+// Stable renderer types preserve focused citations during streaming state updates.
+const reportComponents: Components = {
+  h1: ({ node, children }) => <h1 id={`report-line-${node?.position?.start.line}`}>{children}</h1>,
+  h2: ({ node, children }) => <h2 id={`report-line-${node?.position?.start.line}`}>{children}</h2>,
+  h3: ({ node, children }) => <h3 id={`report-line-${node?.position?.start.line}`}>{children}</h3>,
+  a: ReportLink,
+};
+
+export function MarkdownReport({ value, sources = [], selectedSource, onSource }: { value: string } & Partial<ReportSourceContext>) {
+  return <ReportSources.Provider value={{ sources, selectedSource, onSource }}><ReactMarkdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={reportComponents}>{value}</ReactMarkdown></ReportSources.Provider>;
 }
 
 function collectHeadings(value: string) {

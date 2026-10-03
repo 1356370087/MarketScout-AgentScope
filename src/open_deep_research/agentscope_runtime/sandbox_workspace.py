@@ -158,28 +158,50 @@ class ControllerWorkspace(WorkspaceBase):
             runtime_digest_value=runtime_digest(self.spec.profile),
         )
         self.container_id = created.container_id
+        try:
+            await self.controller.start_task(self.container_id)
+        except BaseException:
+            await self._stop_container(preserve_error=True)
+            raise
         self.is_alive = True
-        await self.controller.start_task(self.container_id)
 
-    async def close(self) -> None:
-        """收集工件后停止任务容器；幂等。"""
-        for server in self._mcps:
-            await server.close()
-        self._mcps.clear()
-        container_id, self.container_id = self.container_id, None
-        self.is_alive = False
+    async def _stop_container(self, *, preserve_error: bool = False) -> None:
+        container_id = self.container_id
         if container_id is None:
             return
         try:
-            archive = await self.controller.collect_archive(container_id)
-        except Exception as exc:  # noqa: BLE001 - 清理路径不因收集失败而中止
-            logger.warning("workspace archive collection failed: %s", exc)
-            archive = None
-        if archive and self.artifact_dir is not None:
-            self.artifact_dir.mkdir(parents=True, exist_ok=True)
-            target = self.artifact_dir / f"{self.workspace_id}.tar"
-            target.write_bytes(archive)
-        await self.controller.stop_task(container_id)
+            await self.controller.stop_task(container_id)
+        except BaseException as exc:
+            if not preserve_error:
+                raise
+            logger.warning("workspace container cleanup failed: %s", type(exc).__name__)
+        else:
+            self.container_id = None
+            self.is_alive = False
+
+    async def close(self) -> None:
+        """收集工件后停止任务容器；异常时保留清理入口。"""
+        failed = False
+        try:
+            for server in self._mcps:
+                await server.close()
+            self._mcps.clear()
+            if self.container_id is None:
+                return
+            try:
+                archive = await self.controller.collect_archive(self.container_id)
+            except Exception as exc:  # noqa: BLE001 - 清理路径不因收集失败而中止
+                logger.warning("workspace archive collection failed: %s", exc)
+                archive = None
+            if archive and self.artifact_dir is not None:
+                self.artifact_dir.mkdir(parents=True, exist_ok=True)
+                target = self.artifact_dir / f"{self.workspace_id}.tar"
+                target.write_bytes(archive)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            await self._stop_container(preserve_error=failed)
 
     async def get_instructions(self) -> str:
         resources = getattr(self.spec.profile, "resources", None)
@@ -334,7 +356,9 @@ class ControllerWorkspaceManager(WorkspaceManagerBase):
             )
         existing = self._workspaces.get(workspace_id)
         if existing is not None:
-            return existing
+            if existing.is_alive:
+                return existing
+            await self.close(workspace_id)
         workspace = ControllerWorkspace(
             workspace_id=workspace_id,
             controller=self._controller_factory(),
@@ -344,14 +368,20 @@ class ControllerWorkspaceManager(WorkspaceManagerBase):
                 self._artifact_root / workspace_id if self._artifact_root else None
             ),
         )
-        await workspace.initialize()
+        try:
+            await workspace.initialize()
+        except BaseException:
+            if workspace.container_id is not None:
+                self._workspaces[workspace_id] = workspace
+            raise
         self._workspaces[workspace_id] = workspace
         return workspace
 
     async def close(self, workspace_id: str) -> None:
-        workspace = self._workspaces.pop(workspace_id, None)
+        workspace = self._workspaces.get(workspace_id)
         if workspace is not None:
             await workspace.close()
+            self._workspaces.pop(workspace_id, None)
 
     async def close_all(self) -> None:
         ids = list(self._workspaces)

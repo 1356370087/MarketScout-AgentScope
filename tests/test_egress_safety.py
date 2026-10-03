@@ -120,7 +120,7 @@ async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monke
 
     from open_deep_research.sandbox import gateway
     from open_deep_research.sandbox.wire import GatewayToolRequestV1
-    from open_deep_research.tools.base import ToolExecutionZone
+    from open_deep_research.tools.base import ToolExecutionZone, ToolOrigin
 
     store = SecurityApprovalStore("run-1", runs_dir=str(tmp_path))
 
@@ -147,7 +147,7 @@ async def test_gateway_execution_respects_narrowed_open_baseline(tmp_path, monke
             return "allowed", SimpleNamespace(decision="allow_once")
         monkeypatch.setattr(runtime, "_request_network_approval", approved)
     tool = SimpleNamespace(name="fetch_url", execution_zone=ToolExecutionZone.GATEWAY,
-        effect="read_only", egress_urls=lambda args: [args["url"]])
+        origin=ToolOrigin.SEARCH, effect="read_only", egress_urls=lambda args: [args["url"]])
 
     async def assemble(*args):
         return [tool]
@@ -492,7 +492,9 @@ async def test_proxy_once_allows_one_connection_only(tmp_path, monkeypatch):
 
     runtime = _runtime_with_run(Authority())
     proxy = egress_proxy.GatewayEgressProxy(runtime)
-    monkeypatch.setattr(egress_proxy, "resolve_profile", lambda config: (None, "p", _profile()))
+    profile = _profile()
+    profile.network.allow_http_methods.append("CONNECT")
+    monkeypatch.setattr(egress_proxy, "resolve_profile", lambda config: (None, "p", profile))
     monkeypatch.setattr(egress_proxy, "decode_task_token", lambda *a: SimpleNamespace(
         run_id="run-1", task_id="task-1", fence_token=1, jti="token", expires_at=time.time() + 60))
 

@@ -254,17 +254,20 @@ def filesystem_path_allowed(
     write: bool,
 ) -> bool:
     """Check a workspace-relative file path against Profile roots and denies."""
-    normalized = path.replace("\\", "/").strip()
+    normalized = path.replace("\\", "/")
     parts = [part for part in normalized.split("/") if part not in {"", "."}]
     if normalized.startswith("/") or ".." in parts:
         return False
+    relative = "/".join(parts)
+    workspace_path = "/workspace/work" + ("/" + relative if relative else "")
     denied = profile.filesystem.deny_write if write else profile.filesystem.deny_read
-    if any(fnmatchcase(normalized, pattern) for pattern in denied):
+    if any(fnmatchcase(workspace_path if pattern.startswith("/") else relative, pattern)
+           for pattern in denied):
         return False
     roots = profile.filesystem.write_roots if write else profile.filesystem.read_roots
     return any(
-        root.rstrip("/") in {"/workspace", "/workspace/work"}
-        or root.rstrip("/").startswith("/workspace/work/")
+        workspace_path == root.rstrip("/")
+        or workspace_path.startswith(root.rstrip("/") + "/")
         for root in roots
     )
 

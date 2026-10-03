@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import signal
 import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from open_deep_research.config_types import RuntimeConfig
-
 from open_deep_research.configuration import Configuration
 
 MAX_COMMAND_OUTPUT_BYTES = 1_000_000
@@ -35,7 +35,9 @@ def task_workspace(config: RuntimeConfig) -> Path:
 def safe_workspace_path(config: RuntimeConfig, value: str) -> Path:
     """Resolve a path below the task workspace and reject existing symlinks."""
     root = task_workspace(config)
-    supplied = Path(value)
+    # Share the policy boundary's path separators without trimming legal
+    # filename whitespace into a different directory.
+    supplied = Path(value.replace("\\", "/"))
     if supplied.is_absolute() or ".." in supplied.parts:
         raise ValueError("sandbox_path_outside_workspace")
     lexical = root.joinpath(*[part for part in supplied.parts if part not in {"", "."}])
@@ -64,6 +66,17 @@ def developer_tools_enabled(config: RuntimeConfig, permission: str) -> bool:
 
 class BubblewrapSandboxProvider:
     """Execute one bounded shell command with inherited OS-level restrictions."""
+
+    @staticmethod
+    async def _stop_process(process) -> None:
+        """Reap a command and its POSIX process group, including background jobs."""
+        with suppress(ProcessLookupError):
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            elif process.returncode is None:
+                process.kill()
+        # Drain pipes even when the original communicate was cancelled.
+        await process.communicate()
 
     @staticmethod
     def _build_bubblewrap_argv(
@@ -154,72 +167,71 @@ class BubblewrapSandboxProvider:
             "TMPDIR": "/tmp",
             "SANDBOX_TASK_TOKEN": os.environ.get("SANDBOX_TASK_TOKEN", ""),
         }
-        if os.getenv("SANDBOX_TASK_TOKEN"):
-            shim = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "open_deep_research.sandbox.proxy_shim",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=environment,
-            )
-            for _ in range(50):
-                try:
-                    probe_reader, probe_writer = await asyncio.open_connection(
-                        "127.0.0.1", 3128
-                    )
-                    probe_writer.close()
-                    await probe_writer.wait_closed()
-                    del probe_reader
-                    break
-                except OSError:
-                    await asyncio.sleep(0.02)
-            else:
-                shim.terminate()
-                raise RuntimeError("sandbox_unavailable:proxy_shim")
-            environment.update(
-                {
-                    "HTTP_PROXY": "http://127.0.0.1:3128",
-                    "HTTPS_PROXY": "http://127.0.0.1:3128",
-                    "http_proxy": "http://127.0.0.1:3128",
-                    "https_proxy": "http://127.0.0.1:3128",
-                }
-            )
-            argv = ["/bin/sh", "-lc", command]
-        else:
-            bwrap = shutil.which("bwrap")
-            if bwrap is None:
-                raise RuntimeError("sandbox_unavailable:bubblewrap")
-            argv = self._build_bubblewrap_argv(
-                bwrap=bwrap,
-                workspace=workspace,
-                working_dir=working_dir,
-                command=command,
-            )
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=str(working_dir),
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=environment,
-        )
+        process = None
         try:
+            if os.getenv("SANDBOX_TASK_TOKEN"):
+                shim = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "open_deep_research.sandbox.proxy_shim",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=environment,
+                    start_new_session=os.name == "posix",
+                )
+                for _ in range(50):
+                    try:
+                        probe_reader, probe_writer = await asyncio.open_connection(
+                            "127.0.0.1", 3128
+                        )
+                        probe_writer.close()
+                        await probe_writer.wait_closed()
+                        del probe_reader
+                        break
+                    except OSError:
+                        await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError("sandbox_unavailable:proxy_shim")
+                environment.update(
+                    {
+                        "HTTP_PROXY": "http://127.0.0.1:3128",
+                        "HTTPS_PROXY": "http://127.0.0.1:3128",
+                        "http_proxy": "http://127.0.0.1:3128",
+                        "https_proxy": "http://127.0.0.1:3128",
+                    }
+                )
+                argv = ["/bin/sh", "-lc", command]
+            else:
+                bwrap = shutil.which("bwrap")
+                if bwrap is None:
+                    raise RuntimeError("sandbox_unavailable:bubblewrap")
+                argv = self._build_bubblewrap_argv(
+                    bwrap=bwrap,
+                    workspace=workspace,
+                    working_dir=working_dir,
+                    command=command,
+                )
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=str(working_dir),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=environment,
+                start_new_session=os.name == "posix",
+            )
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=timeout_seconds
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            if shim is not None:
-                shim.terminate()
-                with suppress(ProcessLookupError):
-                    await shim.wait()
+        except TimeoutError:
             raise TimeoutError("sandbox command timed out") from None
-        if shim is not None:
-            shim.terminate()
-            with suppress(ProcessLookupError):
-                await shim.wait()
+        finally:
+            try:
+                if process is not None:
+                    await self._stop_process(process)
+            finally:
+                if shim is not None:
+                    await self._stop_process(shim)
         return {
             "exit_code": int(process.returncode or 0),
             "stdout": stdout[:MAX_COMMAND_OUTPUT_BYTES].decode("utf-8", errors="replace"),

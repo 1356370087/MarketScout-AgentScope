@@ -608,6 +608,13 @@ class GatewayRuntime:
             or claims.fence_token != context.fence_token
         ):
             raise ValueError("sandbox_task_token_claim_mismatch")
+        # Only the host-issued Supervisor task can exercise that tool role.
+        # Model roles are independent and keep their existing role contract.
+        if isinstance(request, (GatewayToolRequestV1, GatewayToolCatalogRequestV1)) and (
+            request.role not in {"researcher", "supervisor"}
+            or (request.role == "supervisor" and claims.task_id != "supervisor")
+        ):
+            raise ValueError("sandbox_task_tool_role_mismatch")
         return claims, context
 
     def authorize_api_model(
@@ -1336,7 +1343,9 @@ class GatewayRuntime:
         """Execute one authoritative Gateway-zone tool operation."""
         from open_deep_research.tools.governance import (
             AgentRole,
+            check_permission,
             execute_governed_tool_call_native as execute_governed_tool_call,
+            resolve_allowed_tools,
         )
         from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
@@ -1360,6 +1369,15 @@ class GatewayRuntime:
                 tool_call_id=request.tool_call_id,
                 status="failed",
                 error={"error_type": "tool_not_found", "message": "Tool is not registered in Gateway."},
+            )
+        allowed_tools = resolve_allowed_tools(role, context.config, set(tools_by_name))
+        permission_error = check_permission(tool.name, tool, role, allowed_tools, context.config)
+        if permission_error is not None:
+            return GatewayToolOutcomeV1(
+                logical_operation_id=request.logical_operation_id,
+                tool_call_id=request.tool_call_id,
+                status="failed",
+                error=permission_error.model_dump(mode="json"),
             )
         from open_deep_research.tools.base import ToolEffect, ToolExecutionZone
 
@@ -1679,6 +1697,7 @@ class GatewayRuntime:
                     tools_by_name,
                     role,
                     execution_config,
+                    allowed_tools=allowed_tools,
                     operation_id=request.logical_operation_id,
                 )
             finally:
@@ -2071,7 +2090,12 @@ class GatewayRuntime:
                 fence_token=context.fence_token, event_type=event_type,
                 kind="model", phase="reasoning",
                 status={"model.started": "running", "model.completed": "success", "model.failed": "error"}[event_type],
-                title="模型调用", summary="", payload=payload, update_run_summary=True,
+                title="模型调用", summary="", payload=payload,
+                # These IDs identify pipeline/model spans, not Researchers.
+                update_run_summary=(
+                    request.task_id not in {"pipeline", "supervisor"}
+                    and not request.task_id.startswith("report:")
+                ),
                 dedupe_key=f"gateway-v2:{request.logical_operation_id}:{event_type}",
             )
             await self.internal.post("/internal/sandbox/task-activity", event)

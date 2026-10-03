@@ -1,0 +1,7 @@
+.settings-sections > .insight-metrics { margin-bottom: 20px; }
+.settings-sections > .insight-metrics dd { font-size: 14px; }
+.settings-fields > .insight-disclosure { margin: 16px; }
+.setting-field-id { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+.setting-field-id summary { cursor: pointer; }
+.setting-field-id code { display: block; padding-top: 5px; overflow-wrap: anywhere; }
+.settings-sections .insight-disclosure-body { padding: 0; }

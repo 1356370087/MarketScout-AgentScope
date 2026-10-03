@@ -139,17 +139,16 @@ def build_research_router(service):
                     if await reauthorize_session(db, principal) is None:
                         return
                 last_auth = now
+            # Read current state before events so a newly committed terminal
+            # event is replayed before the stream closes.
+            snapshot = await service.snapshot(run_id, principal.user_id)
             records = await service.events(run_id, principal.user_id)
             for event in records:
                 if event.sequence <= cursor:
                     continue
                 yield _sse(event)
                 cursor, last_output = event.sequence, loop.time()
-            if records and records[-1].type in {
-                "run.completed",
-                "run.failed",
-                "run.cancelled",
-            }:
+            if snapshot["status"] in {"completed", "failed", "cancelled"}:
                 return
             if loop.time() - last_output >= config.sse_heartbeat_seconds:
                 yield ": keep-alive\n\n"

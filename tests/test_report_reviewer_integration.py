@@ -412,6 +412,186 @@ async def test_reviewer_requires_all_dimensions_and_accepts_flattened_scores(mon
     assert flattened.dimensions.coverage == 1.0
 
 
+def _numbered_review_case() -> tuple[dict[str, Any], ReportDraft]:
+    state = _state()
+    state["evidence_registry"].append({
+        "evidence_id": "EV-02",
+        "claim": "Option B is supported.",
+        "supporting_excerpt": "The other source supports option B.",
+        "source_url": "https://approved.example/other",
+        "security_status": "accepted",
+    })
+    state["evidence_registry"].append({
+        "evidence_id": "EV-UNSOURCED",
+        "claim": "A record without a source binding.",
+        "security_status": "accepted",
+    })
+    draft = _draft(
+        "# Draft\n\nOption A [1], option B [2].\n\n### Sources\n"
+        "[1] Approved source: https://approved.example/source\n"
+        "[2] Other source: https://approved.example/other"
+    )
+    # Rendered citation numbers remain authoritative when metadata is reordered.
+    draft.sources.insert(0, SourceRef(url="https://approved.example/other"))
+    return state, draft
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,evidence_ids", [
+    ("[1] https://approved.example/source", ["EV-01"]),
+    ("[2] https://approved.example/other", ["EV-02"]),
+    ("[1][2]", ["EV-01", "EV-02"]),
+    ("[1] [2]", ["EV-01", "EV-02"]),
+    ("[1]", ["EV-01"]),
+])
+async def test_reviewer_accepts_source_bound_numbered_targets(
+    monkeypatch, target, evidence_ids,
+):
+    state, draft = _numbered_review_case()
+
+    async def fake_invoke(*_args, **_kwargs):
+        return _model_review_payload(citation_audit=[{
+            "claim": "Supported report content.",
+            "citation_target": target,
+            "supported": True,
+            "evidence_ids": evidence_ids,
+        }])
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    result = await reviewer_module.review_report(draft, state, _config())
+    assert result.decision == "pass"
+    assert result.critical_issue_count == 0
+    assert not result.deterministic_failures
+    assert result.citation_audit[0].supported
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,evidence_ids", [
+    ("[9] https://approved.example/source", ["EV-01"]),
+    ("[1] https://approved.example/other", ["EV-02"]),
+    ("[1] https://outside.example/source", ["EV-01"]),
+    ("[1] https://approved.example/source https://outside.example/source", ["EV-01"]),
+    ("[1][9]", ["EV-01", "EV-02"]),
+    ("[1][2]", ["EV-01"]),
+    ("[1][2]", ["EV-UNSOURCED"]),
+    ("[2]", ["EV-01"]),
+    ("[1] https://approved.example/source", ["EV-OUTSIDE"]),
+])
+async def test_reviewer_rejects_invalid_numbered_target_bindings(
+    monkeypatch, target, evidence_ids,
+):
+    state, draft = _numbered_review_case()
+
+    async def fake_invoke(*_args, **_kwargs):
+        return _model_review_payload(citation_audit=[{
+            "claim": "Unsupported citation metadata.",
+            "citation_target": target,
+            "supported": True,
+            "evidence_ids": evidence_ids,
+        }])
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    result = await reviewer_module.review_report(
+        draft, state, _config(max_structured_output_retries=1),
+    )
+    assert result.decision == "fail"
+    assert result.hard_failures
+    assert result.critical_issue_count >= 1
+    assert not result.citation_audit[0].supported
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,evidence_ids", [
+    ("Source 1", ["EV-01"]),
+    ("[1][2]", ["EV-01"]),
+    ("[1] https://approved.example/other", ["EV-02"]),
+])
+async def test_reviewer_repairs_invalid_citation_metadata_without_rewriting_draft(
+    monkeypatch, target, evidence_ids,
+):
+    calls = []
+
+    async def fake_invoke(payload, *_args, **_kwargs):
+        calls.append(payload)
+        result = _model_review_payload()
+        if len(calls) == 1:
+            result["citation_audit"][0]["citation_target"] = target
+            result["citation_audit"][0]["evidence_ids"] = evidence_ids
+        return result
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    state, draft = _numbered_review_case()
+    result = await reviewer_module.review_report(
+        draft, state, _config(max_structured_output_retries=2),
+    )
+    assert result.decision == "pass"
+    assert len(calls) == 2
+    assert calls[0]["draft_markdown"] == calls[1]["draft_markdown"] == draft.markdown
+    assert "review_protocol_invalid" in calls[1]["review_protocol_feedback"]["errors"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target,evidence_ids", [
+    ("Source 1", ["EV-01"]),
+    ("[1][2]", ["EV-01"]),
+    ("[1] https://approved.example/other", ["EV-02"]),
+])
+async def test_citation_protocol_exhaustion_never_revises_or_recovers_report(
+    monkeypatch, target, evidence_ids,
+):
+    calls = []
+    forbidden = []
+    state, draft = _numbered_review_case()
+
+    async def fake_build(*_args, **_kwargs):
+        return draft
+
+    async def fake_invoke(payload, *_args, **_kwargs):
+        calls.append(payload)
+        result = _model_review_payload()
+        result["citation_audit"][0]["citation_target"] = target
+        result["citation_audit"][0]["evidence_ids"] = evidence_ids
+        return result
+
+    async def forbidden_stage(*_args, **_kwargs):
+        forbidden.append(True)
+        raise AssertionError("Reviewer protocol faults must not rewrite or publish a report")
+
+    monkeypatch.setattr(orchestrator, "build_report_draft", fake_build)
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    for stage in ("revise_report", "recover_report_draft", "finalize_report"):
+        monkeypatch.setattr(orchestrator, stage, forbidden_stage)
+    with pytest.raises(RuntimeError, match="report_review_failed"):
+        await orchestrator.build_report(
+            state, _config(max_structured_output_retries=2, report_review_max_revisions=3),
+        )
+    assert len(calls) == 2
+    assert not forbidden
+    assert all(call["draft_markdown"] == draft.markdown for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_reviewer_rejects_ambiguous_rendered_source_numbers(monkeypatch):
+    state, draft = _numbered_review_case()
+    draft.markdown += "\n[1] Conflicting source: https://approved.example/other"
+
+    async def fake_invoke(*_args, **_kwargs):
+        return _model_review_payload(citation_audit=[{
+            "claim": "Option A is supported.",
+            "citation_target": "[1] https://approved.example/source",
+            "supported": True,
+            "evidence_ids": ["EV-01"],
+        }])
+
+    monkeypatch.setattr(reviewer_module, "_invoke_reviewer", fake_invoke)
+    result = await reviewer_module.review_report(
+        draft, state, _config(max_structured_output_retries=1),
+    )
+    assert result.decision == "fail"
+    assert result.hard_failures
+    assert any("ambiguous_citation_number" in issue.description for issue in result.issues)
+
+
 @pytest.mark.asyncio
 async def test_supported_citation_requires_matching_evidence_binding(monkeypatch) -> None:
     """A citation cannot be declared supported without a source-matched evidence ID."""
