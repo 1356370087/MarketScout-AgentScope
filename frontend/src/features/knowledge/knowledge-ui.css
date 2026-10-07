@@ -21,3 +21,11 @@
 .knowledge-result-summary { margin-top: 20px; }
 @media (max-width: 767px) { .knowledge-page .document-toolbar > label { flex: 0 0 auto; } }
 @media (max-width: 560px) { .knowledge-evidence-card, .knowledge-answer { padding: 16px; } }
+.material-scope-picker { display: grid; gap: 14px; }
+.material-base-list { display: grid; gap: 10px; max-height: 340px; overflow: auto; }
+.material-base-list > article { padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.material-base-list label, .material-collections label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.material-base-list label > span { display: grid; gap: 4px; }
+.material-base-list small { color: var(--muted); font-size: 12px; }
+.material-collections { display: grid; gap: 8px; margin: 10px 0 0 24px; }
+.material-base-list input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--cyan); }

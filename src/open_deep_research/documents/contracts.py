@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from datetime import date
 from enum import Enum
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -186,6 +187,32 @@ SourceRef = Annotated[
 ]
 
 
+class MaterialRetrievalOptions(BaseModel):
+    """Version and metadata choices resolved to immutable generations at creation."""
+
+    model_config = ConfigDict(extra="forbid")
+    version_mode: Literal["current", "as_of"] = "current"
+    as_of_published: str | None = None
+    as_of_valid: str | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    profile_version: str | None = Field(default=None, max_length=64)
+
+    @field_validator("as_of_published", "as_of_valid")
+    @classmethod
+    def iso_date(cls, value):
+        """Accept canonical calendar dates at the public request boundary."""
+        if value is not None and date.fromisoformat(value).isoformat() != value:
+            raise ValueError("expected YYYY-MM-DD")
+        return value
+
+    @model_validator(mode="after")
+    def cutoff_required(self):
+        """Historical selections require an explicit publication cutoff."""
+        if self.version_mode == "as_of" and not self.as_of_published:
+            raise ValueError("as_of_requires_date")
+        return self
+
+
 class SourceSelection(BaseModel):
     """Validated, extensible source selection attached to a run."""
 
@@ -193,6 +220,7 @@ class SourceSelection(BaseModel):
 
     mode: SourceMode = SourceMode.WEB
     sources: list[SourceRef] = Field(default_factory=list, max_length=100)
+    retrieval: MaterialRetrievalOptions = Field(default_factory=MaterialRetrievalOptions)
 
     @model_validator(mode="after")
     def validate_mode_sources(self) -> SourceSelection:
@@ -304,6 +332,10 @@ class DocumentChunkView(BaseModel):
 
     id: str
     document_id: str
+    generation_id: str | None = None
+    version_no: int | None = None
+    generation_status: str | None = None
+    location: dict[str, Any] = Field(default_factory=dict)
     ordinal: int
     locator: str
     heading: str | None = None

@@ -82,7 +82,38 @@ class NativeReportWriter:
                 **config,
                 "metadata": {**config.get("metadata", {}), "run_id": snapshot.run_id},
             }
-            update = await build_report(state, bound_config)
+            if snapshot.completion_outcome.get("action") == "complete_partial" and (
+                snapshot.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
+                or not state["evidence_registry"]
+            ):
+                from open_deep_research.configuration import Configuration
+                from open_deep_research.report.orchestrator import (
+                    _canonical_report_payload,
+                )
+                from open_deep_research.report.profiles import get_profile
+                from open_deep_research.report.recovery import (
+                    build_evidence_recovery_report,
+                )
+
+
+                reason = snapshot.completion_outcome.get("reason", "insufficient_evidence")
+                markdown = build_evidence_recovery_report(state["evidence_registry"],
+                    gaps=snapshot.completion_outcome.get("gaps", []), rejection_reasons=[reason], artifact_refs=[])
+                update = {"final_report": markdown, "completion_decision": snapshot.completion_outcome,
+                    "quality_gate": {"status": "partial", "reason_codes": [reason]},
+                    "report_review": {"status": "skipped", "skipped": True, "degraded": True,
+                        "summary": "仅交付确定性证据恢复结果，未执行模型报告复核：" + reason,
+                        "decision": "fail"} if Configuration.from_runnable_config(config).report_review_enabled else None,
+                    "canonical_report": _canonical_report_payload(markdown, state, bound_config,
+                        get_profile(Configuration.from_runnable_config(config).report_type), [])}
+            else:
+                update = await build_report(state, bound_config)
+            final_decision = update.get("completion_decision") or snapshot.completion_outcome
+            update["completion_status"] = "partial" if final_decision.get("action") == "complete_partial" else "success"
+            update["stop_reason"] = final_decision.get("reason")
+            update["uncovered_requirements"] = [row["requirement_id"] for row in snapshot.coverage_contract.get("requirements", [])
+                if row.get("kind", "factual") == "factual" and snapshot.coverage_ledger.get(row["requirement_id"], {}).get("status") != "supported"]
+            update["research_gaps"] = final_decision.get("gaps", [])
             snapshot.report_product = {
                 key: value
                 for key, value in update.items()
@@ -179,7 +210,9 @@ class _ReportRun:
                         attempt=attempt + 1, error_type="context_length_exceeded"
                     )
 
-        with recovery.task(task_id) if recovery else nullcontext():
+        from open_deep_research.agentscope_runtime.runtime_limits import attributed
+
+        with (recovery.task(task_id) if recovery else nullcontext()), attributed(purpose=span_name):
             response = (
                 await recovery.model(
                     role,

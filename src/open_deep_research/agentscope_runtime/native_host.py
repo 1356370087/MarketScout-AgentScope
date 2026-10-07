@@ -7,8 +7,8 @@ Historical QueryEngine artifacts can be read, but never resumed or executed.
 
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -56,13 +56,16 @@ def _host_local_zones() -> frozenset[ToolExecutionZone]:
     return frozenset({ToolExecutionZone.HOST_CONTROL, ToolExecutionZone.SANDBOX_LOCAL})
 
 
-async def _host_tools_for(role, config):
+async def _host_tools_for(role, config, *, models=None):
+    from open_deep_research.knowledge.research_assets import research_asset_tools
     from open_deep_research.tools.read_file import read_file
-    from open_deep_research.tools.search_documents import search_documents
+    from open_deep_research.tools.search_documents.definition import (
+        make_search_documents,
+    )
     from open_deep_research.tools.shell_exec import shell_exec
     from open_deep_research.tools.write_file import write_file
 
-    tools = [search_documents, read_file, write_file, shell_exec]
+    tools = [make_search_documents(models), *research_asset_tools(), read_file, write_file, shell_exec]
     return [tool for tool in tools if tool.is_enabled(config)]
 
 
@@ -84,7 +87,7 @@ def _host_resources(runs_dir: Path):
                 "native_host_requires_gateway_resources: sandbox runs need the "
                 "M10 production resource provider"
             )
-        if cfg.search_api != "none" or cfg.web_pipeline_mode != "legacy":
+        if cfg.resolved_search_providers or cfg.web_pipeline_mode != "legacy":
             raise ValueError(
                 "native_host_requires_gateway_resources: web research tools "
                 "execute in the sandbox gateway; configure AS_NATIVE_RESOURCES=gateway"
@@ -106,10 +109,17 @@ def _host_resources(runs_dir: Path):
                 # 未配置的可选角色不绑定；用到时由工厂的描述符检查拒绝。
                 continue
         factory = ModelFactory(run_config, scope="run", owner=owner, bindings=bindings)
+        from open_deep_research.agentscope_runtime.research_models import ResearchModels
+
+        knowledge_models = ResearchModels(factory, recovery=recovery)
+
+        async def tools_for(role, task_config):
+            return await _host_tools_for(role, task_config, models=knowledge_models)
+
         try:
             yield RunResources(
                 models=factory,
-                tools_for=_host_tools_for,
+                tools_for=tools_for,
                 local_zones=_host_local_zones(),
             )
         finally:
@@ -132,12 +142,13 @@ async def build_native_research_service(*, runs_dir, database_url=None, admissio
     if production:
         from open_deep_research.agentscope_runtime.app import ASRuntime
         from open_deep_research.agentscope_runtime.production_resources import (
-            prepare_production_config, production_resources,
+            prepare_production_config,
+            production_resources,
         )
-        from open_deep_research.sandbox.team_controller import ControllerTeamLauncher
-        from open_deep_research.sandbox.controller_client import SandboxControllerClient
         from open_deep_research.configuration import Configuration
+        from open_deep_research.sandbox.controller_client import SandboxControllerClient
         from open_deep_research.sandbox.schema import resolve_profile
+        from open_deep_research.sandbox.team_controller import ControllerTeamLauncher
 
         runtime = await ASRuntime.create()
         try:
@@ -167,10 +178,14 @@ async def build_native_research_service(*, runs_dir, database_url=None, admissio
         )
 
         async def prepare_config(request, principal):
+            from open_deep_research.knowledge.run_scope import prepare_knowledge_sources
+
+            source_metadata = await prepare_knowledge_sources(principal.user_id, request.source_selection) if request.source_selection.documents_enabled else {}
             return {
                 "configurable": request.configurable,
                 "metadata": {
                     "user_id": principal.user_id,
+                    **source_metadata,
                     "langgraph_auth_user": {
                         "identity": principal.user_id,
                         "permissions": sorted(principal.permissions),
@@ -182,7 +197,9 @@ async def build_native_research_service(*, runs_dir, database_url=None, admissio
 
     reconciliation = None
     if production:
-        from open_deep_research.agentscope_runtime.spend_reconciliation import reconciliation_loop
+        from open_deep_research.agentscope_runtime.spend_reconciliation import (
+            reconciliation_loop,
+        )
         reconciliation = asyncio.create_task(reconciliation_loop(service))
 
     async def aclose():

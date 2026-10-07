@@ -28,8 +28,8 @@ from open_deep_research.agentscope_runtime.recovery_store import (
     digest,
 )
 from open_deep_research.agentscope_runtime.run_config import RunConfig
-from open_deep_research.api.history import HistoricalRunReader
 from open_deep_research.api.admission import ApiAdmission
+from open_deep_research.api.history import HistoricalRunReader
 from open_deep_research.api.projections import _stable_output
 from open_deep_research.events.public import PublicEvent, project_public_events
 from open_deep_research.security.inputs import (
@@ -176,6 +176,7 @@ class NativeRuns:
                 messages=messages,
                 application={
                     "evaluation_capture": prepared.get("evaluation_capture") is True,
+                    "knowledge_manifest": prepared.get("metadata", {}).get("knowledge_manifest"),
                     "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
                     "request_metadata": {**request.metadata, "request_id": current_request_id()},
@@ -397,6 +398,10 @@ class NativeRuns:
         status = browser_status(state)
         from open_deep_research.api.publications import run_publications
         publications = await run_publications(run_id, self.runs_dir) if self.runs_dir is not None else []
+        research = await self.store.research_progress_view(run_id, owner)
+        from open_deep_research.agentscope_runtime.efficiency import progress_summary
+
+        efficiency = progress_summary(research, state.coverage_contract)
         return {
             "run_id": run_id,
             "engine": "agentscope",
@@ -406,7 +411,7 @@ class NativeRuns:
             "revision": revision,
             "pending_human_action": projection.pending_human_action,
             "pending_security_approvals": projection.pending_security_approvals,
-            "progress": {**projection.model_dump(mode="json"), "status": status},
+            "progress": {**projection.model_dump(mode="json"), "status": status, **({"efficiency": efficiency} if research else {})},
             "output": {
                 **_stable_output(
                     state.report_product,

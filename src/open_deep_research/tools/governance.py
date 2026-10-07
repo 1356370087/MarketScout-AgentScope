@@ -23,9 +23,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import aiohttp
 
@@ -192,13 +193,24 @@ class GovernedToolCallResult:
     message: ToolOutcomeMessage
     result: Optional[ToolResult[Any]] = None
     error: Optional[ToolError] = None
+    confirmed_outcome: bool = False
 
 
-def _error_result(error: ToolError, tool_call_id: str) -> GovernedToolCallResult:
+class ToolOutcomeError(RuntimeError):
+    """A trusted remote executor returned a definite structured failure."""
+
+    def __init__(self, error: ToolError) -> None:
+        """Keep the remote error without mistaking it for a lost response."""
+        super().__init__(error.message)
+        self.error = error
+
+
+def _error_result(error: ToolError, tool_call_id: str, *, confirmed_outcome=False) -> GovernedToolCallResult:
     """Build a governed outcome for a structured failure."""
     return GovernedToolCallResult(
         message=ToolOutcomeMessage(error.model_dump_json(), error.tool_name, tool_call_id),
         error=error,
+        confirmed_outcome=confirmed_outcome,
     )
 
 
@@ -616,6 +628,24 @@ def _is_runtime_control_error(exc: Exception) -> bool:
     return isinstance(exc, (BudgetExhausted, DeadlineExceeded, FenceLost, UnknownOperation))
 
 
+async def _call_with_limits(tool, input, context):
+    from open_deep_research.agentscope_runtime.runtime_limits import attributed, limited
+    from open_deep_research.tools.base import ToolExecutionZone
+
+    cfg = Configuration.from_runnable_config(context.config)
+    with attributed(tool_call_id=context.tool_call_id, purpose="tool:" + tool.name):
+        callback = lambda: tool.call(input, context)
+        if (cfg.research_efficiency_mode == "bounded"
+                and not getattr(tool, "remote_execution", False)
+                and tool.execution_zone is not ToolExecutionZone.HOST_CONTROL):
+            seconds = cfg.research_tool_call_timeout_seconds if tool.name in {
+                "web_research", "fetch_url", "web_search", "search_documents",
+            } else cfg.tool_call_timeout_seconds
+            return await limited(callback, seconds,
+                deadline_at=context.config.get("metadata", {}).get("execution_deadline_at"))
+        return await callback()
+
+
 async def invoke_tool_with_retry(
     tool: Tool,
     input: BaseModel,
@@ -642,7 +672,7 @@ async def invoke_tool_with_retry(
     attempt = 0
     while True:
         try:
-            return await tool.call(input, replace(context, attempt=context.attempt + attempt))
+            return await _call_with_limits(tool, input, replace(context, attempt=context.attempt + attempt))
         except Exception as exc:  # noqa: BLE001 -- classify then decide
             if _is_runtime_control_error(exc):
                 raise
@@ -1014,13 +1044,13 @@ def _is_preapproved_local_document_read(
 ) -> bool:
     """Trust the server-validated frozen selection for owner-scoped document reads."""
     if (
-        tool.name != "search_documents"
+        tool.name not in {"search_documents", "knowledge_facts", "knowledge_wiki"}
         or get_tool_origin(tool) is not ToolOrigin.LOCAL_DOCUMENT
         or effect is not ToolEffect.SENSITIVE_READ
     ):
         return False
     try:
-        return selection_from_config(config).documents_enabled
+        return selection_from_config(config).documents_enabled and (tool.name == "search_documents" or bool((config.get("metadata") or {}).get("knowledge_manifest")))
     except ValueError:
         return False
 
@@ -1179,7 +1209,7 @@ async def execute_governed_tool_call_native(
     effective_retry = apply_retry and get_tool_retryable(tool) and retry_is_safe
     if not effective_retry:
         try:
-            result = await tool.call(validated_input, context)
+            result = await _call_with_limits(tool, validated_input, context)
             return GovernedToolCallResult(
                 message=ToolOutcomeMessage(
                     content=_serialize_governed_output(tool, result.output, configurable),
@@ -1191,6 +1221,8 @@ async def execute_governed_tool_call_native(
         except Exception as exc:
             if _is_runtime_control_error(exc):
                 raise
+            if isinstance(exc, ToolOutcomeError):
+                return _error_result(exc.error, tool_call_id, confirmed_outcome=True)
             error_type, _ = classify_retryable_error(exc)
             recorder.active_span().record_outcome(
                 error_type=error_type.value,
@@ -1236,6 +1268,8 @@ async def execute_governed_tool_call_native(
     except Exception as exc:  # non-retryable, surfaced directly
         if _is_runtime_control_error(exc):
             raise
+        if isinstance(exc, ToolOutcomeError):
+            return _error_result(exc.error, tool_call_id, confirmed_outcome=True)
         error_type, _ = classify_retryable_error(exc)
         recorder.active_span().record_outcome(
             error_type=error_type.value,

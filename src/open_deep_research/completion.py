@@ -147,6 +147,7 @@ class CompletionPolicyContext:
     cancelled: bool = False
     search_provider_exhausted_streak: int = 0
     fetch_budget_exhausted_task_streak: int = 0
+    research_stop_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +193,11 @@ class ResearchCompletionPolicy:
             )
 
         has_usable_evidence = context.evidence_count > 0
+        if context.research_stop_reason and not context.active_task_count:
+            return CompletionPolicyResult(
+                CompletionDecision.COMPLETE_PARTIAL if has_usable_evidence else CompletionDecision.TERMINATE,
+                context.research_stop_reason, tuple(gaps),
+            )
         if context.search_provider_exhausted_streak >= 3:
             # Consecutive handoffs finished with zero sources while the
             # search provider reported quota/credit exhaustion: further

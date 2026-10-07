@@ -118,11 +118,13 @@ def test_v7_defaults_disabled_and_legacy_fields_are_rejected():
         Configuration(enable_docker_sandbox=True)
 
 
-def test_enabled_sandbox_requires_async_and_root_key():
-    with pytest.raises(ValidationError, match="sandbox_requires_async_research"):
-        Configuration(sandbox_enabled=True, sandbox_root_signing_key=ROOT_KEY)
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_enabled_sandbox_supports_native_scheduling_and_requires_root_key(asynchronous):
+    cfg = _sandbox_config(enable_async_research=asynchronous)
+    assert cfg.sandbox_enabled
+    assert cfg.enable_async_research is asynchronous
     with pytest.raises(ValidationError, match="root_signing_key"):
-        Configuration(sandbox_enabled=True, enable_async_research=True)
+        Configuration(sandbox_enabled=True, enable_async_research=asynchronous)
 
 
 def test_per_run_api_keys_require_explicit_vault_mode(monkeypatch) -> None:

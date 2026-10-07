@@ -19,7 +19,11 @@ from open_deep_research.models.credentials_context import current_run_key
 from open_deep_research.sandbox.gateway import GatewayRunContext
 from open_deep_research.sandbox.wire import GatewayToolRequestV1
 from open_deep_research.tools.base import ToolExecutionZone
-from open_deep_research.tools.governance import GovernedToolCallResult, ToolError, ToolOutcomeMessage
+from open_deep_research.tools.governance import (
+    GovernedToolCallResult,
+    ToolError,
+    ToolOutcomeMessage,
+)
 from open_deep_research.tools.search_documents import search_documents
 
 pytestmark = pytest.mark.asyncio
@@ -79,7 +83,8 @@ async def test_worker_keeps_document_gateway_proxy(store, monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize("permitted", [False, True])
-async def test_gateway_document_read_has_run_key_and_durable_receipt(host, monkeypatch, permitted):
+@pytest.mark.parametrize("tool_name", ["search_documents", "knowledge_facts", "knowledge_wiki"])
+async def test_gateway_document_read_has_run_key_and_durable_receipt(host, monkeypatch, permitted, tool_name):
     from open_deep_research.documents import database
     from open_deep_research.tools.search_documents import definition
     from security.rbac.dependencies import apply_principal_to_config
@@ -95,25 +100,35 @@ async def test_gateway_document_read_has_run_key_and_durable_receipt(host, monke
     }}, principal)
     cfg["metadata"]["source_selection"] = {"mode": "documents", "sources": [
         {"type": "document", "id": "doc"}]}
+    cfg["metadata"]["knowledge_manifest"] = {"documents": [{"document_id": "doc", "generation_id": "generation"}]}
     context = GatewayRunContext(cfg, ledger.recovery.lease.fence, time.time() + 300,
                                 api_keys={"LITELLM_RUN_KEY": "run-only-fixture"})
     calls = []
 
-    async def retrieve(**kwargs):
+    async def retrieve(self, query, *, queries, execution):
         assert current_run_key() == "run-only-fixture"
-        assert kwargs["owner_id"] == "u" and kwargs["document_ids"] == ["doc"]
-        assert kwargs["run_id"] == "r"
-        calls.append(kwargs)
-        return [{"document_id": "doc", "chunk_id": "chunk", "filename": "source.md",
-                 "text": "Supported finding", "locator": {"page": 1}, "score": 0.05,
-                 "source_uri": "/documents/doc?chunk=chunk"}]
+        assert self.actor_id == "u" and execution.scope == "run"
+        assert execution.run_id == "r"
+        calls.append(query)
+        return {"query_id": "fixture-query", "rerank_completed": True, "profile": {"version": "fixture"},
+            "results": [{"document_id": "doc", "segment_id": "chunk", "generation_id": "generation", "filename": "source.md",
+                "text": "Supported finding", "locator": {"page": 1}, "score": 0.05,
+                "source_uri": "/documents/doc?chunk=chunk"}]}
 
     monkeypatch.setattr(database, "document_schema_available", lambda: True)
     monkeypatch.setattr(definition, "document_schema_available", lambda: True)
-    monkeypatch.setattr(definition, "search_document_chunks", retrieve)
+    monkeypatch.setattr("open_deep_research.agentscope_runtime.knowledge.KnowledgeApplication.search_research", retrieve)
+
+    async def read_assets(owner, manifest, kind, query):
+        assert owner == "u" and manifest == cfg["metadata"]["knowledge_manifest"]
+        assert current_run_key() == "run-only-fixture"
+        calls.append(query)
+        return {"items": [{"kind": kind}], "evidence": []}
+
+    monkeypatch.setattr("open_deep_research.knowledge.research_assets.read_assets", read_assets)
     request = GatewayToolRequestV1(run_id="r", task_id="t", role="researcher",
         stage="researching", logical_operation_id="document-read", tool_call_id="c",
-        tool_name="search_documents", execution_zone="gateway", arguments={"query": "finding"})
+        tool_name=tool_name, execution_zone="gateway", arguments={"query": "finding"})
     result = await gateway.invoke_tool(request, context)
     if not permitted:
         assert result.status == "failed" and result.error["error_type"] == "permission_denied"
@@ -122,7 +137,10 @@ async def test_gateway_document_read_has_run_key_and_durable_receipt(host, monke
             current_run_key()
         return
     assert result.status == "completed", result
-    assert json.loads(result.output)["evidence"][0]["source_type"] == "local_document"
+    if tool_name == "search_documents":
+        assert json.loads(result.output)["evidence"][0]["source_type"] == "local_document"
+    else:
+        assert result.output["items"][0]["kind"] == tool_name.removeprefix("knowledge_")
     assert await gateway.invoke_tool(request, context) == result
     assert len(calls) == 1
     row = await ledger.recovery.store.operation_record(ledger.recovery.lease,
@@ -138,6 +156,8 @@ async def test_document_profile_does_not_allow_other_sensitive_tools():
 
     _, _, profile = resolve_profile(Configuration())
     assert tool_policy_decision(profile, tool_name="search_documents", effect="sensitive_read") == "allow"
+    assert tool_policy_decision(profile, tool_name="knowledge_facts", effect="sensitive_read") == "allow"
+    assert tool_policy_decision(profile, tool_name="knowledge_wiki", effect="sensitive_read") == "allow"
     assert tool_policy_decision(profile, tool_name="read_file", effect="sensitive_read") == "deny"
     assert tool_policy_decision(profile, tool_name="write_file", effect="local_write") == "deny"
     profile.tools.deny_tools = ["search_*"]

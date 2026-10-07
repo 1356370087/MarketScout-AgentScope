@@ -24,12 +24,15 @@ from open_deep_research.sandbox.internal_api import (
     BudgetSettleRequest,
     OperationGetRequest,
     OperationTransitionRequest,
+    ResearchDataRequest,
     ToolBudgetReserveRequest,
     ToolBudgetSettleRequest,
 )
 
 # 这些工具的物理抓取进入 fetch_calls 维度；其余工具只计 tool_calls。
 GATEWAY_FETCH_TOOLS = frozenset({"fetch_url", "fetch_webpage", "web_research"})
+GATEWAY_SEARCH_TOOLS = frozenset({"web_search", "tavily_search", "openai_web_search", "anthropic_web_search", "web_research"})
+GATEWAY_WEB_TOOLS = GATEWAY_FETCH_TOOLS | GATEWAY_SEARCH_TOOLS
 
 
 class SQLGatewayLedger:
@@ -75,15 +78,26 @@ class SQLGatewayLedger:
         budget = await session.store.budget(session.lease.run_id, session.lease.user_id)
         if "cost_micro_usd" in budget["limits"]:
             usage["cost_micro_usd"] = self.cost(request.model_name, usage)
-        return await session.store.begin_operation(
+        result = await session.store.begin_operation(
             session.lease,
             self.key(request.logical_operation_id),
             "gateway:model",
             request.request_digest,
             reserve=usage,
             observation={"task_id": request.task_id, "stage": request.stage,
-                         "agent_role": request.agent_role, "model": request.model_name},
+                         "agent_role": request.agent_role, "model": request.model_name,
+                         "purpose": request.trace_metadata.get("purpose"),
+                         "logical_call_id": request.trace_metadata.get("logical_call_id"),
+                         "parent_tool_call_id": request.trace_metadata.get("parent_tool_call_id")},
         )
+        if budget.get("deadline") is not None:
+            result["deadline_at"] = budget["deadline"]
+        if getattr(self, "research_cache", None) is not None:
+            progress = await self.research_cache.progress()
+            deadline = progress.get("tasks", {}).get(request.task_id, {}).get("deadline_at")
+            if deadline is not None:
+                result["deadline_at"] = min(deadline, result.get("deadline_at", deadline))
+        return result
 
     async def reserve_tool(self, request):
         """Gateway 执行的工具在 SQL 权威记一次 tool_calls（含抓取维度）。
@@ -106,9 +120,10 @@ class SQLGatewayLedger:
         if not request.logical_operation_id:
             raise ValueError("gateway tool operation requires a logical id")
         reserve = {"tool_calls": 1}
-        if (request.tool_name or "") in GATEWAY_FETCH_TOOLS:
-            reserve["fetch_calls"] = 1
-        return await session.store.begin_operation(
+        shadow = request.tool_name in GATEWAY_SEARCH_TOOLS and getattr(self, "config", {}).get("configurable", {}).get("web_pipeline_mode") == "shadow"
+        if (request.tool_name or "") in GATEWAY_FETCH_TOOLS or shadow:
+            reserve["fetch_calls"] = request.fetch_calls if request.fetch_calls is not None else 1
+        result = await session.store.begin_operation(
             session.lease,
             self.tool_key(request.logical_operation_id),
             "gateway:tool",
@@ -117,11 +132,26 @@ class SQLGatewayLedger:
                 "stage": request.stage,
                 "tool_name": request.tool_name,
             },
-            replay_safe=request.idempotent is not False,
+            replay_safe=request.idempotent is not False and request.tool_name not in GATEWAY_WEB_TOOLS,
             reserve=reserve,
+            partial_fetches=request.fetch_calls is not None,
             observation={"task_id": request.task_id, "stage": request.stage,
                          "agent_role": "researcher", "tool_name": request.tool_name},
         )
+        if not result["replayed"] and "fetch_calls" in reserve and request.fetch_calls is not None:
+            result["fetch_grant"] = result.get("reservation", reserve)["fetch_calls"]
+        if (not result["replayed"] and request.tool_name in GATEWAY_WEB_TOOLS
+                and session.snapshot.coverage_contract):
+            # The host's live recovery snapshot is authoritative; never accept
+            # a caller-supplied contract to widen the source boundary.
+            result["coverage_contract"] = session.snapshot.coverage_contract
+        if getattr(self, "research_cache", None) is not None:
+            progress = await self.research_cache.progress()
+            budget = await session.store.budget(session.lease.run_id, session.lease.user_id)
+            deadlines = [v for v in (budget.get("deadline"), progress.get("tasks", {}).get(request.task_id, {}).get("deadline_at")) if v is not None]
+            if deadlines:
+                result["deadline_at"] = min(deadlines)
+        return result
 
     async def settle_tool(self, request):
         """结算一次 Gateway 工具调用；携带回执后重试可直接复用已提交结果。"""
@@ -141,7 +171,7 @@ class SQLGatewayLedger:
         await session.store.commit_operation(
             session.lease,
             key,
-            {"status": "tool_settled", "outcome": request.outcome},
+            {"status": "tool_settled", "outcome": request.outcome, "web_diagnostics": request.diagnostics},
             actual=actual,
         )
         return {"status": "settled"}
@@ -227,6 +257,25 @@ async def authorize_gateway_ledger(request, ledger, root_key, replay):
     return ledger
 
 
+async def research_data_response(ledger, request):
+    """Serve the same fenced cache contract from production and test routers."""
+    cache = ledger.research_cache
+    if request.action == "progress":
+        return {"value": await cache.progress(request.value)}
+    try:
+        if request.action == "get":
+            return {"value": await cache.get(request.key)}
+        if request.action == "begin":
+            return await cache.begin(request.key)
+        if request.action == "commit":
+            await cache.commit(request.key, request.value)
+        else:
+            await cache.abandon(request.key)
+    except UnknownOperation:
+        raise HTTPException(409, "research_cache_operation_unknown") from None
+    return {"ok": True}
+
+
 def build_gateway_ledger_router(resolve, root_key):
     """Resolve a host-owned live RecoverySession, never trust a caller's owner ID."""
     router = APIRouter(prefix="/internal/sandbox")
@@ -237,6 +286,10 @@ def build_gateway_ledger_router(resolve, root_key):
         if ledger is None:
             raise HTTPException(404, "run_not_active")
         return await authorize_gateway_ledger(request, ledger, root_key, replay)
+
+    @router.post("/research/data")
+    async def research_data(request: ResearchDataRequest):
+        return await research_data_response(await authorize(request), request)
 
     @router.post("/budgets/reserve")
     async def reserve(request: BudgetReserveRequest):

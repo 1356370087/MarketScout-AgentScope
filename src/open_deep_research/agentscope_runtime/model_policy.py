@@ -81,6 +81,7 @@ class ModelCallPolicy:
         circuit_policy=None,
         circuit_enabled=True,
         probe_mode="enforced",
+        total_timeout=None,
     ):
         if not candidates or attempts < 1 or first_packet_timeout <= 0:
             raise ValueError("invalid model call policy")
@@ -88,6 +89,7 @@ class ModelCallPolicy:
         self.attempts = attempts
         self.timeout = first_packet_timeout
         self.probe_mode = probe_mode
+        self.total_timeout = total_timeout
         self.breakers = (
             [
                 ModelCircuitBreaker(
@@ -100,6 +102,29 @@ class ModelCallPolicy:
         )
 
     async def invoke(self, handler, input_kwargs, state):
+        from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
+        from open_deep_research.agentscope_runtime.runtime_limits import (
+            call_context,
+            limited,
+        )
+
+        if self.total_timeout is None or all(isinstance(model, SandboxChatModel) for model in self.candidates):
+            return await self._invoke(handler, input_kwargs, state)
+        deadline = min(time.time() + self.total_timeout, call_context.get().get("deadline_at", float("inf")))
+        result = await limited(lambda: self._invoke(handler, input_kwargs, state), self.total_timeout)
+        if isinstance(result, (ChatResponse, StructuredResponse)):
+            return result
+
+        async def stream():
+            try:
+                async with asyncio.timeout(max(0, deadline - time.time())):
+                    async for item in result:
+                        yield item
+            finally:
+                await result.aclose()
+        return stream()
+
+    async def _invoke(self, handler, input_kwargs, state):
         """状态由 AgentState.middle_context 持久化；不在策略实例共享候选游标。"""
         index = state.setdefault("active_candidate_index", 0)
         if not isinstance(index, int) or not 0 <= index < len(self.candidates):

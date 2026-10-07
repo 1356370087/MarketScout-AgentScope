@@ -15,13 +15,14 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import ConfigDict, Field
-from open_deep_research.configuration import Configuration
-from open_deep_research.models.protocol_errors import ModelGatewayError
-from open_deep_research.agentscope_runtime.sandbox_provider import (
-    NativeGatewayProvider, STRUCTURED_OUTPUT_TOOL_NAME,
-)
 
 from open_deep_research.agentscope_runtime.sandbox_catalog import native_tools_scope
+from open_deep_research.agentscope_runtime.sandbox_provider import (
+    STRUCTURED_OUTPUT_TOOL_NAME,
+    NativeGatewayProvider,
+)
+from open_deep_research.configuration import Configuration
+from open_deep_research.models.protocol_errors import ModelGatewayError
 from open_deep_research.sandbox.approvals import SecurityApproval, SecurityApprovalStore
 from open_deep_research.sandbox.crypto import (
     NonceReplayCache,
@@ -57,9 +58,9 @@ from open_deep_research.sandbox.internal_api import (
     OperationTransitionRequest,
     SandboxInternalClient,
     ServiceRequest,
+    TaskActivityPublishRequest,
     ToolBudgetReserveRequest,
     ToolBudgetSettleRequest,
-    TaskActivityPublishRequest,
 )
 from open_deep_research.sandbox.policy import egress_target_from_url
 from open_deep_research.sandbox.schema import (
@@ -279,6 +280,8 @@ class RemoteBudgetGate:
         self._keys: dict[str, str] = {}
         self._pending_posts: list[tuple[str, ServiceRequest]] = []
         self.last_physical_attempt_id = ""
+        self.deadline_at = None
+        self.trace_metadata = {}
 
     def check_deadline(self, stage: str) -> None:
         """Delegate deadline enforcement to the API reserve endpoint."""
@@ -291,7 +294,9 @@ class RemoteBudgetGate:
         """Await queued authority calls without blocking the Gateway event loop."""
         while self._pending_posts:
             path, request = self._pending_posts[0]
-            await self.internal.post(path, request)
+            result = await self.internal.post(path, request)
+            if path.endswith("/budgets/reserve"):
+                self.deadline_at = result.get("deadline_at")
             del self._pending_posts[0]
 
     def reserve_model_call(
@@ -323,6 +328,7 @@ class RemoteBudgetGate:
             estimated_output_tokens=max(1, estimated_output_tokens),
             request_digest=request_digest,
             agent_role=self.agent_role,
+            trace_metadata=self.trace_metadata,
         )
         self._enqueue("/internal/sandbox/budgets/reserve", request)
         transition = self.internal.signed(
@@ -384,6 +390,7 @@ class GatewayRuntime:
         self.model_gateways: dict[str, NativeGatewayProvider] = {}
         self.egress_classifiers: dict[str, EgressClassifier] = {}
         self.native_fetch_ledgers = {}
+        self.research_cache_locks = {}
         self._native_model_app = None
         self._egress_classifier_locks: dict[str, asyncio.Lock] = {}
         self._egress_mode_cache: dict[str, tuple[float, str | None]] = {}
@@ -538,6 +545,7 @@ class GatewayRuntime:
             from open_deep_research.web.pipeline import clear_run_web_cache
 
             self.native_fetch_ledgers.pop(run_id, None)
+            self.research_cache_locks.pop(run_id, None)
             clear_run_web_cache(run_id)
         return context is not None
 
@@ -657,6 +665,9 @@ class GatewayRuntime:
         context: GatewayRunContext,
     ) -> GatewayToolCatalogOutcomeV1:
         """Return permission-filtered Gateway tool schemas, never implementations."""
+        from open_deep_research.agentscope_runtime.sandbox_catalog import (
+            assembled_tools as assemble_toolset,
+        )
         from open_deep_research.tools.base import (
             ToolExecutionZone,
             tool_to_model_definition,
@@ -665,7 +676,6 @@ class GatewayRuntime:
             AgentRole,
             filter_tools_by_permission,
         )
-        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
         role = AgentRole(request.role)
         assembled = await assemble_toolset(role, context.config)
@@ -833,6 +843,7 @@ class GatewayRuntime:
         capability: str = "tool.egress",
         consume: bool = True,
         trigger_reason: str = "",
+        wait_for_decision: bool = False,
     ) -> tuple[str, SecurityApproval]:
         """Resolve one tool.egress approval without blocking a first request.
 
@@ -934,14 +945,17 @@ class GatewayRuntime:
                 await self.internal.post("/internal/sandbox/approvals/request", create)
             )
             if created.status == "pending":
-                return "pending", created
-            if created.decision in {"allow_once", "allow_run"}:
+                if not wait_for_decision:
+                    return "pending", created
+                attached = created
+            elif created.decision in {"allow_once", "allow_run"}:
                 if consume:
                     await self._consume_network_approval(request, context, created)
                 return "allowed", created
-            return "denied", created
+            else:
+                return "denied", created
         approval = attached
-        attach_deadline = min(
+        attach_deadline = expires_at if wait_for_decision else min(
             expires_at,
             time.time()
             + max(0.0, configuration.sandbox_egress_pending_wait_seconds),
@@ -1176,6 +1190,8 @@ class GatewayRuntime:
                 role="egress_classifier",
                 stage=stage,
                 logical_operation_id=call.logical_operation_id,
+                trace_metadata={"purpose": "egress_classification", "logical_call_id": call.logical_operation_id}
+                if (context.frozen_config or context.config).get("metadata", {}).get("run_config_schema_version", 17) >= 17 else {},
                 model=model,
                 messages=call.messages,
                 structured_schema=call.structured_schema,
@@ -1297,6 +1313,9 @@ class GatewayRuntime:
             return EgressPrecheck(decision="allow", source="policy")
         if mode.mode == "open":
             return EgressPrecheck(decision="allow", source="mode")
+        from open_deep_research.sandbox.egress_context import egress_probe_only
+        if egress_probe_only.get():
+            return EgressPrecheck(decision="ask", source="shadow_probe")
         if mode.mode != "auto" or capability != "tool.egress" or tool_name not in {"fetch_url", "fetch_webpage", "web_research"}:
             return EgressPrecheck(decision="deny" if profile.approval_policy == "never" else "ask",
                                   source="mode" if mode.mode == "manual" else "capability_requires_human")
@@ -1327,7 +1346,10 @@ class GatewayRuntime:
         context: GatewayRunContext,
     ) -> GatewayToolOutcomeV1:
         """Scope nested tool model calls to the authenticated Run's credential."""
-        from open_deep_research.models.credentials_context import bind_run_key, reset_run_key
+        from open_deep_research.models.credentials_context import (
+            bind_run_key,
+            reset_run_key,
+        )
 
         token = bind_run_key(context.api_keys.get("LITELLM_RUN_KEY", ""))
         try:
@@ -1341,13 +1363,17 @@ class GatewayRuntime:
         context: GatewayRunContext,
     ) -> GatewayToolOutcomeV1:
         """Execute one authoritative Gateway-zone tool operation."""
+        from open_deep_research.agentscope_runtime.sandbox_catalog import (
+            assembled_tools as assemble_toolset,
+        )
         from open_deep_research.tools.governance import (
             AgentRole,
             check_permission,
-            execute_governed_tool_call_native as execute_governed_tool_call,
             resolve_allowed_tools,
         )
-        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
+        from open_deep_research.tools.governance import (
+            execute_governed_tool_call_native as execute_governed_tool_call,
+        )
 
         if request.execution_zone != "gateway":
             return GatewayToolOutcomeV1(
@@ -1553,6 +1579,19 @@ class GatewayRuntime:
                         },
                     )
                 authorized_hosts.append(host)
+        from open_deep_research.agentscope_runtime.gateway_ledger import (
+            GATEWAY_SEARCH_TOOLS,
+        )
+        from open_deep_research.web.pipeline import cached_document
+        web_config = Configuration.from_runnable_config(context.config)
+        fetch_reservation = None
+        if request.tool_name == "fetch_url":
+            cached = cached_document(request.run_id, request.arguments["url"], evidence=request.arguments.get("mode", "evidence") != "markdown")
+            fetch_reservation = 0 if cached is not None else 1
+        elif request.tool_name == "web_research":
+            fetch_reservation = web_config.fetch_top_k
+        elif request.tool_name in GATEWAY_SEARCH_TOOLS and web_config.web_pipeline_mode == "shadow":
+            fetch_reservation = web_config.web_shadow_fetch_top_k
         budget_request = self.internal.signed(
             ToolBudgetReserveRequest,
             run_id=request.run_id,
@@ -1561,6 +1600,7 @@ class GatewayRuntime:
             stage=request.stage,
             logical_operation_id=request.logical_operation_id,
             tool_name=request.tool_name,
+            fetch_calls=fetch_reservation,
             idempotent=(
                 tool.effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ}
                 or tool.supports_idempotency
@@ -1611,13 +1651,22 @@ class GatewayRuntime:
                 "sandbox_tool_stage": request.stage,
                 "research_wave_id": request.wave_id,
                 "sandbox_gateway_authorized_hosts": authorized_hosts,
+                **({"sql_fetch_grant": reservation["fetch_grant"]} if "fetch_grant" in reservation else {}),
+                **({"coverage_contract": reservation["coverage_contract"]} if "coverage_contract" in reservation else {}),
+                **({"execution_deadline_at": min(v for v in (reservation.get("deadline_at"), request.deadline_at) if v is not None)}
+                   if reservation.get("deadline_at") is not None or request.deadline_at is not None else {}),
             },
         }
         from open_deep_research.sandbox.egress_context import egress_authorizer
 
         once_grants: dict[tuple[str, int, str], int] = {}
+        authorization_locks: dict[tuple, asyncio.Lock] = {}
+        approval_wait_ms = 0
 
         async def authorize_nested_target(url: str, capability: str, consume: bool = False) -> str:
+            nonlocal approval_wait_ms
+            from open_deep_research.sandbox.egress_context import egress_probe_only
+
             target = egress_target_from_url(url)
             if target is None:
                 return "deny"
@@ -1633,6 +1682,8 @@ class GatewayRuntime:
                 profile=profile, operation_key=operation_key)
             if precheck.decision != "ask":
                 return precheck.decision
+            if egress_probe_only.get():
+                return "ask"
             authority_request = self.internal.signed(EgressTargetCheckRequest, run_id=request.run_id,
                 fence_token=context.fence_token, capability=capability, target={"domain": host, "port": port})
             authority = await self.internal.post("/internal/sandbox/egress/target/check", authority_request)
@@ -1641,10 +1692,13 @@ class GatewayRuntime:
             grant_key = (host, port, capability)
             if once_grants.get(grant_key) == authority.get("version", 0):
                 return "allow"
+            approval_started = time.monotonic()
             state, approval = await self._request_network_approval(nested_request, context,
                 host=host, port=port, capability=capability, consume=consume,
                 trigger_reason=precheck.source,
+                wait_for_decision=True,
                 expires_at=approval_deadline(context, timeout_seconds=profile.resources.approval_timeout_seconds))
+            approval_wait_ms += int((time.monotonic() - approval_started) * 1000)
             if state != "allowed":
                 return "ask" if state == "pending" else "deny"
             # Re-read authority after any human wait, including revocation races.
@@ -1664,7 +1718,7 @@ class GatewayRuntime:
                 once_grants[grant_key] = fresh.get("version", 0)
             return "allow"
 
-        async def authorize_nested(url: str, capability: str, consume: bool = False) -> str:
+        async def authorize_nested_checked(url: str, capability: str, consume: bool = False) -> str:
             try:
                 validate_http_url_syntax(url)
                 decision = await authorize_nested_target(url, capability, consume)
@@ -1675,6 +1729,14 @@ class GatewayRuntime:
                 return "deny"
             # DNS may yield to a concurrent revocation or mode change.
             return await authorize_nested_target(url, capability, consume)
+
+        async def authorize_nested(url: str, capability: str, consume: bool = False) -> str:
+            # Parallel queries share a single operation's one-time grant. Wait
+            # in place after SQL reservation instead of misreporting a pending
+            # human decision as a failed search and dropping that query.
+            key = (egress_target_from_url(url), capability)
+            async with authorization_locks.setdefault(key, asyncio.Lock()):
+                return await authorize_nested_checked(url, capability, consume)
 
         async def execute_authorized():
             token = egress_authorizer.set(authorize_nested)
@@ -1692,17 +1754,21 @@ class GatewayRuntime:
                                 error={"error_type": "egress_domain_denied",
                                        "message": "Network authorization changed before tool execution."},
                             )
-                return await execute_governed_tool_call(
-                    call,
-                    tools_by_name,
-                    role,
-                    execution_config,
-                    allowed_tools=allowed_tools,
-                    operation_id=request.logical_operation_id,
+                from open_deep_research.agentscope_runtime.runtime_limits import (
+                    attributed,
                 )
+
+
+                with attributed(parent_tool_call_id=request.tool_call_id):
+                    return await execute_governed_tool_call(
+                        call, tools_by_name, role, execution_config,
+                        allowed_tools=allowed_tools,
+                        operation_id=request.logical_operation_id,
+                    )
             finally:
                 egress_authorizer.reset(token)
 
+        tool_started = time.monotonic()
         governed = await execute_authorized()
         if isinstance(governed, GatewayToolOutcomeV1):
             return governed
@@ -1740,8 +1806,12 @@ class GatewayRuntime:
                 tool_call_id=request.tool_call_id,
                 status="completed",
                 output=governed.result.output if governed.result is not None else governed.message.content,
+                metadata=governed.result.metadata or {} if governed.result is not None else {},
             )
         )
+        if outcome.status == "completed":
+            outcome.metadata.update(execution_ms=max(0, int((time.monotonic() - tool_started) * 1000) - approval_wait_ms),
+                                    approval_wait_ms=approval_wait_ms)
         settle_request = self.internal.signed(
             ToolBudgetSettleRequest,
             run_id=request.run_id,
@@ -1749,6 +1819,7 @@ class GatewayRuntime:
             logical_operation_id=request.logical_operation_id,
             outcome=outcome.model_dump(mode="json"),
             fetch_calls=self._governed_fetch_calls(governed),
+            diagnostics=(governed.result.metadata or {}).get("web_diagnostics", {}) if governed.result is not None else {},
         )
         await self.internal.post(
             "/internal/sandbox/budgets/tool-settle",
@@ -1763,13 +1834,15 @@ class GatewayRuntime:
         context: GatewayRunContext,
     ) -> GatewayToolOutcomeV1:
         """Authorize, but never physically execute, a sandbox-local tool call."""
+        from open_deep_research.agentscope_runtime.sandbox_catalog import (
+            assembled_tools as assemble_toolset,
+        )
         from open_deep_research.security.redaction import redact_text
         from open_deep_research.tools.base import ToolEffect, ToolExecutionZone
         from open_deep_research.tools.governance import (
             AgentRole,
             filter_tools_by_permission,
         )
-        from open_deep_research.agentscope_runtime.sandbox_catalog import assembled_tools as assemble_toolset
 
         if request.execution_zone != "sandbox_local":
             return GatewayToolOutcomeV1(
@@ -1984,12 +2057,12 @@ class GatewayRuntime:
 
     @staticmethod
     def _governed_fetch_calls(governed) -> int | None:
-        """从治理结果元数据读取实测物理抓取数；缺失返回 None 保持预留。"""
+        """结算 URL 获取链额度并扣除确定的传输失败退款；未知结果保留预留。"""
         result = getattr(governed, "result", None)
         metadata = getattr(result, "metadata", None)
         if isinstance(metadata, dict) and metadata.get("physical_fetches") is not None:
             try:
-                return int(metadata["physical_fetches"])
+                return max(0, int(metadata["physical_fetches"]) - int(metadata.get("transport_failed_fetches", 0)))
             except (TypeError, ValueError):
                 return None
         return None
@@ -2018,10 +2091,14 @@ class GatewayRuntime:
 
     @staticmethod
     def _role_settings(configuration: Configuration, role: str) -> tuple[str, int]:
+        if role in {"openai_search", "anthropic_search"}:
+            return configuration.search_model(role.removesuffix("_search")), configuration.research_model_max_tokens
         mapping = {
             "supervisor": (configuration.research_model, configuration.research_model_max_tokens),
             "researcher": (configuration.research_model, configuration.research_model_max_tokens),
             "summarization": (configuration.summarization_model, configuration.summarization_model_max_tokens),
+            "knowledge_rerank": (configuration.knowledge_rerank_model or configuration.summarization_model, configuration.summarization_model_max_tokens),
+            "knowledge_answer": (configuration.knowledge_answer_model or configuration.summarization_model, configuration.summarization_model_max_tokens),
             "message_summary": (configuration.message_summary_model, configuration.message_summary_model_max_tokens),
             "compression": (configuration.compression_model, configuration.compression_model_max_tokens),
             "final_report": (configuration.final_report_model, configuration.final_report_model_max_tokens),
@@ -2080,10 +2157,14 @@ class GatewayRuntime:
     async def _model_activity_v2(self, request, context, event_type, *, outcome=None):
         """Forward safe Wire V2 model activity through the signed API boundary."""
         payload = {"provider": "litellm", "model": request.model}
+        payload.update(purpose=request.trace_metadata.get("purpose", request.role),
+                       parent_tool_call_id=request.trace_metadata.get("parent_tool_call_id", ""))
         if outcome is not None:
             payload.update({key: outcome.usage.get(key, 0) for key in ("input_tokens", "output_tokens")})
             if outcome.error_code:
                 payload["error_code"] = outcome.error_code
+            payload["cache_status"] = "reported" if "cached_input_tokens" in outcome.usage else "not_reported"
+            payload.update({key: outcome.usage[key] for key in ("cached_input_tokens", "cache_creation_input_tokens") if key in outcome.usage})
         try:
             event = self.internal.signed(
                 TaskActivityPublishRequest, run_id=request.run_id, task_id=request.task_id,
@@ -2091,6 +2172,7 @@ class GatewayRuntime:
                 kind="model", phase="reasoning",
                 status={"model.started": "running", "model.completed": "success", "model.failed": "error"}[event_type],
                 title="模型调用", summary="", payload=payload,
+                duration_ms=max(0, int(outcome.latency_ms)) if outcome is not None and outcome.latency_ms is not None else None,
                 # These IDs identify pipeline/model spans, not Researchers.
                 update_run_summary=(
                     request.task_id not in {"pipeline", "supervisor"}
@@ -2165,6 +2247,7 @@ class GatewayRuntime:
         )
         operation_key = f"gateway-v2:{request.logical_operation_id}"
         budget.agent_role = request.role
+        budget.trace_metadata = request.trace_metadata
         gateway = self.model_gateways.get(request.run_id)
         if gateway is None:
             gateway = NativeGatewayProvider(api_key=litellm_key)
@@ -2207,7 +2290,31 @@ class GatewayRuntime:
             await budget.flush_pending()
             dispatched = True
             await self._model_activity_v2(request, context, "model.started")
-            outcome = await gateway.complete(request.model_copy(update={"tools": tools, "tool_choice": tool_choice}))
+            from open_deep_research.agentscope_runtime.web_progress import (
+                WebProgress,
+                model_search_progress,
+            )
+
+            progress = WebProgress(context.config, task_id=request.task_id,
+                tool_call_id=str(request.trace_metadata.get("tool_call_id") or request.logical_operation_id),
+                operation_id=request.logical_operation_id, fence_token=context.fence_token)
+            progress_token = model_search_progress.set(progress)
+            try:
+                from open_deep_research.agentscope_runtime.efficiency import enabled
+                from open_deep_research.agentscope_runtime.runtime_limits import limited
+
+                async def complete_model():
+                    return await gateway.complete(request.model_copy(update={"tools": tools, "tool_choice": tool_choice}))
+
+                if enabled(context.config):
+                    cfg = Configuration.from_runnable_config(context.config)
+                    deadlines = [v for v in (budget.deadline_at, request.trace_metadata.get("deadline_at")) if isinstance(v, int | float)]
+                    outcome = await limited(complete_model, cfg.model_call_timeout_seconds,
+                                            deadline_at=min(deadlines) if deadlines else None)
+                else:
+                    outcome = await complete_model()
+            finally:
+                model_search_progress.reset(progress_token)
             budget.settle_model_call(
                 operation_key,
                 input_tokens=outcome.usage.get("input_tokens", 0),
@@ -2262,6 +2369,7 @@ class GatewayRuntime:
             definite_rejection = isinstance(exc, ModelGatewayError) and exc.code in {
                 "invalid_request", "authentication", "model_unavailable",
                 "budget_or_rate_limit", "gateway_budget_exceeded",
+                "server_search_failed",
             }
             uncertain = dispatched and not definite_rejection
             budget.fail_model_call(operation_key, uncertain=uncertain)
@@ -2505,7 +2613,9 @@ def main() -> None:
             )
         )
         async with proxy_server:
-            await asyncio.gather(proxy_server.serve_forever(), server.serve())
+            # start_server already accepts connections. Let the HTTP server's
+            # signal handling end this scope and close the proxy listener too.
+            await server.serve()
 
     asyncio.run(serve())
 

@@ -81,6 +81,8 @@ export interface ResearchSource {
   source_type?: "web" | "local_document" | string;
   document_id?: string;
   chunk_id?: string;
+  generation_id?: string;
+  locator?: string;
 }
 
 export interface PendingHumanAction {
@@ -118,6 +120,10 @@ export interface CapabilitiesResponse {
 }
 
 export interface ResearchRunState {
+  efficiency?: ResearchEfficiency;
+  completionStatus?: "success" | "partial";
+  researchGaps?: string[];
+  stopReason?: string;
   runId: string;
   title: string;
   status: RunStatus;
@@ -164,6 +170,7 @@ export interface RunSnapshot {
   pending_human_action?: PendingHumanAction | null;
   pending_security_approvals?: SecurityApproval[];
   progress?: {
+    efficiency?: ResearchEfficiency;
     status?: RunStatus;
     stage_index?: number;
     stage_count?: number;
@@ -182,6 +189,10 @@ export interface RunSnapshot {
     report_revision_count?: number;
   };
   output?: {
+    completion_status?: "success" | "partial" | null;
+    stop_reason?: string | null;
+    research_gaps?: string[];
+    uncovered_requirements?: string[];
     usage?: Record<string, unknown>;
     usage_accounting?: Record<string, unknown> | null;
     metrics?: Record<string, unknown>;
@@ -199,5 +210,17 @@ export interface RunSnapshot {
   };
 
   last_event_id: number;
+}
+
+export interface ResearchEfficiency {
+  source_versions?: Record<string, string>;
+  document_count: number;
+  processed_chunks: number;
+  total_chunks: number;
+  candidate_count: number;
+  admitted_count: number;
+  counters: Record<string, number>;
+  requirements: Record<string, { text: string; status: string; supplement_rounds: number; stagnant_rounds: number; gaps: Array<{ kind?: string; reason: string }> }>;
+  tasks: Record<string, { status?: string; admission_status?: string }>;
 }
 

@@ -90,6 +90,8 @@ def public_event(event):
     kind = payload["type"]
     if kind == "research.public":
         return payload["public_type"], payload.get("stage"), payload["public_payload"]
+    if kind == "research.progress":
+        return "research.progress.updated", "researching", {"progress": payload["progress"]}
     if kind == "research.cancelled":
         return (
             "run.cancelled",

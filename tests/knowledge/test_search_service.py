@@ -159,12 +159,12 @@ async def test_invalid_answer_json_uses_one_repair(monkeypatch, repair_succeeds)
     async def search(_request):
         return {"query_id": "q1", "results": evidence, "rerank_completed": True}
 
-    async def usage(*_args):
+    async def usage(*_args, **_kwargs):
         return None
 
     calls = []
 
-    async def model(question, _evidence):
+    async def model(question, _evidence, **_kwargs):
         calls.append(question)
         if len(calls) == 1 or not repair_succeeds:
             raise answer.AnswerUnavailableError("answer_invalid_response")
@@ -172,7 +172,7 @@ async def test_invalid_answer_json_uses_one_repair(monkeypatch, repair_succeeds)
                 "citations": [{"marker": "[1]", "segment_ids": ["s1"]}]}
 
     monkeypatch.setattr(answer, "unified_search", search)
-    monkeypatch.setattr(answer, "check_and_count_usage", usage)
+    monkeypatch.setattr("open_deep_research.knowledge.accounting.query_usage", usage)
     monkeypatch.setattr(answer, "_call_answer_model", model)
     result = await answer.answer_question(
         search_service.SearchRequest(owner_id="owner", query="营收是多少？")

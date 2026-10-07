@@ -7,16 +7,16 @@ import uuid
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from open_deep_research.config_types import RuntimeConfig
 from open_deep_research.quality.policy import (
     QualityEvaluationRigor,
     get_quality_rigor_policy,
     rigor_from_legacy_min_score,
 )
 
-RUN_CONFIG_SCHEMA_VERSION = 14
+RUN_CONFIG_SCHEMA_VERSION = 17
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
@@ -59,6 +59,28 @@ RUN_CONFIG_FROZEN_FIELDS = (
     "hook_timeout_seconds",
     "max_concurrent_research_units",
     "search_api",
+    "search_providers",
+    "search_max_concurrency",
+    "openai_search_model",
+    "anthropic_search_model",
+    "web_pipeline_shadow_sample_rate",
+    "web_shadow_fetch_top_k",
+    "web_shadow_timeout_seconds",
+    "fetch_backend_order",
+    "external_extract_backends",
+    "browser_render_fallback_enabled",
+    "browser_mcp_enabled",
+    "fetch_top_k",
+    "search_candidate_limit",
+    "max_fetches_per_researcher",
+    "max_fetches_per_run",
+    "fetch_global_concurrency",
+    "fetch_per_host_concurrency",
+    "html_max_bytes",
+    "pdf_max_bytes",
+    "pdf_max_pages",
+    "respect_robots_txt",
+    "web_min_source_authority",
     "max_researcher_iterations",
     "max_react_tool_calls",
     "approval_pending_turn_allowance",
@@ -74,6 +96,8 @@ RUN_CONFIG_FROZEN_FIELDS = (
     "report_section_concurrency",
     "web_pipeline_mode",
     "web_rerank_model",
+    "knowledge_rerank_model",
+    "knowledge_answer_model",
     "web_evidence_model",
     "message_summary_model",
     "message_summary_model_max_tokens",
@@ -172,8 +196,30 @@ _V12_ONWARD_FROZEN_FIELDS = {
 }
 _V13_ONWARD_FROZEN_FIELDS = {"report_section_concurrency"}
 _V14_ONWARD_FROZEN_FIELDS = {"async_research_mode", "team_execution_mode"}
+_V15_ONWARD_FROZEN_FIELDS = {"knowledge_rerank_model", "knowledge_answer_model"}
+_V16_ONWARD_FROZEN_FIELDS = {
+    "search_providers", "search_max_concurrency", "openai_search_model",
+    "anthropic_search_model", "web_pipeline_shadow_sample_rate",
+    "web_shadow_fetch_top_k", "web_shadow_timeout_seconds", "fetch_backend_order",
+    "external_extract_backends", "browser_render_fallback_enabled", "browser_mcp_enabled", "fetch_top_k",
+    "search_candidate_limit", "max_fetches_per_researcher", "max_fetches_per_run",
+    "fetch_global_concurrency", "fetch_per_host_concurrency", "html_max_bytes",
+    "pdf_max_bytes", "pdf_max_pages", "respect_robots_txt", "web_min_source_authority",
+}
+_V17_ONWARD_FROZEN_FIELDS = {
+    "research_efficiency_mode", "max_supplement_rounds", "max_no_progress_rounds",
+    "research_context_target_tokens", "handoff_context_target_tokens",
+}
+RUN_CONFIG_FROZEN_FIELDS_V16 = RUN_CONFIG_FROZEN_FIELDS
+RUN_CONFIG_FROZEN_FIELDS = (*RUN_CONFIG_FROZEN_FIELDS, *sorted(_V17_ONWARD_FROZEN_FIELDS))
+RUN_CONFIG_FROZEN_FIELDS_V15 = tuple(
+    name for name in RUN_CONFIG_FROZEN_FIELDS_V16 if name not in _V16_ONWARD_FROZEN_FIELDS
+)
+RUN_CONFIG_FROZEN_FIELDS_V14 = tuple(
+    name for name in RUN_CONFIG_FROZEN_FIELDS_V15 if name not in _V15_ONWARD_FROZEN_FIELDS
+)
 RUN_CONFIG_FROZEN_FIELDS_V13 = tuple(
-    name for name in RUN_CONFIG_FROZEN_FIELDS if name not in _V14_ONWARD_FROZEN_FIELDS
+    name for name in RUN_CONFIG_FROZEN_FIELDS_V14 if name not in _V14_ONWARD_FROZEN_FIELDS
 )
 RUN_CONFIG_FROZEN_FIELDS_V12 = tuple(
     name for name in RUN_CONFIG_FROZEN_FIELDS_V13 if name not in _V13_ONWARD_FROZEN_FIELDS
@@ -267,6 +313,8 @@ class SearchAPI(Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     TAVILY = "tavily"
+    BING = "bing"
+    BRAVE = "brave"
     NONE = "none"
 
 
@@ -479,6 +527,11 @@ class Configuration(BaseModel):
         ge=1,
         description="Optional wall-clock deadline for one complete research run.",
     )
+    research_efficiency_mode: Literal["baseline", "bounded"] = Field(default="bounded", description="新运行默认启用有界补证与运行内复用；baseline 仅用于对照验收。")
+    max_supplement_rounds: int = Field(default=2, ge=0, le=10, description="每项需求在初次研究后最多补证的轮数，默认 2；达到上限后保留已准入结论和缺口。")
+    max_no_progress_rounds: int = Field(default=2, ge=1, le=10, description="连续无新增证据或检查范围的轮数上限，默认 2；跨任务与恢复累计。")
+    research_context_target_tokens: int = Field(default=24_000, ge=1024, description="研究上下文目标 Token 数，默认 24000；提前触发原生压缩，保留任务约束和证据引用。")
+    handoff_context_target_tokens: int = Field(default=8_000, ge=1024, description="交接压缩的输入目标 Token 数，默认 8000；完整证据仍独立保留。")
     max_run_model_calls: Optional[int] = Field(default=None, ge=1)
     max_run_tool_calls: Optional[int] = Field(default=None, ge=1)
     max_run_input_tokens: Optional[int] = Field(default=None, ge=1)
@@ -707,11 +760,60 @@ class Configuration(BaseModel):
                     {"label": "Tavily", "value": SearchAPI.TAVILY.value},
                     {"label": "OpenAI Native Web Search", "value": SearchAPI.OPENAI.value},
                     {"label": "Anthropic Native Web Search", "value": SearchAPI.ANTHROPIC.value},
+                    {"label": "Bing", "value": SearchAPI.BING.value},
+                    {"label": "Brave", "value": SearchAPI.BRAVE.value},
                     {"label": "None", "value": SearchAPI.NONE.value}
                 ]
             }
         }
     )
+    search_providers: list[SearchAPI] | None = Field(
+        default=None,
+        description="并行搜索提供商；未填写沿用 search_api，空列表关闭提供商搜索。",
+    )
+    search_max_concurrency: int = Field(default=4, ge=1, le=16)
+    openai_search_model: str | None = Field(
+        default=None, description="OpenAI 搜索模型；为空时仅继承同提供商的研究模型。",
+    )
+    anthropic_search_model: str | None = Field(
+        default=None, description="Anthropic 搜索模型；为空时仅继承同提供商的研究模型。",
+    )
+
+    @field_validator("search_providers", "fetch_backend_order", "external_extract_backends", mode="before")
+    @classmethod
+    def parse_web_lists(cls, value):
+        """Accept JSON arrays from environment variables as well as API lists."""
+        if isinstance(value, str):
+            return json.loads(value) if value.strip() else None
+        return value
+
+    @field_validator("search_providers")
+    @classmethod
+    def validate_search_providers(cls, values):
+        """Require explicit providers; an empty list disables discovery."""
+        if values is None:
+            return None
+        if SearchAPI.NONE in values:
+            raise ValueError("search_providers uses [] to disable search; 'none' is not a provider")
+        return list(dict.fromkeys(values))
+
+    @property
+    def resolved_search_providers(self) -> list[SearchAPI]:
+        """Resolve the explicit list, preserving the legacy single-provider setting."""
+        if self.search_providers is not None:
+            return list(self.search_providers)
+        return [] if self.search_api is SearchAPI.NONE else [self.search_api]
+
+    def search_model(self, provider: str) -> str:
+        """Resolve an independently configured, provider-matching search model."""
+        explicit = getattr(self, f"{provider}_search_model")
+        if explicit:
+            return explicit
+        model = self.research_model
+        if not model or not model.startswith(f"{provider}:"):
+            raise ValueError(f"{provider}_search_model_required")
+        return model
+
     max_researcher_iterations: int = Field(
         default=6,
         metadata={
@@ -1364,12 +1466,26 @@ class Configuration(BaseModel):
         },
     )
     web_pipeline_shadow_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+    web_shadow_fetch_top_k: int = Field(default=2, ge=1, le=8)
+    web_shadow_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     fetch_backend_order: List[str] = Field(
         default_factory=lambda: ["local", "playwright", "tavily_extract", "firecrawl"]
     )
     external_extract_backends: List[str] = Field(
         default_factory=lambda: ["tavily_extract", "firecrawl"]
     )
+
+    @field_validator("fetch_backend_order", "external_extract_backends")
+    @classmethod
+    def validate_fetch_backends(cls, values, info):
+        """Normalize the historical Tavily alias at the configuration boundary."""
+        allowed = {"tavily_extract", "firecrawl"}
+        if info.field_name == "fetch_backend_order":
+            allowed |= {"local", "playwright"}
+        normalized = ["tavily_extract" if value == "tavily" else value for value in values]
+        if any(value not in allowed for value in normalized):
+            raise ValueError(f"unsupported {info.field_name}")
+        return list(dict.fromkeys(normalized))
     fetch_top_k: int = Field(default=5, ge=3, le=8)
     web_min_source_authority: float = Field(
         default=0.65,
@@ -1397,6 +1513,8 @@ class Configuration(BaseModel):
     )
     fetch_global_concurrency: int = Field(default=4, ge=1, le=32)
     fetch_per_host_concurrency: int = Field(default=2, ge=1, le=8)
+    knowledge_rerank_model: str | None = Field(default=None, description="知识检索语义重排模型；研究运行未指定时使用摘要模型。")
+    knowledge_answer_model: str | None = Field(default=None, description="独立知识问答模型。")
     web_rerank_model: str = Field(default="openai:gpt-4.1-mini")
     web_evidence_model: str = Field(default="openai:gpt-4.1-mini")
     html_max_bytes: int = Field(default=2 * 1024 * 1024, ge=1024)
@@ -2174,8 +2292,9 @@ class Configuration(BaseModel):
         """Fail closed when V7 sandbox execution lacks hard prerequisites."""
         if not self.sandbox_enabled:
             return self
-        if not self.enable_async_research:
-            raise ValueError("sandbox_requires_async_research")
+        # Native synchronous and team researchers both use governed Gateway
+        # ports. ProductionRunFactory verifies those ports and SQL accounting;
+        # scheduling mode is independent of the sandbox security boundary.
         if not self.sandbox_root_signing_key:
             raise ValueError("sandbox_unavailable:root_signing_key")
         from open_deep_research.sandbox.crypto import decode_root_key
@@ -2233,6 +2352,25 @@ class Configuration(BaseModel):
             )
             for field_name in field_names
         }
+        for field_name in ("search_providers", "openai_search_model", "anthropic_search_model"):
+            # Blank optional example values mean unset, so per-run UI choices
+            # remain usable. Explicit []/null still keep environment precedence.
+            if not (frozen and field_name in configurable) and os.environ.get(field_name.upper(), "").strip() == "":
+                values[field_name] = configurable.get(field_name)
+        if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 15:
+            # 旧运行没有授权知识模型角色，不从新部署环境补入额外模型。
+            values.update(knowledge_rerank_model=None, knowledge_answer_model=None)
+        if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 16:
+            # Older manifests never authorized parallel discovery or shadow I/O.
+            values.update(
+                search_providers=None, openai_search_model=None, anthropic_search_model=None,
+                web_pipeline_shadow_sample_rate=0.0, browser_render_fallback_enabled=False,
+                fetch_backend_order=["local"], external_extract_backends=[],
+            )
+        if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 17:
+            values.update(research_efficiency_mode="baseline", max_supplement_rounds=2,
+                          max_no_progress_rounds=2, research_context_target_tokens=24_000,
+                          handoff_context_target_tokens=8_000)
         rigor, _warning = _resolve_quality_rigor(config or {})
         values["quality_evaluation_rigor"] = rigor
         # Explicit env-var overrides for fields with non-standard env names
@@ -2281,6 +2419,12 @@ def frozen_run_config_values(config: RuntimeConfig) -> dict[str, Any]:
         if schema_version == 12
         else RUN_CONFIG_FROZEN_FIELDS_V13
         if schema_version == 13
+        else RUN_CONFIG_FROZEN_FIELDS_V14
+        if schema_version == 14
+        else RUN_CONFIG_FROZEN_FIELDS_V15
+        if schema_version == 15
+        else RUN_CONFIG_FROZEN_FIELDS_V16
+        if schema_version == 16
         else RUN_CONFIG_FROZEN_FIELDS
     )
     return {
@@ -2351,6 +2495,12 @@ def freeze_run_config(
             if schema_version == 12
             else RUN_CONFIG_FROZEN_FIELDS_V13
             if schema_version == 13
+            else RUN_CONFIG_FROZEN_FIELDS_V14
+            if schema_version == 14
+            else RUN_CONFIG_FROZEN_FIELDS_V15
+            if schema_version == 15
+            else RUN_CONFIG_FROZEN_FIELDS_V16
+            if schema_version == 16
             else RUN_CONFIG_FROZEN_FIELDS
         )
         missing = [

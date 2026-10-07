@@ -1,5 +1,6 @@
 """Request-scoped native Gateway tools and model resources."""
 
+from contextlib import AsyncExitStack
 from contextvars import ContextVar
 from functools import wraps
 
@@ -27,12 +28,19 @@ def native_tools_scope(method):
             load_native_mcp_tools,
         )
         from open_deep_research.agentscope_runtime.search import search_provider_tools
+        from open_deep_research.agentscope_runtime.search_providers import (
+            SearchResources,
+        )
         from open_deep_research.agentscope_runtime.web_tools import (
             WebFetchLedger,
             native_web_tools,
         )
         from open_deep_research.configuration import Configuration
-        from open_deep_research.sandbox.egress_context import egress_authorizer
+        from open_deep_research.knowledge.research_assets import research_asset_tools
+        from open_deep_research.sandbox.egress_context import (
+            egress_authorizer,
+            egress_probe_only,
+        )
         from open_deep_research.sandbox.gateway import (
             approval_deadline,
             create_gateway_app,
@@ -48,7 +56,9 @@ def native_tools_scope(method):
         from open_deep_research.security.network import validate_http_url_syntax
         from open_deep_research.tools.governance import AgentRole
         from open_deep_research.tools.read_file import read_file
-        from open_deep_research.tools.search_documents import search_documents
+        from open_deep_research.tools.search_documents.definition import (
+            make_search_documents,
+        )
         from open_deep_research.tools.shell_exec import shell_exec
         from open_deep_research.tools.write_file import write_file
 
@@ -94,6 +104,8 @@ def native_tools_scope(method):
             precheck = await check()
             if precheck.decision != "ask":
                 return precheck.decision
+            if egress_probe_only.get():
+                return "ask"
             state = await authority()
             key = (host, port, capability)
             if key in discovery_grants and discovery_grants[key] == state.get("version", 0):
@@ -140,18 +152,37 @@ def native_tools_scope(method):
                     model = factory.build_sandbox(role, binding, client=client)
                     return factory.policy_middleware(role, candidates=[model])
 
+                async def search_web(self, provider, query, **options):
+                    from open_deep_research.agentscope_runtime.search_models import (
+                        invoke_search,
+                    )
+
+                    return await invoke_search(self, provider, query, **options)
+
+            from open_deep_research.agentscope_runtime.efficiency import (
+                RemoteResearchCache,
+                enabled,
+            )
+
+
+            resources = SearchResources()
+            browser_tools = []
+            ledger = runtime.native_fetch_ledgers.setdefault(request.run_id, WebFetchLedger())
             try:
                 models = ToolModels()
+                models.research_cache = RemoteResearchCache(runtime.internal, request.run_id,
+                    context.fence_token, runtime.research_cache_locks.setdefault(request.run_id, {}),
+                    max_body_bytes=Configuration.from_runnable_config(config).max_request_body_bytes) if enabled(config) else None
                 tools = [
                     *native_web_tools(
                         lambda: config,
                         models,
-                        runtime.native_fetch_ledgers.setdefault(
-                            request.run_id, WebFetchLedger()
-                        ),
+                        ledger, resources=resources, browser_tools=browser_tools,
                     ),
-                    *search_provider_tools(lambda: config, models),
-                    search_documents,
+                    *search_provider_tools(lambda: config, models, resources=resources,
+                                           ledger=ledger, browser_tools=browser_tools),
+                    make_search_documents(models),
+                    *research_asset_tools(),
                     read_file,
                     write_file,
                     shell_exec,
@@ -159,7 +190,8 @@ def native_tools_scope(method):
                 discovery_token = egress_authorizer.set(authorize_discovery)
                 try:
                     tools.extend(await load_native_mcp_tools(config, {t.name for t in tools}, role=AgentRole(request.role)))
-                    tools.extend(await load_native_browser_mcp_tools(config, {t.name for t in tools}, role=AgentRole(request.role)))
+                    browser_tools.extend(await load_native_browser_mcp_tools(config, {t.name for t in tools}, role=AgentRole(request.role)))
+                    tools.extend(browser_tools)
                 finally:
                     egress_authorizer.reset(discovery_token)
                 if pending_approval:
@@ -178,7 +210,9 @@ def native_tools_scope(method):
                 finally:
                     _active.reset(token)
             finally:
-                await close_native_mcp_tools(tools)
-                await factory.aclose()
+                async with AsyncExitStack() as cleanup:
+                    cleanup.push_async_callback(factory.aclose)
+                    cleanup.push_async_callback(resources.aclose)
+                    cleanup.push_async_callback(close_native_mcp_tools, tools)
 
     return scoped

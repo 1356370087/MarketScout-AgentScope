@@ -27,6 +27,7 @@ from open_deep_research.documents import (
 from open_deep_research.documents.parse_pipeline import parse_document_structured
 from open_deep_research.documents.settings import get_document_settings
 from open_deep_research.documents.storage import StagedUpload
+from open_deep_research.knowledge import search_service
 
 _TEST_DSN = os.environ.get("IAM_TEST_DATABASE_URL", "")
 _DOCLING = os.environ.get("DOCLING_SERVE_URL", "").strip()
@@ -90,6 +91,7 @@ def _two_page_pdf(path: Path) -> Path:
 
 async def test_workbench_corrections_reparse_and_diff(monkeypatch, tmp_path):
     monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "fixture-service")
     monkeypatch.setenv(
         "DOCUMENT_DATABASE_URL",
         _TEST_DSN.replace("postgresql+asyncpg://", "postgresql://", 1),
@@ -98,8 +100,9 @@ async def test_workbench_corrections_reparse_and_diff(monkeypatch, tmp_path):
     monkeypatch.setenv("DOCLING_SERVE_API_KEY", _DOCLING_KEY)
     monkeypatch.setenv("DOCLING_TIMEOUT_SECONDS", os.environ.get("DOCLING_TIMEOUT_SECONDS", "600"))
     monkeypatch.setenv("DOCUMENT_STORAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "fixture-service")
     settings = get_document_settings()
-    monkeypatch.setattr(retrieval, "embed_texts", _fake_embed)
+    monkeypatch.setattr(search_service, "embed_texts", _fake_embed)
     monkeypatch.setattr(corrections, "embed_texts", _fake_embed)
     monkeypatch.setattr(reparse, "embed_texts", _fake_embed)
 
@@ -220,6 +223,7 @@ async def test_workbench_corrections_reparse_and_diff(monkeypatch, tmp_path):
     # Exercise HTTP status mapping against the real conflicting revision.
     import httpx
     from fastapi import FastAPI
+
     from open_deep_research.documents import router as document_routes
     from open_deep_research.documents.database import initialize_document_schema
     from security.rbac.principal import Principal

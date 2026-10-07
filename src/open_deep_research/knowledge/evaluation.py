@@ -24,7 +24,8 @@ from .search_service import SearchRequest, unified_search
 def _snippet_hit(snippet: str, results: list[dict[str, Any]]) -> bool:
     needle = snippet.strip()
     return any(needle in (item.get("text") or "") or needle in (item.get("context_before") or "")
-               or needle in (item.get("context_after") or "") for item in results)
+               or needle in (item.get("context_after") or "")
+               or needle in (item.get("parent_context") or "") for item in results)
 
 
 def recall_at_k(expected: list[str], results: list[dict[str, Any]], k: int) -> float:
@@ -40,12 +41,17 @@ def ndcg_at_k(expected: list[str], results: list[dict[str, Any]], k: int) -> flo
     if not expected:
         return 0.0
     gains = 0.0
-    for snippet in expected:
-        for index, item in enumerate(results[:k]):
-            if _snippet_hit(snippet, [item]):
-                gains += 1.0 / math.log2(index + 2)
-                break
-    ideal = sum(1.0 / math.log2(index + 2) for index in range(min(len(expected), k)))
+    remaining = set(expected)
+    relevant_count = 0
+    for index, item in enumerate(results[:k]):
+        hits = {snippet for snippet in remaining if _snippet_hit(snippet, [item])}
+        if hits:
+            gains += 1.0 / math.log2(index + 2)
+            relevant_count += 1
+            remaining -= hits
+    # A result may satisfy several labels, but earns gain once at its rank.
+    ideal_count = min(k, relevant_count + len(remaining))
+    ideal = sum(1.0 / math.log2(index + 2) for index in range(ideal_count))
     return gains / ideal if ideal else 0.0
 
 
@@ -54,7 +60,7 @@ def evaluate_answer_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("status") == "no_evidence":
         return {"status": "no_evidence", "citation_valid": True}
     if payload.get("status") != "answered":
-        return {"status": payload.get("status"), "citation_valid": True}
+        return {"status": payload.get("status"), "citation_valid": False}
     evidence_ids = {item["segment_id"] for item in payload.get("evidence") or []}
     cited = {
         segment_id
@@ -107,19 +113,27 @@ async def run_evaluation(
             str(snippet) for snippet in (item.get("expected") or {}).get("snippets") or []
         ]
         entry: dict[str, Any] = {"id": item.get("id"), "category": item.get("category")}
-        if with_answers and item.get("expected", {}).get("answerable") is False:
+        item_started = time.perf_counter()
+        results = []
+        if with_answers:
             answer = await answer_question(request)
             check = evaluate_answer_payload(answer)
             entry["answer_check"] = check
+            entry["usage"] = answer.get("usage")
             citation_total += 1
-            citation_valid += 1 if check["citation_valid"] else 0
-            if answer.get("status") == "answered" and check["citation_valid"]:
-                no_answer_errors += 1  # fabricated answer on a no-answer item
+            citation_valid += int(check["citation_valid"])
+            results = answer.get("evidence") or []
+            if item.get("expected", {}).get("answerable") is False:
+                no_answer_errors += int(answer.get("status") == "answered")
+        else:
+            search = await unified_search(request)
+            results = search.get("results") or []
+            entry["usage"] = search.get("usage")
+        entry["latency_ms"] = (time.perf_counter() - item_started) * 1000
+        if item.get("expected", {}).get("answerable") is False:
             unanswerable += 1
             details.append(entry)
             continue
-        search = await unified_search(request)
-        results = search.get("results") or []
         item_recall = recall_at_k(expected, results, 12)
         item_ndcg = ndcg_at_k(expected, results, 12)
         recall_sum += item_recall

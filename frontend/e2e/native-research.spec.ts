@@ -7,8 +7,11 @@ test.describe.configure({ mode: "serial" });
 
 for (const mode of ["web", "documents", "hybrid", "specific"]) {
   test(`native ${mode}: approvals, report, reload, usage and publication`, async ({ page }, testInfo) => {
-    test.setTimeout(20 * 60_000);
     const selections = JSON.parse(process.env.E2E_SOURCE_SELECTIONS ?? "{}");
+    const overrides = JSON.parse(process.env.E2E_RUN_CONFIG ?? "{}");
+    const runSeconds = Number(overrides.run_deadline_seconds ?? process.env.E2E_RUN_DEADLINE_SECONDS ?? 3600);
+    const waitSeconds = Number(process.env.E2E_RESEARCH_TIMEOUT_SECONDS ?? runSeconds + 300);
+    test.setTimeout((waitSeconds + 180) * 1000);
     const selection = selections[mode] ?? (mode === "web" ? { mode: "web" } : undefined);
     expect(selection, `E2E_SOURCE_SELECTIONS 缺少 ${mode} 的真实资料选择`).toBeTruthy();
     if (process.env.E2E_ADMIN_EMAIL && process.env.E2E_ADMIN_PASSWORD) {
@@ -23,10 +26,11 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
     const created = await page.request.post("/api/research/runs", { data: {
       messages: [{ role: "user", content: process.env.E2E_RESEARCH_QUESTION ?? "基于所选资料比较 PostgreSQL 17 与 16 的查询规划变化，给出可核验引用。" }],
       source_selection: selection,
-      configurable: { allow_clarification: false, enable_human_in_loop: true, enable_async_research: true },
+      configurable: { allow_clarification: false, enable_human_in_loop: true, enable_async_research: true, run_deadline_seconds: runSeconds, ...overrides },
     } });
     expect(created.ok(), await created.text()).toBeTruthy();
     const { run_id: runId } = await created.json();
+    console.log(`Native E2E run: ${runId}`);
     let completed = false;
     let faultInjected = false;
     try {
@@ -55,20 +59,27 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
           const dialog = page.getByRole("dialog");
           if (!(await dialog.isVisible())) await page.getByRole("button", { name: /审批中心/ }).click();
           const approve = page.getByRole("button", { name: "批准并继续", exact: true });
-          const allow = page.getByRole("button", { name: "允许一次", exact: true });
+          const allow = page.getByRole("button", { name: /^(允许一次|允许此次访问)$/ });
           if (await approve.isVisible()) await approve.click();
           else if (await allow.isVisible()) await allow.click();
         }
         return snapshot.status;
-      }, { timeout: 15 * 60_000, intervals: [2000] }).toBe("completed");
+      }, { timeout: waitSeconds * 1000, intervals: [2000] }).toBe("completed");
       completed = true;
       if (process.env.E2E_FAULT_SCENARIO) expect(faultInjected, "故障窗口没有触发，不能记为通过").toBe(true);
       const final = await (await page.request.get(`/api/research/runs/${runId}`)).json();
       expect(final.output.markdown.length).toBeGreaterThan(100);
       expect(final.output.markdown).toMatch(/https?:\/\/|local:\/\/|\/documents\//);
+      if (overrides.report_review_enabled) {
+        expect(final.output.report_review?.decision).toBe("pass");
+        expect(final.output.report_review?.degraded).not.toBe(true);
+      }
       await page.reload();
       await page.getByRole("tab", { name: "报告", exact: true }).click();
       await expect(page.locator(".report-shell")).toContainText(final.output.markdown.replace(/^#+\s*/gm, "").slice(0, 15));
+      const reportScreenshot = testInfo.outputPath("native-report.png");
+      await page.screenshot({ path: reportScreenshot, fullPage: true });
+      await testInfo.attach("native-report", { path: reportScreenshot, contentType: "image/png" });
       const usageResponse = await page.request.get(`/api/research/runs/${runId}/usage`);
       expect(usageResponse.ok()).toBeTruthy();
       const usage = await usageResponse.json();

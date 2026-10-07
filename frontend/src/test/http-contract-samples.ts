@@ -52,7 +52,11 @@ export const httpContractSamples = {
         "status": null,
         "usage": {},
         "usage_accounting": null,
-        "metrics": {}
+        "metrics": {},
+        "completion_status": null,
+        "stop_reason": null,
+        "uncovered_requirements": [],
+        "research_gaps": []
       },
       "last_event_id": 0,
       "events_url": "/runs/sample-ready/events"
@@ -105,7 +109,11 @@ export const httpContractSamples = {
         "status": null,
         "usage": {},
         "usage_accounting": null,
-        "metrics": {}
+        "metrics": {},
+        "completion_status": null,
+        "stop_reason": null,
+        "uncovered_requirements": [],
+        "research_gaps": []
       },
       "last_event_id": 0,
       "events_url": "/runs/sample-completed/events"
@@ -130,6 +138,10 @@ export const httpContractSamples = {
   "chunk": {
     "id": "chunk-1",
     "document_id": "doc-1",
+    "generation_id": null,
+    "version_no": null,
+    "generation_status": null,
+    "location": {},
     "ordinal": 0,
     "locator": "line:1",
     "heading": null,

@@ -19,13 +19,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { ChoiceGroup, SurfaceDialog, StatusBadge } from "@/components/ui/workspace";
 import { UploadQueue, useDocumentUploads } from "@/features/documents/document-upload";
+import { MaterialScopePicker } from "@/features/knowledge/material-scope-picker";
+import { materialScopeFromParams, type MaterialScope } from "@/lib/knowledge-scope";
 import { Button } from "@/components/ui/button";
 import { researchApi } from "@/lib/api";
 import { loadPublicationTheme, loadSettings } from "@/lib/settings";
-import { buildSourceRefs, sourceSelectionIsValid } from "@/lib/source-selection";
+import { buildSourceRefs, isPublishedDocument, sourceSelectionIsValid } from "@/lib/source-selection";
 import type { ResearchDocument, SourceMode, SourceSelection } from "@/lib/types";
 
 const modes: Array<{ value: SourceMode; label: string; icon: typeof Globe2 }> = [
@@ -56,7 +58,7 @@ const promptTemplates = [
 function DocumentPicker({ documents, selected, onToggle }: { documents: ResearchDocument[]; selected: string[]; onToggle: (id: string) => void }) {
   return <div className="composer-doc-list">
     {documents.map((document) => <label key={document.id} className={`composer-doc-row ${selected.includes(document.id) ? "selected" : ""}`}>
-      <input type="checkbox" checked={selected.includes(document.id)} disabled={document.status !== "ready"} onChange={() => onToggle(document.id)} />
+      <input type="checkbox" checked={selected.includes(document.id)} disabled={!isPublishedDocument(document)} onChange={() => onToggle(document.id)} />
       <FileText size={15} />
       <span><b>{document.filename}</b><small>{document.chunk_count} 个片段 · {(document.size_bytes / 1024 / 1024).toFixed(1)} MiB</small></span>
       <StatusBadge status={document.status} />
@@ -70,8 +72,9 @@ export function ResearchComposer() {
   const searchParams = useSearchParams();
   const fileRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState(searchParams.get("query") ?? "");
-  const [mode, setMode] = useState<SourceMode>(searchParams.has("document") ? "documents" : "web");
+  const [mode, setMode] = useState<SourceMode>(["document", "kb", "kb_id", "collection"].some((key) => searchParams.has(key)) ? "documents" : "web");
   const [selected, setSelected] = useState<string[]>(() => [...new Set(searchParams.getAll("document").filter(Boolean))]);
+  const [materialScope, setMaterialScope] = useState<MaterialScope>(() => materialScopeFromParams(searchParams));
   const [urls, setUrls] = useState("");
   const [domains, setDomains] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -92,12 +95,16 @@ export function ResearchComposer() {
     refetchInterval: (state) => state.state.data?.items.some((item) => ["queued", "processing"].includes(item.status)) ? 2_000 : false,
   });
   const upload = useDocumentUploads((document) => {
-    if (document.status === "ready") setSelected((current) => [...new Set([...current, document.id])]);
+    if (isPublishedDocument(document)) setSelected((current) => [...new Set([...current, document.id])]);
   });
-  const selectedDocumentsReady = !selected.length || (docsEnabled && documents.isSuccess && selected.every((id) => documents.data.items.some((document) => document.id === id && document.status === "ready")));
-  const refs = buildSourceRefs(mode, selected, urls, domains);
-  const validSources = sourceSelectionIsValid(mode, refs) && selectedDocumentsReady && (mode !== "documents" && mode !== "hybrid" || docsEnabled);
-  const selection = useMemo<SourceSelection>(() => ({ mode, sources: refs }), [mode, refs]);
+  const selectedDocumentsReady = !selected.length || (docsEnabled && documents.isSuccess && selected.every((id) => documents.data.items.some((document) => document.id === id && isPublishedDocument(document))));
+  const refs = [...buildSourceRefs(mode, selected, urls, domains),
+    ...(mode !== "web" ? materialScope.kb_ids.map((id) => ({ type: "knowledge_base" as const, id })) : []),
+    ...(mode !== "web" ? materialScope.collection_ids.map((id) => ({ type: "collection" as const, id })) : [])];
+  const validSources = (mode === "web" || materialScope.version_mode !== "as_of" || !!materialScope.as_of_published) && sourceSelectionIsValid(mode, refs) && selectedDocumentsReady && (mode !== "documents" && mode !== "hybrid" || docsEnabled);
+  const selectedBases = materialScope.kb_ids, selectedCollections = materialScope.collection_ids;
+  const retrieval = { version_mode: materialScope.version_mode, as_of_published: materialScope.as_of_published, as_of_valid: materialScope.as_of_valid, filters: materialScope.filters, profile_version: materialScope.profile_version };
+  const selection: SourceSelection = { mode, sources: refs, ...(mode !== "web" ? { retrieval } : {}) };
   const activeSettings = loadSettings(capabilities.data?.defaults);
   const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
   const selectedTeamMode = teamMode ?? String(activeSettings.team_execution_mode ?? "direct");
@@ -180,12 +187,13 @@ export function ResearchComposer() {
         {documents.isLoading ? <p className="empty-note"><LoaderCircle className="spin" size={13} /> 正在读取资料库…</p> : documents.isError ? <p role="alert">资料库读取失败，请刷新重试。</p> : <DocumentPicker documents={(documents.data?.items ?? []).filter((document) => document.filename.toLocaleLowerCase().includes(docSearch.toLocaleLowerCase()))} selected={selected} onToggle={(id) => setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])} />}
         <div className="ui-actions"><button type="button" className="primary" onClick={() => setPickerOpen(false)}>完成选择</button></div>
       </SurfaceDialog>
+      <SurfaceDialog title="选择知识库与集合" description="创建研究时固定所选资料的发布代次。" trigger={<button type="button" className="secondary composer-picker-trigger" disabled={!docsEnabled}>选择知识库与集合 · {selectedBases.length + selectedCollections.length} 项</button>}><MaterialScopePicker value={{ ...materialScope, document_ids: selected }} onChange={setMaterialScope} /></SurfaceDialog>
       <div className="composer-selected-docs" aria-label="已选研究资料">{selected.map((id) => <span key={id}><FileText size={13} /><b>{documents.data?.items.find((document) => document.id === id)?.filename ?? (documents.isLoading ? "读取资料中…" : "资料不可用")}</b><button type="button" aria-label={`移除 ${documents.data?.items.find((document) => document.id === id)?.filename ?? id}`} onClick={() => setSelected((current) => current.filter((item) => item !== id))}><X size={13} /></button></span>)}</div>
       {!selectedDocumentsReady && <p className="source-error" role="status">正在核对已选资料，尚未就绪或不可访问的资料需移除后继续。</p>}
       <div className="source-config-footer"><span>{selected.length} 个文件已选择</span><button type="button" onClick={() => void documents.refetch()} title="刷新状态"><RefreshCw size={13} /></button>{selected.length > 0 && <button type="button" onClick={() => setSelected([])} title="清空已选文件"><X size={13} /></button>}</div>
     </div>}
     {(createError || (!validSources && mode !== "web")) && <p className="composer-error" role="alert">{createError || "请选择符合当前模式的研究来源。"}</p>}
-    <dl className="composer-config-summary" aria-label="本次研究配置"><div><dt>研究方式</dt><dd>{{ sync: "同步研究", collaborator: "异步委派", teams: "团队协作" }[selectedResearchMode]}</dd></div><div><dt>研究模型</dt><dd>{String(activeSettings.research_model ?? "服务端默认")}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}{selected.length ? ` · ${selected.length} 份资料` : ""}</dd></div></dl>
+    <dl className="composer-config-summary" aria-label="本次研究配置"><div><dt>研究方式</dt><dd>{{ sync: "同步研究", collaborator: "异步委派", teams: "团队协作" }[selectedResearchMode]}</dd></div><div><dt>研究模型</dt><dd>{String(activeSettings.research_model ?? "服务端默认")}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}{selected.length ? ` · ${selected.length} 份资料` : ""}{selectedBases.length ? ` · ${selectedBases.length} 个库` : ""}{selectedCollections.length ? ` · ${selectedCollections.length} 个集合` : ""}{materialScope.version_mode === "as_of" ? ` · 截至 ${materialScope.as_of_published ?? "待选择"}` : ""}</dd></div></dl>
     <div className="composer-footer">
       <div className="composer-context">
         <span className="source-ready"><i />{sourceLabel}</span>

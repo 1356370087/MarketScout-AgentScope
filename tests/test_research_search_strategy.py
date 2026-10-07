@@ -56,7 +56,7 @@ async def test_research_prompt_uses_only_the_selected_search_backend(
         date="July 7, 2026",
     )
 
-    assert selected.strip("`") in rendered
+    assert "web_search" in rendered
     assert not_selected.strip("`") not in rendered
     assert "Do not call it in parallel with a search or another tool" in rendered
 

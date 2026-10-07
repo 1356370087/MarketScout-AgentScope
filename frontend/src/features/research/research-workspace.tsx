@@ -1,5 +1,7 @@
 "use client";
 
+import { ResearchEfficiencyPanel } from "./research-efficiency-panel";
+
 import { ArrowUp, Check, ChevronRight, CircleStop, Download, FileText, ShieldCheck, Sparkles, Layers, Bot, CheckCircle2 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -134,6 +136,9 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
     {(state.connectionState === "reconnecting" || state.connectionState === "error") && <p className="research-connection-notice" role="status">连接中断，保留最后已知状态，正在尝试恢复实时更新。</p>}
     <Tabs label="研究视图" value={view} onChange={setView} items={[{ value: "process", label: "研究进展" }, { value: "team", label: "研究团队" }, { value: "evidence", label: "来源证据" }, { value: "report", label: "报告", disabled: !state.report }, { value: "usage", label: "用量" }]}><div className="research-content">
       <RunQualityStatus state={state} />
+      {(view === "process" || state.completionStatus === "partial") && <ResearchEfficiencyPanel
+        progress={usage.data?.research_progress ?? state.efficiency}
+        partial={state.completionStatus === "partial"} reason={state.stopReason} />}
       {citationNotice && <p role="status" className="citation-notice">{citationNotice}</p>}
       {view !== "process" && approvalNotice}
       {view === "team" ? <ResearchTeamPanel runId={runId} revision={state.lastEventId} terminal={state.terminal} onTask={selectTask} activityTaskIds={tasks.map((task) => task.task_id)} /> : view === "evidence" ? <EvidenceExplorer sources={sources} tasks={tasks} selectedSource={selectedSourceId} onSelect={selectSource} /> : view === "usage" ? <TokenUsageDashboard runId={runId} visible terminal={state.terminal} onTask={selectTask} taskIds={tasks.map((task) => task.task_id)} /> : view === "report" ? state.report ? <>

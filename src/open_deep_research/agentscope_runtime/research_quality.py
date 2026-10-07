@@ -24,6 +24,35 @@ class NativeResearchQuality:
         self.config_provider = config_provider
 
     async def evaluate(
+        self, schema, system_prompt, payload, config, *, span_name, protocol_validator=None,
+    ):
+        from open_deep_research.agentscope_runtime.efficiency import enabled
+        from open_deep_research.agentscope_runtime.runtime_limits import structured_attempt_budget
+
+        async def compute():
+            budget = structured_attempt_budget.set([Configuration.from_runnable_config(config).max_structured_output_retries]) if enabled(config) else None
+            try:
+                result = await self._evaluate(schema, system_prompt, payload, config,
+                    span_name=span_name, protocol_validator=protocol_validator)
+                return result.model_dump(mode="json")
+            finally:
+                if budget is not None:
+                    structured_attempt_budget.reset(budget)
+
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        if enabled(config) and cache is not None:
+            semantic = {k: v for k, v in payload.items() if k != "tool_results"}
+            if "deterministic_checks" in semantic:
+                semantic["deterministic_checks"] = {k: v for k, v in semantic["deterministic_checks"].items()
+                                                    if k not in {"evidence_result_count", "error_count", "batch_failures"}}
+            value = await cache.compute("assessment", {"version": 1, "kind": span_name,
+                "model": Configuration.from_runnable_config(config).quality_evaluation_model,
+                "schema": schema.model_json_schema(), "rules": system_prompt, "payload": semantic}, compute)
+        else:
+            value = await compute()
+        return schema.model_validate(value)
+
+    async def _evaluate(
         self,
         schema,
         system_prompt,
@@ -35,14 +64,24 @@ class NativeResearchQuality:
     ):
         cfg = Configuration.from_runnable_config(config)
         messages = [SystemMsg("quality_rules", system_prompt),
-                    UserMsg("research_evidence", "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False))]
+                    UserMsg("research_evidence", "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=cfg.research_efficiency_mode == "bounded"))]
         errors = []
         for attempt in range(max(1, cfg.max_structured_output_retries)):
-            from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
+            from open_deep_research.agentscope_runtime.recovery import (
+                ModelOutputProtocolError,
+            )
+
             try:
-                result = await self.models.structured(
-                    "quality_evaluation", "", schema, {}, messages=messages
+                from open_deep_research.agentscope_runtime.runtime_limits import (
+                    attributed,
+                    structured_attempt_budget,
                 )
+
+                remaining = structured_attempt_budget.get()
+                if remaining is not None and remaining[0] <= 0:
+                    raise QualityProtocolError(errors or ["structured_attempt_budget_exhausted"])
+                with attributed(purpose=span_name):
+                    result = await self.models.structured("quality_evaluation", "", schema, {}, messages=messages)
             except ModelOutputProtocolError as exc:
                 # Gateway already exhausted format repair. Let the domain's
                 # fail-open/closed policy decide; never poison the run lease.
@@ -63,6 +102,19 @@ class NativeResearchQuality:
 
     async def batch(self, assignment, contract, rows, evidence):
         config = self.config_provider()
+        from open_deep_research.agentscope_runtime.efficiency import enabled
+
+        if enabled(config) and not evidence:
+            from open_deep_research.quality.gate import deterministic_tool_checks
+
+            cfg = Configuration.from_runnable_config(config)
+            checks = deterministic_tool_checks(rows, min_sources=cfg.quality_evaluation_min_sources,
+                evidence_registry=[], coverage_contract=contract)
+            return {"decision": "retry", "accepted": False, "evaluation_source": "deterministic",
+                "reason": "尚无可评估证据；原文、搜索摘要和被拒绝的来源不能计入证据。请用 web_research 批量读取所选资料，或 fetch_url(mode=evidence)。",
+                "deterministic_checks": checks, "evaluator_error": None,
+                "gaps": [{"requirement_id": rid, "kind": "factual", "reason": "no_eligible_evidence",
+                          "checked_evidence_ids": [], "next_query": "读取已选资料并提取证据"} for rid in assignment.requirement_ids]}
         result = await evaluate_tool_results(
             assignment.research_topic,
             rows,

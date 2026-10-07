@@ -6,18 +6,23 @@ export type ActivityGroup = { id: string; type: "tool" | "sources" | "event"; ev
 export function groupActivity(events: TaskActivityEvent[]): ActivityGroup[] {
   const groups: ActivityGroup[] = [];
   const pending = new Map<string, ActivityGroup>();
+  const seen = new Set<string>();
   for (const event of events) {
+    if (seen.has(event.event_id)) continue;
+    seen.add(event.event_id);
     const callId = event.payload.tool_call_id;
     if (event.kind === "tool" && typeof callId === "string" && callId) {
       const key = `${event.task_id}:${event.iteration ?? ""}:${callId}`;
-      const started = pending.get(key);
+      const started = pending.get(key) ?? (event.type === "tool.progress" && event.iteration == null
+        ? [...pending.values()].find((group) => group.events[0].task_id === event.task_id && group.events[0].payload.tool_call_id === callId)
+        : undefined);
       if (started && event.type !== "tool.started") {
         started.events.push(event);
         if (event.type === "tool.completed" || event.type === "tool.failed") pending.delete(key);
       } else {
         const group: ActivityGroup = { id: event.event_id, type: "tool", events: [event] };
         groups.push(group);
-        if (event.type === "tool.started") pending.set(key, group);
+        if (event.type === "tool.started" || event.type === "tool.progress") pending.set(key, group);
       }
     } else if (event.kind === "source") {
       const last = groups.at(-1);
@@ -53,6 +58,11 @@ export function activitySource(event: TaskActivityEvent): ResearchSource | undef
   const href = sourceHref(event.payload.url);
   if (!href) return;
   return { source_id: String(event.payload.source_id ?? href), task_id: event.task_id, url: href,
+    source_type: typeof event.payload.source_type === "string" ? event.payload.source_type : undefined,
+    document_id: typeof event.payload.document_id === "string" ? event.payload.document_id : undefined,
+    chunk_id: typeof event.payload.chunk_id === "string" ? event.payload.chunk_id : undefined,
+    generation_id: typeof event.payload.generation_id === "string" ? event.payload.generation_id : undefined,
+    locator: typeof event.payload.locator === "string" ? event.payload.locator : undefined,
     title: typeof event.payload.title === "string" ? event.payload.title : event.title,
     domain: typeof event.payload.domain === "string" ? event.payload.domain : undefined };
 }

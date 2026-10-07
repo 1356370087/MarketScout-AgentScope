@@ -14,7 +14,7 @@ from open_deep_research.agentscope_runtime import knowledge, service_models
 from open_deep_research.agentscope_runtime.memory import ResearchMemory
 from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
 from open_deep_research.configuration import Configuration
-from open_deep_research.knowledge.sync import WebAdapter
+from open_deep_research.knowledge.sync import SyncError, WebAdapter
 from open_deep_research.memory.policy import (
     MemoryCandidateModel,
     MemoryExtractionResult,
@@ -25,50 +25,54 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_native_service_model_calls_openai_compatible_transport(monkeypatch):
-    original = service_models.OpenAIChatModel
+    for name in ("ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    from open_deep_research.agentscope_runtime import gateway
+    from open_deep_research.models.catalog import ModelCatalogEntry
+
+    monkeypatch.setattr(service_models.LiteLLMModelCatalogClient, "load", AsyncMock(return_value={"fixture": ModelCatalogEntry(model_name="fixture", context_window=32000, max_output_tokens=4096, input_cost_per_token=0, output_cost_per_token=0)}))
+    original = gateway.LiteLLMChatModel
     instances = []
 
-    def factory(**kwargs):
-        def respond(request):
-            body = json.loads(request.content)
-            assert (
-                body["model"] == "fixture"
-                and body["messages"][1]["content"][0]["text"] == "question"
-            )
-            assert request.headers["authorization"] == "Bearer fixture-key"
-            return httpx.Response(
-                200,
-                json={
-                    "id": "c1",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": "fixture",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {
-                                "role": "assistant",
-                                "content": '{"answer":"ok"}',
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 3,
-                        "completion_tokens": 2,
-                        "total_tokens": 5,
+    class FixtureModel(original):
+        def __init__(self, **kwargs):
+            def respond(request):
+                body = json.loads(request.content)
+                assert (
+                    body["model"] == "fixture"
+                    and body["messages"][1]["content"][0]["text"] == "question"
+                )
+                assert request.headers["authorization"] == "Bearer fixture-key"
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "c1",
+                        "object": "chat.completion",
+                        "created": 1,
+                        "model": "fixture",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": '{"answer":"ok"}',
+                                },
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 3,
+                            "completion_tokens": 2,
+                            "total_tokens": 5,
+                        },
                     },
-                },
-            )
+                )
 
-        kwargs["client_kwargs"]["http_client"] = httpx.AsyncClient(
-            transport=httpx.MockTransport(respond)
-        )
-        model = original(**kwargs)
-        instances.append(model)
-        return model
+            kwargs["client_kwargs"]["http_client"] = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+            super().__init__(**kwargs)
+            instances.append(self)
 
-    monkeypatch.setattr(service_models, "OpenAIChatModel", factory)
+    monkeypatch.setattr(gateway, "LiteLLMChatModel", FixtureModel)
     assert (
         await service_models.service_text(
             model="fixture",
@@ -152,7 +156,7 @@ async def test_sync_redirect_is_authorized_before_second_request():
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-        with pytest.raises(PermissionError):
+        with pytest.raises(SyncError, match="sync_egress_denied"):
             await WebAdapter(authorize)._get(client, "https://public.test/start", {})
     assert len(visited) == 2
 
@@ -161,8 +165,11 @@ async def test_runtime_sync_callback_uses_host_authority(tmp_path, monkeypatch):
     from urllib.parse import urlsplit
 
     from open_deep_research.agentscope_runtime.app import ASRuntime
+    from open_deep_research.agentscope_runtime.sandbox_policy import (
+        EgressAuthority,
+        EgressModeBridge,
+    )
     from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
-    from open_deep_research.agentscope_runtime.sandbox_policy import EgressAuthority, EgressModeBridge
     from open_deep_research.sandbox.approvals import SecurityApprovalStore
     from open_deep_research.sandbox.schema import NetworkPolicy
 
@@ -188,7 +195,7 @@ async def test_runtime_sync_callback_uses_host_authority(tmp_path, monkeypatch):
             return httpx.Response(302, headers={"location": "https://unapproved.test/private"})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
-            with pytest.raises(PermissionError, match="sync egress ask"):
+            with pytest.raises(SyncError, match="sync_egress_denied"):
                 await adapter._get(client, "https://public.test/start", {})
     finally:
         await runtime.aclose()

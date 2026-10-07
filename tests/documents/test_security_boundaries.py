@@ -12,7 +12,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from open_deep_research import server
-from open_deep_research.documents import database, embeddings, retrieval
+from open_deep_research.documents import database, embeddings
 from open_deep_research.documents.settings import DocumentSettings
 
 
@@ -114,7 +114,10 @@ async def test_chinese_retrieval_uses_word_similarity_candidate_channel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Long Chinese queries must not depend on the default `%` threshold."""
+    from open_deep_research.knowledge import search_service
+
     connection = _RetrievalConnection()
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "fixture-service")
 
     async def fake_embed(*_args: Any, **_kwargs: Any) -> list[list[float]]:
         return [[0.1, 0.2]]
@@ -122,23 +125,23 @@ async def test_chinese_retrieval_uses_word_similarity_candidate_channel(
     async def fake_pool() -> _RetrievalPool:
         return _RetrievalPool(connection)
 
-    monkeypatch.setattr(retrieval, "embed_texts", fake_embed)
-    monkeypatch.setattr(retrieval, "get_document_pool", fake_pool)
+    monkeypatch.setattr(search_service, "embed_texts", fake_embed)
+    monkeypatch.setattr(search_service, "get_document_pool", fake_pool)
 
-    await retrieval.search_document_chunks(
-        owner_id="00000000-0000-0000-0000-000000000001",
-        document_ids=["00000000-0000-0000-0000-000000000002"],
-        query="中国新能源汽车市场规模增长率与竞争格局",
-        api_key="sk-run",
+    await search_service._recall(
+        "00000000-0000-0000-0000-000000000001",
+        "中国新能源汽车市场规模增长率与竞争格局",
+        {"documents": [{"generation_id": "00000000-0000-0000-0000-000000000002"}]},
+        {}, search_service.DEFAULT_PARAMETERS, search_service.SearchDiagnostics(),
     )
 
     assert "text %>> $4" in connection.sql
     assert "research_document_segments" in connection.sql
-    assert "current_generation_id" in connection.sql
+    assert "s.generation_id=ANY($2::uuid[])" in connection.sql
     assert "eligible AS MATERIALIZED" not in connection.sql
     assert "word_similarity($4,text)" in connection.sql
     assert "text % $4" not in connection.sql
-    assert connection.arguments[-2] == pytest.approx(0.08)
+    assert connection.arguments[5] == pytest.approx(0.08)
 
 
 class _SchemaConnection:
@@ -215,6 +218,6 @@ async def test_document_startup_probe_degrades_documents_without_raising(
         "research_document_generations,research_document_units,"
         "research_document_segments,knowledge_entities,knowledge_entity_aliases,"
         "research_generation_entity_links,research_document_operations,"
-        "knowledge_queries"
+        "knowledge_queries,knowledge_usage_daily,knowledge_model_attempts"
     )
     assert database.document_schema_available() is False

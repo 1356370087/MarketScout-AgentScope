@@ -15,33 +15,41 @@ Fetch → Extract → Evidence）接入 AgentScope 运行时，不依赖 LangCha
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
-from collections.abc import Callable
-from typing import Any
-from urllib.parse import urlsplit
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from open_deep_research.agentscope_runtime.models import ModelFactory
-from open_deep_research.agentscope_runtime.search import (
-    deduplicate_sources,
-    parse_anthropic_search,
-    parse_openai_search,
+from open_deep_research.agentscope_runtime.search_providers import (
+    SearchResources,
+    SearchService,
+    preserve_control_error,
+    source_allowed,
 )
-from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.agentscope_runtime.search_providers import (
+    bounded_specific_queries as _bounded_specific_domain_queries,
+)
+from open_deep_research.agentscope_runtime.search_providers import (
+    candidate as _candidate,
+)
+from open_deep_research.agentscope_runtime.web_fetch_backends import (
+    configured_fetch_backends,
+)
+from open_deep_research.agentscope_runtime.web_fetch_backends import (
+    tavily_extract as _tavily_extract,
+)
+from open_deep_research.agentscope_runtime.web_progress import WebProgress
+from open_deep_research.configuration import Configuration
 from open_deep_research.documents.contracts import (
-    SourceMode,
     selection_from_config,
-    source_url_identity,
 )
 from open_deep_research.sandbox.egress_context import authorize_url, egress_authorizer
 from open_deep_research.sandbox.policy import allowed_domains, network_policy_mode
 from open_deep_research.security.content import inspect_untrusted_content
+from open_deep_research.tools.availability import enforced_pipeline_enabled
 from open_deep_research.tools.base import (
-    Tool,
-    ToolContext,
     ToolOrigin,
     ToolResult,
     build_tool,
@@ -52,7 +60,6 @@ from open_deep_research.web.models import (
     DomainApprovalBatch,
     EvidenceRecord,
     ExtractedDocument,
-    ProviderSynthesis,
     SearchBatch,
     SearchRequest,
     WebResearchResult,
@@ -61,7 +68,6 @@ from open_deep_research.web.pipeline import (
     COMPLETE_SENTENCE_RE,
     WebPipelineSettings,
     WebResearchPipeline,
-    canonicalize_url,
     clear_run_web_cache,
     stable_id,
 )
@@ -77,69 +83,22 @@ _COMPACT_SNIPPET_BUDGETS = (400, 160, 40, 0)
 
 class WebResearchInput(BaseModel):
     objective: str
-    queries: list[str] = Field(min_length=1, max_length=3)
+    queries: list[str] = Field(default_factory=list, max_length=3)
     iteration: int = Field(default=1, ge=1)
+
+
+class LegacyWebResearchInput(WebResearchInput):
+    model_config = {"title": "WebResearchInput"}
+
+    queries: list[str] = Field(min_length=1, max_length=3)
 
 
 class FetchUrlInput(BaseModel):
     url: str
     objective: str = ""
-
-
-def _candidate(
-    provider: str, url: str, title: str, snippet: str, rank: int, query: str
-) -> CandidateSource | None:
-    """Create a normalized candidate while rejecting malformed provider URLs."""
-    try:
-        canonical = canonicalize_url(url)
-    except (TypeError, ValueError):
-        return None
-    return CandidateSource(
-        candidate_id=stable_id("src", canonical),
-        provider=provider,
-        query_ids=[query],
-        provider_rank=rank,
-        original_url=url,
-        canonical_url=canonical,
-        domain=urlsplit(canonical).hostname or "",
-        title=title,
-        snippet=snippet,
-    )
-
-
-def _search_error_code(exc: Exception) -> str:
-    """Classify provider search failures deterministically."""
-    status = getattr(exc, "status_code", None) or getattr(
-        getattr(exc, "response", None), "status_code", None
-    )
-    text = f"{type(exc).__name__} {exc}".lower()
-    if status in (401, 403) or any(
-        marker in text
-        for marker in (
-            "quota",
-            "credit",
-            "exceeded",
-            "insufficient",
-            "api key",
-            "forbidden",
-        )
-    ):
-        return "search_provider_exhausted"
-    return type(exc).__name__
-
-
-def _bounded_specific_domain_queries(
-    domains: list[str], queries: list[str], *, limit: int = MAX_SPECIFIC_DOMAIN_QUERIES
-) -> tuple[list[str], bool, int]:
-    """Expand Specific-domain queries with a deterministic provider-call cap."""
-    expanded = [f"site:{domain} {query}" for domain in domains for query in queries]
-    total = len(expanded)
-    if total <= limit:
-        return expanded, False, total
-    rotated = [
-        f"site:{domain} {query}" for query in queries for domain in domains
-    ]
-    return rotated[:limit], True, total
+    mode: Literal["evidence", "markdown"] = "evidence"
+    offset: int = Field(default=0, ge=0)
+    max_chars: int | None = Field(default=None, ge=1)
 
 
 class WebFetchLedger:
@@ -157,9 +116,7 @@ class WebFetchLedger:
 
     def _run_cap(self, config: dict[str, Any]) -> int:
         configurable = Configuration.from_runnable_config(config)
-        extension = (
-            config.get("metadata", {}).get("fetch_budget_extension") or {}
-        )
+        extension = config.get("metadata", {}).get("fetch_budget_extension") or {}
         return configurable.max_fetches_per_run + int(extension.get("extra_fetches", 0))
 
     def reserve(
@@ -192,13 +149,15 @@ class WebFetchLedger:
             self._zero_allocations[(run_id, task_id)] = count + 1
         return granted, scope, announced
 
+    def record_fetch(self, run_id: str, task_id: str) -> None:
+        """Reset the announcement window only when an acquisition actually starts."""
+        self._zero_allocations.pop((run_id, task_id), None)
+
     def release(self, run_id: str, task_id: str, count: int) -> None:
         """归还未发生物理抓取的预留槽位。"""
         if count <= 0:
             return
-        self._run_attempts[run_id] = max(
-            0, self._run_attempts.get(run_id, 0) - count
-        )
+        self._run_attempts[run_id] = max(0, self._run_attempts.get(run_id, 0) - count)
         key = (run_id, task_id)
         self._task_attempts[key] = max(0, self._task_attempts.get(key, 0) - count)
 
@@ -215,9 +174,14 @@ class WebFetchLedger:
     def transport_failure_allowance(
         self, run_id: str, task_id: str, config: dict[str, Any]
     ) -> int:
+        cfg = Configuration.from_runnable_config(config)
         return max(
             0,
-            self._run_cap(config) - self._run_transport_failures.get(run_id, 0),
+            min(
+                self._run_cap(config) - self._run_transport_failures.get(run_id, 0),
+                cfg.max_fetches_per_researcher
+                - self._task_transport_failures.get((run_id, task_id), 0),
+            ),
         )
 
     def clear_run(self, run_id: str) -> None:
@@ -254,17 +218,62 @@ class _ExtractedEvidenceItems(BaseModel):
     items: list[_ExtractedEvidenceItem] = Field(default_factory=list)
 
 
-async def _structured(factory: ModelFactory, role: str, prompt: str, schema: type):
+async def _structured(factory: ModelFactory, role: str, prompt: str, schema: type, *, messages=None):
     """走统一模型策略的结构化输出；失败由调用方回退确定性路径。"""
-    from agentscope.message import UserMsg
+    from uuid import uuid4
+
+    from agentscope.message import SystemMsg, UserMsg
+
+    from open_deep_research.agentscope_runtime.runtime_limits import (
+        attributed,
+        call_context,
+    )
+
+
+    if messages is None:
+        rules, separator, data = prompt.partition("\nObjective:")
+        messages = [SystemMsg("web_rules", rules), UserMsg("research_data", "Objective:" + data)] if separator and getattr(factory, "research_cache", None) else [UserMsg("user", prompt)]
 
     async def handler(current_model: Any, messages: Any, **_: Any):
-        return await current_model.generate_structured_output(
-            [UserMsg("user", prompt)], schema
-        )
+        try:
+            return await current_model.generate_structured_output(
+                messages, schema
+            )
+        except asyncio.CancelledError:
+            from open_deep_research.agentscope_runtime.gateway import (
+                GatewayCallError,
+                SandboxChatModel,
+            )
+
+            if isinstance(current_model, SandboxChatModel):
+                raise GatewayCallError(
+                    "web_model_outcome_unknown", uncertain=True
+                ) from None
+            raise
 
     middleware = factory.policy_middleware(role)
-    return await middleware.policy.invoke(handler, {"messages": [prompt]}, {})
+    with attributed(purpose=role, logical_call_id=call_context.get().get("logical_call_id") or uuid4().hex):
+        result = await middleware.policy.invoke(handler, {"messages": messages}, {})
+    from open_deep_research.agentscope_runtime.web_progress import shadow_model_usage
+
+    usage = shadow_model_usage.get()
+    if usage is not None and result.metadata.get("retry_owner") != "gateway":
+        usage["model_calls"] += 1
+        measured = getattr(result, "usage", None)
+        raw = (getattr(result, "metadata", {}) or {}).get("raw_usage") or {}
+        usage["input_tokens"] += raw.get(
+            "input_tokens", getattr(measured, "input_tokens", 0) or 0
+        )
+        usage["output_tokens"] += raw.get(
+            "output_tokens", getattr(measured, "output_tokens", 0) or 0
+        )
+        cost = (getattr(result, "metadata", {}) or {}).get("response_cost_usd")
+        usage["cost_usd"] = (
+            usage["cost_usd"] + cost
+            if cost is not None and usage["cost_usd"] is not None
+            else None
+        )
+    return result
 
 
 class NativeWebReranker:
@@ -298,7 +307,8 @@ class NativeWebReranker:
             result = await _structured(
                 self.factory, "web_rerank", prompt, _ScoredCandidates
             )
-        except Exception as exc:  # noqa: BLE001 - rerank failure falls back
+        except Exception as exc:  # deterministic fallback only  # noqa: BLE001 - normalize external failures after preserving runtime control
+            preserve_control_error(exc)
             logger.warning("Native web rerank failed; heuristic ranking used: %s", exc)
             return {}
         known = {c.candidate_id for c in candidates}
@@ -326,6 +336,7 @@ class NativeEvidenceExtractor:
         documents: dict[str, ExtractedDocument],
         chunks: list[DocumentChunk],
     ) -> list[EvidenceRecord]:
+        self.last_failure = False
         safe_chunks = [
             chunk for chunk in chunks if not inspect_untrusted_content(chunk.text)
         ]
@@ -360,8 +371,10 @@ class NativeEvidenceExtractor:
                 timeout=60.0,
             )
             items = result.content.get("items", [])
-        except Exception as exc:  # noqa: BLE001 - deterministic evidence remains
+        except Exception as exc:  # deterministic fallback only  # noqa: BLE001 - normalize external failures after preserving runtime control
+            preserve_control_error(exc)
             logger.warning("Native evidence extraction failed: %s", exc)
+            self.last_failure = True
             return []
         by_id = {chunk.chunk_id: chunk for chunk in safe_chunks}
         evidence: list[EvidenceRecord] = []
@@ -398,69 +411,6 @@ class NativeEvidenceExtractor:
                 )
             )
         return evidence
-
-
-async def _tavily_extract(url: str, client_factory: Callable) -> ExtractedDocument | None:
-    if egress_authorizer.get() is not None and await authorize_url(url, "external.extract", consume=True) != "allow":
-        return None
-    try:
-        client = client_factory({})
-        result = await client.extract(urls=[url], format="markdown")
-        results = result.get("results") or []
-        if not results:
-            return None
-        raw = results[0]
-        content = str(raw.get("raw_content") or "")
-        if not content.strip():
-            return None
-        return ExtractedDocument(
-            document_id=stable_id("doc", canonicalize_url(url)),
-            candidate_id=stable_id("src", canonicalize_url(url)),
-            requested_url=url,
-            final_url=str(raw.get("url") or url),
-            canonical_url=canonicalize_url(str(raw.get("url") or url)),
-            title=str(raw.get("title") or url),
-            content_type="text",
-            markdown=content,
-            extractor="tavily_extract",
-            content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-        )
-    except Exception:  # noqa: BLE001 - external extraction is best-effort
-        return None
-
-
-async def _firecrawl_extract(url: str, api_key: str | None) -> ExtractedDocument | None:
-    import httpx
-
-    if not api_key:
-        return None
-    if egress_authorizer.get() is not None and await authorize_url(url, "external.extract", consume=True) != "allow":
-        return None
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.firecrawl.dev/v1/scrape",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"url": url, "formats": ["markdown"]},
-            )
-            response.raise_for_status()
-            data = (response.json().get("data") or {}).get("markdown")
-        if not data or not str(data).strip():
-            return None
-        return ExtractedDocument(
-            document_id=stable_id("doc", canonicalize_url(url)),
-            candidate_id=stable_id("src", canonicalize_url(url)),
-            requested_url=url,
-            final_url=url,
-            canonical_url=canonicalize_url(url),
-            title=url,
-            content_type="text",
-            markdown=str(data),
-            extractor="firecrawl",
-            content_hash=hashlib.sha256(str(data).encode("utf-8")).hexdigest(),
-        )
-    except Exception:  # noqa: BLE001 - external extraction is best-effort
-        return None
 
 
 def _settings(config: dict[str, Any], run_id: str) -> WebPipelineSettings:
@@ -552,30 +502,75 @@ def compact_web_result(result: WebResearchResult, config: dict[str, Any]) -> str
     return text if len(text) <= budget else "{}"
 
 
+async def project_web_result(result, config, factory, metadata):
+    """Persist full evidence before creating the model's smaller display page."""
+    from open_deep_research.agentscope_runtime.efficiency import (
+        enabled,
+        evidence_page,
+        fingerprint,
+    )
+
+
+    cache = getattr(factory, "research_cache", None)
+    if not enabled(config) or cache is None:
+        return compact_web_result(result, config)
+    records = [record.model_dump(mode="json", exclude_none=True) for record in result.evidence]
+    key = "evidence:" + fingerprint(records)
+    async with cache.locks.setdefault(key, asyncio.Lock()):
+        if await cache.get(key) is None:
+            await cache.begin(key)
+            await cache.commit(key, records)
+    metadata.update(evidence_ref=key, evidence_count=len(records))
+    budget = min(12_000, Configuration.from_runnable_config(config).max_mcp_output_chars)
+    details = [{"errors": result.errors}, {"gap_analysis": result.gap_analysis.model_dump(mode="json")}]
+    diagnostics_key = "diagnostics:" + fingerprint(details)
+    async with cache.locks.setdefault(diagnostics_key, asyncio.Lock()):
+        if await cache.get(diagnostics_key) is None:
+            await cache.begin(diagnostics_key)
+            await cache.commit(diagnostics_key, details)
+    payload = evidence_page(records, 0, len(records), budget, evidence_ref=key)
+    diagnostics = {"errors": result.errors, "gap_analysis": details[1]["gap_analysis"]}
+    for name, value in {**diagnostics, "diagnostics_ref": diagnostics_key}.items():
+        if len(json.dumps({**payload, name: value}, ensure_ascii=False, separators=(",", ":"))) <= budget:
+            payload[name] = value
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _approved_domains(config: dict[str, Any]) -> list[str]:
     return allowed_domains(Configuration.from_runnable_config(config))
 
 
 async def _approve_candidate_batch(
-    candidates: list[CandidateSource], iteration: int, config: dict[str, Any], run_id: str
+    candidates: list[CandidateSource],
+    iteration: int,
+    config: dict[str, Any],
+    run_id: str,
 ) -> DomainApprovalBatch:
     """优先使用网关绑定的准入策略；独立执行时回退静态白名单。"""
     configurable = Configuration.from_runnable_config(config)
     mode = network_policy_mode(configurable)
     batch = DomainApprovalBatch(
-        run_id=run_id, iteration=iteration, domains=sorted({c.domain for c in candidates}),
+        run_id=run_id,
+        iteration=iteration,
+        domains=sorted({c.domain for c in candidates}),
         urls=[c.canonical_url for c in candidates],
     )
     if egress_authorizer.get() is not None:
         decisions = await asyncio.gather(*(authorize_url(url) for url in batch.urls))
-        batch.pending_domains = sorted({
-            candidate.domain for candidate, decision in zip(candidates, decisions)
-            if decision == "ask"
-        })
-        batch.denied_domains = sorted({
-            candidate.domain for candidate, decision in zip(candidates, decisions)
-            if decision not in {"allow", "ask"}
-        })
+        batch.pending_domains = sorted(
+            {
+                candidate.domain
+                for candidate, decision in zip(candidates, decisions)
+                if decision == "ask"
+            }
+        )
+        batch.denied_domains = sorted(
+            {
+                candidate.domain
+                for candidate, decision in zip(candidates, decisions)
+                if decision not in {"allow", "ask"}
+            }
+        )
         return batch
     if mode == "disabled":
         return batch
@@ -595,424 +590,360 @@ def _resolve_task_identity(config: dict[str, Any]) -> str:
     return str((config.get("metadata") or {}).get("task_id") or "task")
 
 
-def web_research_tool(
-    run_config_getter: Callable[[], dict[str, Any]],
-    factory: ModelFactory,
-    ledger: WebFetchLedger,
+def execution_config(context):
+    """Bind nested operations to the authenticated logical tool invocation."""
+    return {
+        **context.config,
+        "metadata": {
+            **context.config.get("metadata", {}),
+            "tool_operation_id": context.operation_id,
+            "tool_call_id": context.tool_call_id,
+            "tool_role": context.role,
+        },
+    }
+
+
+def create_web_pipeline(
+    config,
+    factory,
+    resources,
     *,
-    tavily_client_factory: Callable | None = None,
-    openai_client_factory: Callable | None = None,
-    anthropic_client_factory: Callable | None = None,
-    firecrawl_api_key: str | None = None,
-) -> Tool:
-    """治理的 Search → Top-K Fetch → Evidence 流水线工具。"""
-    tavily_client_factory = tavily_client_factory or (
-        lambda config: _build_tavily(config)
+    browser_tools=(),
+    progress=None,
+    direct_url=None,
+    batch=None,
+    markdown=False,
+    top_k=None,
+    approve=None,
+):
+    """One assembly point for research, direct reading and shadow evaluation."""
+    cfg = Configuration.from_runnable_config(config)
+    from open_deep_research.agentscope_runtime.efficiency import corpus, enabled
+
+    bounded = enabled(config)
+    finite = corpus(config) if bounded else ()
+    run_id = _resolve_run_identity(config)
+    settings = _settings(config, run_id)
+    settings.finite_corpus = bool(finite)
+    if finite:
+        settings.min_source_authority = 0.0
+    if direct_url:
+        settings.fetch_top_k = 1
+        settings.min_source_authority = 0.0
+    if top_k is not None:
+        settings.fetch_top_k = top_k
+
+    async def discover(request):
+        if batch is not None:
+            return batch
+        if direct_url:
+            item = _candidate("direct", direct_url, direct_url, "", 1, "direct")
+            return SearchBatch(candidates=[item] if item else [])
+        return await SearchService(
+            config, factory, resources, progress=progress
+        ).discover(request)
+
+    return WebResearchPipeline(
+        search=discover,
+        settings=settings,
+        reranker=None if direct_url or markdown or finite else NativeWebReranker(factory),
+        approve=approve
+        or (
+            lambda items, index: _approve_candidate_batch(items, index, config, run_id)
+        ),
+        fetch_backends=configured_fetch_backends(
+            config, settings, resources, browser_tools
+        ),
+        backend_order=cfg.fetch_backend_order,
+        allow_url=lambda url: source_allowed(url, config),
+        evidence_extractor=None if markdown else NativeEvidenceExtractor(factory),
+        extract_evidence=not markdown,
+        progress=progress,
+        result_cache=getattr(factory, "research_cache", None) if bounded else None,
+        evidence_context={
+            "model": cfg.web_evidence_model,
+            "requirements": config.get("metadata", {}).get("coverage_contract", {}).get("requirements", []),
+            "objective": "\n".join(r.get("text", "") for r in config.get("metadata", {}).get("coverage_contract", {}).get("requirements", [])
+                                   if r.get("kind", "factual") == "factual"),
+        },
     )
 
-    async def discover(request: SearchRequest) -> SearchBatch:
-        config = run_config_getter()
-        configurable = Configuration.from_runnable_config(config)
-        selection = selection_from_config(config)
-        candidates: list[CandidateSource] = []
-        syntheses: list[ProviderSynthesis] = []
-        errors: list[str] = []
-        if selection.mode is SourceMode.SPECIFIC and selection.domains:
-            bounded, overflowed, expanded = _bounded_specific_domain_queries(
-                list(selection.domains), list(request.queries)
-            )
-            request = request.model_copy(update={"queries": bounded})
-            if overflowed:
-                errors.append(
-                    "specific_domain_query_limit_exceeded:"
-                    f"{expanded}:{MAX_SPECIFIC_DOMAIN_QUERIES}"
-                )
-        search_api = SearchAPI(configurable.search_api)
-        max_per_query = min(10, request.candidate_limit)
-        exact_candidates = [
-            item
-            for item in (
-                _candidate(
-                    "specific_url", url, url,
-                    "Explicit URL selected by the user", 1, "specific-url",
-                )
-                for url in selection.urls
-            )
-            if item is not None
-        ]
-        if search_api is SearchAPI.NONE or (
-            selection.mode is SourceMode.SPECIFIC and not selection.domains
-        ):
-            return SearchBatch(
-                candidates=exact_candidates,
-                errors=[] if exact_candidates else ["search_api_none"],
-            )
-        try:
-            if search_api is SearchAPI.TAVILY:
-                client = tavily_client_factory(config)
-                responses = await asyncio.gather(
-                    *[
-                        client.search(
-                            query,
-                            max_results=max_per_query,
-                            topic=request.topic,
-                            include_raw_content=False,
-                        )
-                        for query in request.queries
-                    ]
-                )
-                for response in responses:
-                    query = str(response.get("query", ""))
-                    for rank, result in enumerate(
-                        response.get("results", [])[:max_per_query], 1
-                    ):
-                        item = _candidate(
-                            "tavily",
-                            str(result.get("url", "")),
-                            str(result.get("title", "")),
-                            str(result.get("content", "")),
-                            rank,
-                            query,
-                        )
-                        if item:
-                            candidates.append(item)
-            elif search_api in {SearchAPI.OPENAI, SearchAPI.ANTHROPIC}:
-                if search_api is SearchAPI.OPENAI:
-                    client = (openai_client_factory or _build_openai)(config)
-                    model = _strip_prefix(configurable.research_model, "openai")
-                    responses = await asyncio.gather(
-                        *[
-                            client.responses.create(
-                                model=model,
-                                input=query,
-                                tools=[{"type": "web_search_preview"}],
-                            )
-                            for query in request.queries
-                        ]
-                    )
-                    parse = parse_openai_search
-                else:
-                    client = (anthropic_client_factory or _build_anthropic)(config)
-                    model = _strip_prefix(configurable.research_model, "anthropic")
-                    responses = await asyncio.gather(
-                        *[
-                            client.messages.create(
-                                model=model,
-                                max_tokens=configurable.research_model_max_tokens,
-                                messages=[{"role": "user", "content": query}],
-                                tools=[
-                                    {
-                                        "type": "web_search_20250305",
-                                        "name": "web_search",
-                                        "max_uses": 5,
-                                    }
-                                ],
-                            )
-                            for query in request.queries
-                        ]
-                    )
-                    parse = parse_anthropic_search
-                for query, response in zip(request.queries, responses):
-                    text, sources = parse(response)
-                    cited = []
-                    for rank, source in enumerate(
-                        deduplicate_sources(sources)[:max_per_query], 1
-                    ):
-                        item = _candidate(
-                            search_api.value, source["url"], source["title"], "", rank, query
-                        )
-                        if item:
-                            candidates.append(item)
-                            cited.append(item.candidate_id)
-                    syntheses.append(
-                        ProviderSynthesis(
-                            provider=search_api.value,
-                            text=text[:10_000],
-                            cited_candidate_ids=cited,
-                        )
-                    )
-        except Exception as exc:  # noqa: BLE001 - provider errors are normalized
-            errors.append(f"{search_api.value}:{_search_error_code(exc)}:{str(exc)[:300]}")
-        if selection.mode is SourceMode.SPECIFIC:
-            allowed_urls = {
-                identity for url in selection.urls if (identity := source_url_identity(url))
-            }
-            allowed_domains_ = tuple(selection.domains)
-            candidates = [
-                item
-                for item in candidates
-                if source_url_identity(item.canonical_url) in allowed_urls
-                or any(
-                    item.domain == domain or item.domain.endswith(f".{domain}")
-                    for domain in allowed_domains_
-                )
-            ]
-            candidates = exact_candidates + candidates
-        return SearchBatch(
-            candidates=candidates[: request.candidate_limit],
-            syntheses=syntheses,
-            errors=errors,
-        )
 
-    async def call(input: WebResearchInput, context: ToolContext, progress=None):
-        config = context.config
-        run_id = _resolve_run_identity(config)
-        task_id = _resolve_task_identity(config)
-        settings = _settings(config, run_id)
-        configurable = Configuration.from_runnable_config(config)
+async def run_web_pipeline(
+    pipeline, request, ledger, config, *, cached_url=None, tally=None
+):
+    """Reserve one slot per URL acquisition chain and settle physical/cache outcomes."""
+    from open_deep_research.web.pipeline import cached_document
 
-        external_extractors: list[Callable] = []
-        if "tavily" in (configurable.external_extract_backends or []):
-            external_extractors.append(
-                lambda url: _tavily_extract(url, tavily_client_factory)
-            )
-        if "firecrawl" in (configurable.external_extract_backends or []):
-            external_extractors.append(
-                lambda url: _firecrawl_extract(url, firecrawl_api_key)
-            )
-        pipeline = WebResearchPipeline(
-            search=discover,
-            settings=settings,
-            reranker=NativeWebReranker(factory),
-            approve=lambda selected, iteration: _approve_candidate_batch(
-                selected, iteration, config, run_id
+    run_id, task_id = _resolve_run_identity(config), _resolve_task_identity(config)
+    cached = (
+        cached_url
+        and cached_document(run_id, cached_url, evidence=pipeline.extract_evidence)
+        is not None
+    )
+    announced = True
+    transport_allowance = ledger.transport_failure_allowance(run_id, task_id, config)
+    if cached:
+        granted, scope = 1, "none"
+    else:
+        requested = min(
+            pipeline.settings.fetch_top_k,
+            transport_allowance,
+            config.get("metadata", {}).get(
+                "sql_fetch_grant", pipeline.settings.fetch_top_k
             ),
-            external_extractors=external_extractors or None,
-            evidence_extractor=NativeEvidenceExtractor(factory),
         )
-        request = SearchRequest(
-            objective=input.objective,
-            queries=input.queries[:3],
-            iteration=input.iteration,
-            candidate_limit=configurable.search_candidate_limit,
-        )
-        requested = settings.fetch_top_k
         granted, scope, announced = ledger.reserve(run_id, task_id, requested, config)
-        if granted == 0 and not announced:
-            return ToolResult(
-                output=(
-                    "Fetch skipped: the authenticated zero-allocation budget wall "
-                    f"blocked this task (scope={scope})."
-                )
+        if requested == 0:
+            scope = (
+                "run"
+                if transport_allowance
+                or ledger._run_transport_failures.get(run_id, 0)
+                >= ledger._run_cap(config)
+                else "task"
             )
-        consumed = 0
+    consumed = 0
 
-        def on_physical_fetch() -> None:
-            nonlocal consumed
-            consumed += 1
+    def physical_fetch():
+        nonlocal consumed
+        consumed += 1
+        ledger.record_fetch(run_id, task_id)
+        if tally is not None:
+            tally["physical_fetches"] = consumed
 
-        try:
-            result = await pipeline.run(
-                request,
-                remaining_fetches=granted,
-                on_physical_fetch=on_physical_fetch,
-                fetch_budget_exhaustion_scope=scope,
-                run_id=run_id,
-            )
-        finally:
-            ledger.release(run_id, task_id, max(0, granted - consumed))
-        if result.gap_analysis.budget.transport_failed_fetches > 0:
-            ledger.record_transport_failure(
-                run_id, task_id, result.gap_analysis.budget.transport_failed_fetches
-            )
-        return ToolResult(
-            output=compact_web_result(result, config),
-            metadata={
-                "physical_fetches": consumed,
-                "transport_failed_fetches": (
-                    result.gap_analysis.budget.transport_failed_fetches
-                ),
-            },
+    try:
+        result = await pipeline.run(
+            request,
+            remaining_fetches=granted,
+            on_physical_fetch=physical_fetch,
+            fetch_budget_exhaustion_scope=scope,
+            fetch_budget_exhaustion_cause="transport_failures"
+            if not cached and transport_allowance == 0
+            else "attempts",
+            run_id=run_id,
         )
+    finally:
+        if not cached:
+            ledger.release(run_id, task_id, max(0, granted - consumed))
+    failures = result.gap_analysis.budget.transport_failed_fetches
+    if failures and not cached:
+        ledger.record_transport_failure(run_id, task_id, failures)
+    return result, {
+        "physical_fetches": consumed,
+        "transport_failed_fetches": failures,
+        "zero_allocation_suppressed": granted == 0 and not announced,
+    }
+
+
+def markdown_output(result, input, config):
+    """Return valid bounded JSON with explicit trust and non-evidence semantics."""
+    from open_deep_research.web.models import MarkdownReadResult
+
+    cfg = Configuration.from_runnable_config(config)
+    document = result.documents[0] if result.documents else None
+    output = MarkdownReadResult(
+        url=input.url, offset=input.offset, errors=result.errors
+    )
+    if document is not None:
+        output.url, output.title = document.final_url, document.title
+        output.content_hash = document.content_hash
+        output.total_chars = len(document.markdown)
+        if inspect_untrusted_content(document.markdown):
+            output.security_status = "quarantined"
+            output.errors.append("external_content_quarantined")
+        else:
+            limit = min(
+                input.max_chars or cfg.max_mcp_output_chars, cfg.max_mcp_output_chars
+            )
+            output.markdown = document.markdown[input.offset : input.offset + limit]
+    budget = cfg.max_mcp_output_chars - min(
+        _COMPACT_HEADROOM_CHARS, cfg.max_mcp_output_chars // 4
+    )
+    while True:
+        end = output.offset + len(output.markdown)
+        output.truncated = (
+            end < output.total_chars and output.security_status != "quarantined"
+        )
+        output.next_offset = end if output.truncated else None
+        text = output.model_dump_json()
+        if len(text) <= budget:
+            return text
+        if output.markdown:
+            output.markdown = output.markdown[
+                : max(0, len(output.markdown) - (len(text) - budget) - 16)
+            ]
+        elif output.title:
+            output.title = ""
+        else:
+            return json.dumps(
+                {
+                    "kind": "web_markdown",
+                    "evidence_eligible": False,
+                    "errors": ["output_budget_too_small"],
+                    "truncated": True,
+                }
+            )
+
+
+def web_research_tool(
+    run_config_getter,
+    factory,
+    ledger,
+    *,
+    tavily_client_factory=None,
+    openai_client_factory=None,
+    anthropic_client_factory=None,
+    firecrawl_api_key=None,
+    resources=None,
+    browser_tools=(),
+):
+    """Expose bounded multi-provider research through the governed tool protocol."""
+    client_factories = {
+        k: v
+        for k, v in {
+            "tavily": tavily_client_factory,
+            "openai": openai_client_factory,
+            "anthropic": anthropic_client_factory,
+        }.items()
+        if v
+    }
+
+    async def call(input, context, progress=None):
+        config = execution_config(context)
+        from open_deep_research.agentscope_runtime.efficiency import corpus, enabled
+
+        if not input.queries and not (enabled(config) and corpus(config)):
+            raise ValueError("queries are required outside a fixed URL corpus")
+        clients = resources or SearchResources(client_factories)
+        emitter = progress or WebProgress(
+            config,
+            task_id=_resolve_task_identity(config),
+            tool_call_id=context.tool_call_id,
+            operation_id=context.operation_id,
+        )
+        try:
+            pipeline = create_web_pipeline(
+                config, factory, clients, browser_tools=browser_tools, progress=emitter
+            )
+            request = SearchRequest(
+                objective=input.objective,
+                queries=input.queries,
+                iteration=input.iteration,
+                candidate_limit=Configuration.from_runnable_config(
+                    config
+                ).search_candidate_limit,
+            )
+            result, metadata = await run_web_pipeline(pipeline, request, ledger, config)
+            output = (
+                "Fetch skipped: the authenticated zero-allocation budget wall blocked this task."
+                if metadata["zero_allocation_suppressed"]
+                else await project_web_result(result, config, factory, metadata)
+            )
+            return ToolResult(output=output, metadata=metadata)
+        finally:
+            if resources is None:
+                await clients.aclose()
 
     return build_tool(
         name="web_research",
-        description=(
-            "Run the governed Search → Top-K Fetch → Evidence web pipeline."
-        ),
-        input_schema=WebResearchInput,
+        description="Search selected providers in parallel, fetch sources and return citable evidence.",
+        input_schema=(WebResearchInput if Configuration.from_runnable_config(run_config_getter()).research_efficiency_mode == "bounded" else LegacyWebResearchInput),
         call=call,
         origin=ToolOrigin.SEARCH,
-        retryable=True,
+        retryable=False,
         concurrency_safe=True,
-        prompt=(
-            "Use web_research for governed evidence gathering. Provide an "
-            "objective and up to three focused queries; the pipeline selects, "
-            "fetches and extracts citable evidence within the fetch budget."
-        ),
-        is_enabled=lambda config: _pipeline_enabled(config),
+        prompt=lambda config: (
+            "For a fixed list of selected URLs, call web_research with objective and omit queries to read the selected pages in one batch. "
+            "Later calls inspect unread sections and reuse prior evidence. Do not invent or expand the URL list. "
+            "For open discovery, provide one to three queries. Only fetched, source-checked evidence can support report claims."
+        ) if Configuration.from_runnable_config(config).research_efficiency_mode == "bounded" else
+        "Provide an objective and up to three queries. Only fetched, source-checked evidence can support report claims.",
+        is_enabled=enforced_pipeline_enabled,
     )
 
 
 def fetch_url_tool(
-    run_config_getter: Callable[[], dict[str, Any]],
-    factory: ModelFactory,
-    ledger: WebFetchLedger,
-) -> Tool:
-    """治理的单 URL 抓取工具（含 SPECIFIC 来源边界）。"""
+    run_config_getter, factory, ledger, *, resources=None, browser_tools=()
+):
+    """Read one approved URL as structured evidence or paginated Markdown."""
 
-    async def call(input: FetchUrlInput, context: ToolContext, progress=None):
-        config = context.config
-        selection = selection_from_config(config)
-        if selection.mode is SourceMode.SPECIFIC and selection.web_enabled:
-            identity = source_url_identity(input.url)
-            allowed_urls = {
-                identity_ for url in selection.urls if (identity_ := source_url_identity(url))
-            }
-            domain = (urlsplit(input.url).hostname or "").lower()
-            if not (
-                identity in allowed_urls
-                or any(
-                    domain == d or domain.endswith(f".{d}") for d in selection.domains
-                )
-            ):
-                raise ValueError(
-                    "URL is outside this run's specific-source boundary"
-                )
-        run_id = _resolve_run_identity(config)
-        task_id = _resolve_task_identity(config)
-        settings = _settings(config, run_id)
-        # 显式 URL 不参与发现候选的权威度筛选；网络准入仍由网关决定。
-        settings.fetch_top_k = 1
-        settings.min_source_authority = 0.0
-        pipeline = WebResearchPipeline(
-            search=_direct_search(input.url),
-            settings=settings,
-            approve=lambda items, index: _approve_candidate_batch(
-                items, index, config, run_id
-            ),
-            evidence_extractor=NativeEvidenceExtractor(factory),
+    async def call(input, context, progress=None):
+        config = execution_config(context)
+        if not source_allowed(input.url, config):
+            raise ValueError("URL is outside this run's specific-source boundary")
+        clients = resources or SearchResources()
+        emitter = progress or WebProgress(
+            config,
+            task_id=_resolve_task_identity(config),
+            tool_call_id=context.tool_call_id,
+            operation_id=context.operation_id,
+            tool_name="fetch_url",
         )
-        request = SearchRequest(
-            objective=input.objective or input.url,
-            queries=[input.url],
-            candidate_limit=1,
-        )
-        granted, scope, announced = ledger.reserve(run_id, task_id, 1, config)
-        if granted == 0 and not announced:
-            return ToolResult(
-                output=(
-                    "Fetch skipped: the authenticated zero-allocation budget wall "
-                    f"blocked this task (scope={scope})."
-                )
-            )
-        consumed = 0
-
-        def on_physical_fetch() -> None:
-            nonlocal consumed
-            consumed += 1
-
         try:
-            result = await pipeline.run(
-                request,
-                remaining_fetches=granted,
-                on_physical_fetch=on_physical_fetch,
-                fetch_budget_exhaustion_scope=scope,
-                run_id=run_id,
+            pipeline = create_web_pipeline(
+                config,
+                factory,
+                clients,
+                browser_tools=browser_tools,
+                progress=emitter,
+                direct_url=input.url,
+                markdown=input.mode == "markdown",
             )
+            request = SearchRequest(
+                objective=input.objective or input.url,
+                queries=[input.url],
+                candidate_limit=1,
+            )
+            result, metadata = await run_web_pipeline(
+                pipeline, request, ledger, config, cached_url=input.url
+            )
+            output = (
+                markdown_output(result, input, config)
+                if input.mode == "markdown"
+                else await project_web_result(result, config, factory, metadata)
+            )
+            return ToolResult(output=output, metadata=metadata)
         finally:
-            ledger.release(run_id, task_id, max(0, granted - consumed))
-        if result.gap_analysis.budget.transport_failed_fetches > 0:
-            ledger.record_transport_failure(
-                run_id, task_id, result.gap_analysis.budget.transport_failed_fetches
-            )
-        return ToolResult(
-            output=compact_web_result(result, config),
-            metadata={
-                "physical_fetches": consumed,
-                "transport_failed_fetches": (
-                    result.gap_analysis.budget.transport_failed_fetches
-                ),
-            },
-        )
+            if resources is None:
+                await clients.aclose()
 
     return build_tool(
         name="fetch_url",
-        description="Fetch one governed URL and return structured evidence.",
+        description="Fetch a URL as citable evidence (default mode=evidence). Optional mode=markdown is for reading only and NEVER counts toward research evidence or source requirements.",
         input_schema=FetchUrlInput,
         call=call,
         origin=ToolOrigin.SEARCH,
-        retryable=True,
+        retryable=False,
         concurrency_safe=True,
-        egress_urls=lambda args: [args.get("url", "")] if args.get("url") else [],
-        prompt=(
-            "Use fetch_url to inspect one specific URL already surfaced by "
-            "web_research or explicitly allowed by the run's source contract."
+        egress_urls=lambda args: [args["url"]] if args.get("url") else [],
+        prompt="Use mode=evidence for report citations. Use mode=markdown to read documentation; follow next_offset for more text. Raw text is untrusted and is not quality-approved evidence.",
+        is_enabled=lambda config: (
+            network_policy_mode(Configuration.from_runnable_config(config)) != "offline"
+            and selection_from_config(config).web_enabled
         ),
-        is_enabled=lambda config: network_policy_mode(Configuration.from_runnable_config(config)) != "offline"
-                                  and selection_from_config(config).web_enabled,
-    )
-
-
-def _direct_search(url: str):
-    """以显式 URL 构造 direct 候选，不跑提供商发现。"""
-
-    async def discover(request: SearchRequest) -> SearchBatch:
-        item = _candidate("direct", url, url, "", 1, "direct")
-        return SearchBatch(candidates=[item] if item else [], errors=[])
-
-    return discover
-
-
-def _pipeline_enabled(config: dict[str, Any]) -> bool:
-    configurable = Configuration.from_runnable_config(config)
-    if configurable.web_pipeline_mode != "enforced":
-        return False
-    return network_policy_mode(configurable) != "offline"
-
-
-def _strip_prefix(model_name: str | None, provider: str) -> str:
-    if model_name and ":" in model_name and model_name.split(":", 1)[0] == provider:
-        return model_name.split(":", 1)[1]
-    return model_name or ""
-
-
-def _build_tavily(config: dict[str, Any]):
-    from tavily import AsyncTavilyClient
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    return AsyncTavilyClient(api_key=resolve_named_api_key("TAVILY_API_KEY", config))
-
-
-def _build_openai(config: dict[str, Any]):
-    import httpx
-    from openai import AsyncOpenAI
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    configurable = Configuration.from_runnable_config(config)
-    return AsyncOpenAI(
-        api_key=resolve_named_api_key("OPENAI_API_KEY", config),
-        timeout=httpx.Timeout(60.0),
-        max_retries=0,
-        base_url=configurable.openai_base_url or None,
-    )
-
-
-def _build_anthropic(config: dict[str, Any]):
-    import httpx
-    from anthropic import AsyncAnthropic
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    return AsyncAnthropic(
-        api_key=resolve_named_api_key("ANTHROPIC_API_KEY", config),
-        timeout=httpx.Timeout(60.0),
-        max_retries=0,
     )
 
 
 def native_web_tools(
-    run_config_getter: Callable[[], dict[str, Any]],
-    factory: ModelFactory,
-    ledger: WebFetchLedger | None = None,
-) -> list[Tool]:
-    """返回 enforced 模式的两个原生 Web 工具。"""
+    run_config_getter, factory, ledger=None, *, resources=None, browser_tools=()
+):
+    """Assemble both web tools with the same owned clients and browser session."""
     ledger = ledger or WebFetchLedger()
     return [
-        web_research_tool(run_config_getter, factory, ledger),
-        fetch_url_tool(run_config_getter, factory, ledger),
+        web_research_tool(
+            run_config_getter,
+            factory,
+            ledger,
+            resources=resources,
+            browser_tools=browser_tools,
+        ),
+        fetch_url_tool(
+            run_config_getter,
+            factory,
+            ledger,
+            resources=resources,
+            browser_tools=browser_tools,
+        ),
     ]
 
 
@@ -1022,6 +953,8 @@ __all__ = [
     "NativeWebReranker",
     "WebFetchLedger",
     "WebResearchInput",
+    "_bounded_specific_domain_queries",
+    "_tavily_extract",
     "compact_web_result",
     "fetch_url_tool",
     "native_web_tools",

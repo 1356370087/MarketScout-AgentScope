@@ -61,6 +61,7 @@ class ServiceRequest(BaseModel):
 class BudgetReserveRequest(ServiceRequest):
     """Reserve one physical model attempt and its estimated usage."""
     run_id: str
+    trace_metadata: dict[str, str | int | float | bool] = Field(default_factory=dict, exclude_if=lambda value: not value)
     task_id: str
     fence_token: int
     stage: str
@@ -104,6 +105,7 @@ class ToolBudgetReserveRequest(ServiceRequest):
     # SQL 权威端点用：按工具元数据决定幂等重放与抓取维度；旧文件账本忽略。
     tool_name: str | None = None
     idempotent: bool | None = None
+    fetch_calls: int | None = Field(default=None, ge=0, le=100, exclude_if=lambda value: value is None)
 
 
 class ToolBudgetSettleRequest(ServiceRequest):
@@ -115,6 +117,17 @@ class ToolBudgetSettleRequest(ServiceRequest):
     # SQL 权威端点用：结算回执与实测物理抓取数；缺失时保持保守预留。
     outcome: dict[str, Any] | None = None
     fetch_calls: int | None = Field(default=None, ge=0)
+    diagnostics: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda value: not value)
+
+
+class ResearchDataRequest(ServiceRequest):
+    """Fenced run-local progress and result artifacts, never caller filesystem paths."""
+
+    run_id: str
+    fence_token: int
+    action: Literal["get", "begin", "commit", "abandon", "progress"]
+    key: str = Field(default="", max_length=200)
+    value: Any = None
 
 
 class OperationTransitionRequest(ServiceRequest):
@@ -534,6 +547,18 @@ def build_internal_sandbox_router(
                 task.pending_domain_tool = None
                 registry.update_status(task.task_id, TaskStatus.RUNNING)
 
+
+    @router.post("/research/data")
+    async def research_data(request: ResearchDataRequest) -> dict[str, Any]:
+        from open_deep_research.agentscope_runtime.gateway_ledger import (
+            research_data_response,
+        )
+
+
+        ledger = await native_ledger_for(request)
+        if ledger is None:
+            raise HTTPException(404, "run_not_active")
+        return await research_data_response(ledger, request)
 
     @router.post("/budgets/reserve")
     async def reserve_budget(request: BudgetReserveRequest) -> dict[str, Any]:

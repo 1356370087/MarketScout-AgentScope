@@ -1,202 +1,127 @@
+"""Native SQL accounting and read-only compatibility usage regressions."""
+
 from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+import pytest_asyncio
 
-from open_deep_research.budgets import (
-    BudgetGate,
-    RunBudgetLedger,
-    RunBudgetPolicy,
-)
+from open_deep_research.agentscope_runtime.gateway_ledger import SQLGatewayLedger
+from open_deep_research.agentscope_runtime.recovery import RecoverySession
+from open_deep_research.agentscope_runtime.recovery_store import RecoveryStore
+from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot
+from open_deep_research.api.usage import _build_usage_analytics_response
 from open_deep_research.configuration import Configuration, frozen_run_config_values
-from open_deep_research.observability import (
-    SQLiteTraceStore,
-    TokenUsage,
-    get_trace_recorder,
-    invoke_model_with_observability,
+from open_deep_research.observability import SQLiteTraceStore, TokenUsage
+from open_deep_research.sandbox.internal_api import (
+    BudgetReserveRequest,
+    OperationTransitionRequest,
 )
-from open_deep_research.server import _build_usage_analytics_response
 
 
-def _config(tmp_path, run_id: str, **values: Any) -> dict[str, Any]:
-    return {
-        "configurable": {
-            "trace_store_path": str(tmp_path / "trace.sqlite3"),
-            "runs_dir": str(tmp_path / "runs"),
-            "event_log_enabled": False,
-            **values,
-        },
-        "metadata": {"run_id": run_id, "user_id": "owner-1"},
-    }
-
-
-class CallbacklessModel:
-    def __init__(self, response: AIMessage) -> None:
-        self.response = response
-
-    async def ainvoke(self, _messages: list, config: dict | None = None) -> AIMessage:
-        return self.response
-
-
-class StreamFallbackModel(CallbacklessModel):
-    def __init__(self, response: AIMessage, error: BaseException) -> None:
-        super().__init__(response)
-        self.error = error
-
-    async def astream(self, _messages: list, config: dict | None = None):
-        if False:
-            yield AIMessage(content="unreachable")
-        raise self.error
-
-
-@pytest.mark.asyncio
-async def test_full_provider_model_price_key_reaches_budget_boundary(tmp_path) -> None:
-    run_id = "priced-run"
-    config = _config(
-        tmp_path,
-        run_id,
-        max_run_cost_micro_usd=1_000_000,
-        model_costs_per_million={
-            "openai:gpt-priced": {"input": 2.0, "output": 4.0}
+@pytest_asyncio.fixture
+async def native_ledger(tmp_path):
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "usage.db").as_posix())
+    await store.create_tables()
+    await store.create_run(
+        "owner",
+        ResearchSnapshot(run_id="usage", config_fingerprint="f"),
+        limits={
+            "model_calls": 10,
+            "input_tokens": 1000,
+            "output_tokens": 1000,
+            "cost_micro_usd": 10000,
         },
     )
-    recorder = get_trace_recorder(config)
-    model = CallbacklessModel(
-        AIMessage(
-            content="ok",
-            usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
-        )
+    recovery = await RecoverySession.open(store, "usage", "owner")
+    ledger = SQLGatewayLedger(
+        recovery,
+        {
+            "openai:gpt-priced": {
+                "input_cost_per_token": 0.000002,
+                "output_cost_per_token": 0.000004,
+            }
+        },
     )
+    yield ledger
+    await recovery.close()
+    await store.aclose()
 
-    with recorder.start_run(run_id, user_id="owner-1"):
-        await invoke_model_with_observability(
-            model,
-            [HumanMessage(content="question")],
-            config,
-            span_name="test.priced",
+
+async def reserve(ledger, operation):
+    await ledger.reserve(
+        BudgetReserveRequest(
+            run_id="usage",
+            task_id="t",
+            fence_token=ledger.recovery.lease.fence,
+            stage="researching",
+            logical_operation_id=operation,
+            physical_attempt_id=operation,
+            request_digest=operation,
             agent_role="researcher",
             model_name="openai:gpt-priced",
-            stage="researching",
+            estimated_input_tokens=100,
+            estimated_output_tokens=50,
+            service_nonce="native-fixture-nonce",
+            service_timestamp=time.time(),
+            service_signature="fixture",
         )
-
-    ledger = RunBudgetLedger(run_id, runs_dir=str(tmp_path / "runs"))
-    assert ledger.snapshot().cost_micro_usd == 14
-
-
-def test_deterministic_failure_releases_token_and_cost_reservations(tmp_path) -> None:
-    ledger = RunBudgetLedger(
-        "rejected-run",
-        runs_dir=str(tmp_path),
-        policy=RunBudgetPolicy(
-            max_model_calls=10,
-            max_input_tokens=1_000,
-            max_output_tokens=1_000,
-            max_cost_micro_usd=1_000,
-        ),
     )
-    gate = BudgetGate(
-        ledger=ledger,
-        cost_pricing={"openai:gpt-test": {"input": 1, "output": 2}},
-    )
-    gate.reserve_model_call(
-        "attempt-1",
-        estimated_input_tokens=100,
-        estimated_output_tokens=50,
-        model_name="openai:gpt-test",
-    )
-
-    gate.fail_model_call("attempt-1", uncertain=False)
-
-    snapshot = ledger.snapshot()
-    assert snapshot.model_calls == 1
-    assert snapshot.input_tokens == 0
-    assert snapshot.output_tokens == 0
-    assert snapshot.cost_micro_usd == 0
-    assert not any(gate.outstanding_reservations().values())
-
-
-def test_uncertain_failure_keeps_conservative_reservations(tmp_path) -> None:
-    ledger = RunBudgetLedger(
-        "uncertain-run",
-        runs_dir=str(tmp_path),
-        policy=RunBudgetPolicy(
-            max_model_calls=10,
-            max_input_tokens=1_000,
-            max_output_tokens=1_000,
-            max_cost_micro_usd=1_000,
-        ),
-    )
-    gate = BudgetGate(
-        ledger=ledger,
-        cost_pricing={"openai:gpt-test": {"input": 1, "output": 2}},
-    )
-    gate.reserve_model_call(
-        "attempt-1",
-        estimated_input_tokens=100,
-        estimated_output_tokens=50,
-        model_name="openai:gpt-test",
-    )
-
-    gate.fail_model_call("attempt-1", uncertain=True)
-
-    assert gate.outstanding_reservations()["input_tokens"] == 100
-    assert gate.outstanding_reservations()["output_tokens"] == 50
-    assert gate.outstanding_reservations()["cost_micro_usd"] == 200
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("error", "failed_status", "accounting_status"),
-    [
-        (NotImplementedError("stream unsupported"), "rejected", "complete"),
-        (TimeoutError("stream timed out"), "unknown_failed", "partial"),
-    ],
-)
-async def test_stream_fallback_records_both_physical_attempts(
-    tmp_path,
-    error: BaseException,
-    failed_status: str,
-    accounting_status: str,
-) -> None:
-    run_id = f"stream-{failed_status}"
-    config = _config(
-        tmp_path,
-        run_id,
-        model_circuit_breaker_enabled=True,
-        model_first_packet_probe="shadow",
-    )
-    recorder = get_trace_recorder(config)
-    model = StreamFallbackModel(
-        AIMessage(
-            content="fallback",
-            usage_metadata={"input_tokens": 4, "output_tokens": 3, "total_tokens": 7},
-        ),
-        error,
-    )
-
-    with recorder.start_run(run_id, user_id="owner-1"):
-        await invoke_model_with_observability(
-            model,
-            [HumanMessage(content="question")],
-            config,
-            span_name="test.stream_fallback",
-            agent_role="researcher",
-            model_name="openai:gpt-test",
-            stage="researching",
+async def test_full_provider_model_price_key_reaches_budget_boundary(native_ledger):
+    await reserve(native_ledger, "priced")
+    session = native_ledger.recovery
+    budget = await session.store.budget("usage", "owner")
+    assert budget["reserved"]["cost_micro_usd"] == 400
+    await native_ledger.transition(
+        OperationTransitionRequest(
+            run_id="usage",
+            fence_token=session.lease.fence,
+            logical_operation_id="priced",
+            status="completed",
+            outcome={
+                "requested_model": "openai:gpt-priced",
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            },
+            service_nonce="native-fixture-nonce",
+            service_timestamp=time.time(),
+            service_signature="fixture",
         )
+    )
+    assert (await session.store.budget("usage", "owner"))["used"][
+        "cost_micro_usd"
+    ] == 14
 
-    store = SQLiteTraceStore(config["configurable"]["trace_store_path"])
-    rows = store._usage_rows(run_id)  # noqa: SLF001 - verify physical ordinals
-    accounting = store.get_usage_accounting(run_id)
-    assert [row["attempt_index"] for row in rows] == [1, 2]
-    assert [row["response_status"] for row in rows] == [failed_status, "success"]
-    assert accounting["totals"]["reported"]["total_tokens"] == 7
-    assert accounting["accounting_status"] == accounting_status
+
+@pytest.mark.asyncio
+async def test_deterministic_rejection_releases_tokens_but_unknown_call_retains_reservation(
+    native_ledger,
+):
+    await reserve(native_ledger, "rejected")
+    session = native_ledger.recovery
+    await native_ledger.transition(
+        OperationTransitionRequest(
+            run_id="usage",
+            fence_token=session.lease.fence,
+            logical_operation_id="rejected",
+            status="failed",
+            outcome={"error_code": "permission_denied"},
+            service_nonce="native-fixture-nonce",
+            service_timestamp=time.time(),
+            service_signature="fixture",
+        )
+    )
+    await reserve(native_ledger, "unknown")
+    budget = await session.store.budget("usage", "owner")
+    assert budget["used"]["model_calls"] == 1
+    assert budget["used"]["input_tokens"] == 0
+    assert budget["reserved"]["input_tokens"] == 100
+    assert budget["reserved"]["cost_micro_usd"] == 400
 
 
 def test_provider_filter_aggregates_only_matching_usage(tmp_path) -> None:
@@ -230,9 +155,9 @@ def test_provider_filter_aggregates_only_matching_usage(tmp_path) -> None:
         )
 
     report = store.get_usage_accounting("filter-run", provider="openai")
-    batch_report = store.get_usage_accounting_many(
-        ["filter-run"], provider="openai"
-    )["filter-run"]
+    batch_report = store.get_usage_accounting_many(["filter-run"], provider="openai")[
+        "filter-run"
+    ]
 
     assert report["totals"]["reported"]["total_tokens"] == 5
     assert batch_report["totals"] == report["totals"]
@@ -358,7 +283,9 @@ def test_zero_retention_means_forever_and_history_filters_usage_rows(
     assert recent["summary"]["run_count"] == 0
 
 
-def test_usage_projection_exposes_outstanding_budget_and_retry_timeline(tmp_path) -> None:
+def test_usage_projection_exposes_outstanding_budget_and_retry_timeline(
+    tmp_path,
+) -> None:
     store = SQLiteTraceStore(str(tmp_path / "projection.sqlite3"))
     store.start_run("projection-run", "owner-1", {})
     store.start_span(

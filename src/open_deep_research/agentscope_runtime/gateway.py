@@ -1,33 +1,35 @@
 """AgentScope 原生模型与 Sandbox Gateway V2 边界（T020）。"""
 
 from __future__ import annotations
-import json
+
 import asyncio
+import json
 import secrets
 import time
 import uuid
-from contextvars import ContextVar
 from collections.abc import Callable
 from contextlib import aclosing, contextmanager
+from contextvars import ContextVar
 from copy import copy
 from dataclasses import dataclass, field
+
 import httpx
 import jsonschema
-from pydantic import BaseModel, SecretStr, ValidationError
 from agentscope.credential import CredentialBase
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.tool import ToolChoice
 from agentscope.message import TextBlock, ToolCallBlock, UserMsg
 from agentscope.model import (
     ChatModelBase,
     ChatResponse,
     ChatUsage,
-    StructuredResponse,
     OpenAIChatModel,
+    StructuredResponse,
 )
-from open_deep_research.sandbox.wire import GatewayModelRequestV2, GatewayModelOutcomeV2
-from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
+from agentscope.tool import ToolChoice
+from pydantic import BaseModel, SecretStr, ValidationError
 
+from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
+from open_deep_research.sandbox.wire import GatewayModelOutcomeV2, GatewayModelRequestV2
 
 _operation_scope = ContextVar("native_gateway_operation", default=None)
 RECEIPT_LOOKUP_SECONDS = 60
@@ -92,6 +94,8 @@ class SandboxChatModel(ChatModelBase):
         client=None,
         context_size=32768,
         structured_attempts=1,
+        request_timeout=255,
+        trace_enabled=True,
     ):
         super().__init__(
             CredentialBase(),
@@ -102,16 +106,30 @@ class SandboxChatModel(ChatModelBase):
             context_size=context_size,
         )
         self._binding = binding
-        self.client = client or httpx.AsyncClient(base_url=binding.url, timeout=120)
+        self.client = client or httpx.AsyncClient(base_url=binding.url, timeout=request_timeout)
         self._owns_client = client is None
         self.formatter = OpenAIChatFormatter()
         self.structured_attempts = structured_attempts
+        self.trace_enabled = trace_enabled
 
     async def _request(
         self, messages, tools=None, tool_choice=None, structured_schema=None, **kwargs
     ):
         operation_id = kwargs.pop("logical_operation_id", None)
+        server_search = kwargs.pop("server_search", None)
+        trace_metadata = kwargs.pop("trace_metadata", {})
+        from open_deep_research.agentscope_runtime.runtime_limits import (
+            call_context,
+            consume_structured_attempt,
+        )
+
+
+        trace_metadata = {**call_context.get(), **trace_metadata} if self.trace_enabled else trace_metadata
+        if structured_schema is not None:
+            consume_structured_attempt()
         scope = _operation_scope.get()
+        if scope is not None and self.trace_enabled:
+            trace_metadata.setdefault("logical_call_id", scope[0])
         if operation_id is None and scope is not None:
             operation_id = uuid.uuid5(
                 uuid.NAMESPACE_URL,
@@ -148,6 +166,8 @@ class SandboxChatModel(ChatModelBase):
             structured_schema=structured_schema,
             max_output_tokens=kwargs.get("max_tokens", self.parameters.max_tokens),
             temperature=kwargs.get("temperature", self.parameters.temperature),
+            server_search=server_search,
+            trace_metadata=trace_metadata,
         )
         try:
             response = await self.client.post(
@@ -175,6 +195,10 @@ class SandboxChatModel(ChatModelBase):
             or outcome.requested_model != self.model
         ):
             raise GatewayCallError("sandbox_gateway_response_mismatch", uncertain=True)
+        from open_deep_research.agentscope_runtime.web_progress import (
+            record_shadow_model,
+        )
+        record_shadow_model(outcome)
         if outcome.status != "completed":
             if outcome.status == "failed" and outcome.error_code == GATEWAY_TOKEN_LIMIT_MARKER:
                 raise GatewayCallError(GATEWAY_TOKEN_LIMIT_MARKER, status_code=400)
@@ -182,6 +206,12 @@ class SandboxChatModel(ChatModelBase):
                 from open_deep_research.budgets import BudgetDimension, BudgetExhausted
 
                 raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
+            if server_search is not None and outcome.status == "failed":
+                code = outcome.error_code or "server_search_failed"
+                status = {"invalid_request": 400, "authentication": 401,
+                          "model_unavailable": 404, "budget_or_rate_limit": 429,
+                          "server_search_failed": 422}.get(code)
+                raise GatewayCallError(code, status_code=status, uncertain=False)
             raise GatewayCallError("sandbox_gateway_operation_not_completed", uncertain=True)
         return outcome
 
@@ -294,6 +324,22 @@ class SandboxChatModel(ChatModelBase):
 
         return complete_stream()
 
+    async def search_web(self, query, *, allowed_domains=(), blocked_domains=(), progress=None,
+                         logical_operation_id=None, trace_metadata=None):
+        """Use the same signed model operation and SQL receipt for server search."""
+        from open_deep_research.sandbox.wire import ServerSearchRequest
+
+        try:
+            outcome = await self._request([UserMsg("user", query)],
+                logical_operation_id=logical_operation_id, trace_metadata=trace_metadata or {},
+                server_search=ServerSearchRequest(provider=self._binding.role.removesuffix("_search"),
+                    query=query, allowed_domains=list(allowed_domains), blocked_domains=list(blocked_domains)))
+        except asyncio.CancelledError:
+            raise GatewayCallError("server_search_outcome_unknown", uncertain=True) from None
+        if outcome.search_result is None:
+            raise GatewayCallError("sandbox_gateway_search_result_missing", uncertain=True)
+        return StructuredResponse(content=outcome.search_result, usage=self._usage(outcome), metadata=self._metadata(outcome))
+
     async def generate_structured_output(self, messages, structured_model, **kwargs):
         schema = (
             structured_model.model_json_schema()
@@ -368,6 +414,12 @@ class GovernedModelMixin:
 
     async def generate_structured_output(self, messages, structured_model, **kwargs):
         # 显式选择工具策略，禁止框架隐式尝试多种结构化策略形成额外物理调用。
+        from open_deep_research.agentscope_runtime.runtime_limits import (
+            consume_structured_attempt,
+        )
+
+
+        consume_structured_attempt()
         kwargs.setdefault("tool_choice", ToolChoice(mode="generate_structured_output"))
         metadata = {}
         token = self._call_metadata.set(metadata)
@@ -450,6 +502,9 @@ class GovernedOpenAIChatModel(GovernedModelMixin, OpenAIChatModel):
         result = super()._parse_completion_response(
             start_datetime, response, audio_format
         )
+        from open_deep_research.agentscope_runtime.model_accounting import cache_usage
+
+        result.metadata["cache_usage"] = cache_usage(response.usage.model_dump(exclude_none=True) if response.usage else {})
         result.metadata.update(
             provider_finish_reason=response.choices[0].finish_reason,
             request_id=response.id,
@@ -464,6 +519,13 @@ class GovernedOpenAIChatModel(GovernedModelMixin, OpenAIChatModel):
         async def observed():
             async for raw in response:
                 metadata.update(request_id=raw.id, served_model=raw.model)
+                if raw.usage is not None:
+                    from open_deep_research.agentscope_runtime.model_accounting import (
+                        cache_usage,
+                    )
+
+
+                    metadata["cache_usage"] = cache_usage(raw.usage.model_dump(exclude_none=True))
                 for choice in raw.choices:
                     if choice.finish_reason is not None:
                         metadata["provider_finish_reason"] = choice.finish_reason

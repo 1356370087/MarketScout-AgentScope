@@ -1009,7 +1009,7 @@ def _legacy_source_requirement_groups(
                         message_index,
                         content,
                         item,
-                        "factual",
+                        classify_requirement_kind(item),
                         dimension_id=dimension_id,
                         search_start=parent_start,
                         search_end=parent_end,

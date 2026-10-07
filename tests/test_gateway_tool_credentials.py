@@ -34,7 +34,7 @@ async def test_tool_credentials_restore_on_success_failure_and_cancellation():
     try:
         async def call(mode):
             try:
-                request = SimpleNamespace(run_id="credential-run", task_id="task", stage="researching", mode=mode)
+                request = SimpleNamespace(run_id="credential-run", task_id="task", stage="researching", role="researcher", mode=mode)
                 context = GatewayRunContext(config={"configurable": {"search_api": "none", "web_pipeline_mode": "legacy"}},
                                             api_keys={"LITELLM_RUN_KEY": mode}, fence_token=1, expires_at=time.time() + 60)
                 return await runtime.invoke_tool(request, context)

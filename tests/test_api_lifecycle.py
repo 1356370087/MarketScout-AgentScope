@@ -51,6 +51,7 @@ async def test_lifespan_mounts_native_and_drains_owned_resources(monkeypatch, tm
         assert state["service"] is service
         mount.assert_called_once_with(app, service)
         service.recover_interrupted.assert_awaited_once_with()
+        lifecycle.assert_schema_current.assert_awaited_once_with("0018_knowledge_execution")
         assert not host.shutting_down.is_set()
         assert not host.sse_shutdown.is_set()
     assert host.shutting_down.is_set() and host.sse_shutdown.is_set()

@@ -24,6 +24,9 @@ export interface UsageBucket {
 }
 
 export interface RunUsageResponse {
+  research_progress?: import("./research").ResearchEfficiency;
+  efficiency?: Record<string, number>;
+  cache_reporting?: { status: "reported" | "partial" | "not_reported" | "unsupported"; reported_calls: number; not_reported_calls: number; cached_input_tokens: number; non_cached_input_tokens: number | null; cache_creation_input_tokens: number | null };
   schema_version: 1;
   run_id: string;
   status: string;
@@ -45,6 +48,9 @@ export interface RunUsageResponse {
       unknown_failed_attempts: number;
       legacy_unclassified: number;
       coverage_ratio: number;
+      logical_calls?: number | null;
+      gateway_requests?: number;
+      upstream_attempts?: number | null;
     };
     cost: {
       estimated_cost_micro_usd: number | null;
@@ -58,6 +64,7 @@ export interface RunUsageResponse {
     by_agent_role: UsageBucket[];
     by_model: UsageBucket[];
     by_task: UsageBucket[];
+    by_purpose?: UsageBucket[];
     by_stage_gateway?: Array<{
       stage: string;
       calls: number;
@@ -80,8 +87,8 @@ export interface RunUsageResponse {
     retry_count: number;
     rate_limited_count: number;
     rate_429: number;
-    cache_hit_rate: number;
-    cache_input_ratio: number;
+    cache_hit_rate: number | null;
+    cache_input_ratio: number | null;
     reasoning_output_ratio: number;
     output_tokens_per_second: number;
     tool_call_count: number;

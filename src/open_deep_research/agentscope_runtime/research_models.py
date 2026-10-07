@@ -116,8 +116,15 @@ class ResearchModels:
             account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
         )
 
-    async def structured(self, role, prompt, schema, state, *, messages=None):
-        candidates = [self.model_for(role, "pipeline")] if self.model_for else None
+    def _call_task_id(self, state, *, structured=False):
+        run = getattr(self.factory, "run", None)
+        if run is not None and run.compatibility_projection()["metadata"].get("run_config_schema_version", 17) < 17:
+            return "pipeline" if structured else state.get("task_id", "pipeline")
+        return state.get("task_id") or (self.recovery.task_id.get() if self.recovery else "pipeline")
+
+    async def structured(self, role, prompt, schema, state, *, messages=None, purpose=None):
+        task_id = self._call_task_id(state, structured=True)
+        candidates = [self.model_for(role, task_id)] if self.model_for else None
         middleware = self.factory.policy_middleware(role, candidates=candidates)
         messages = messages if messages is not None else [UserMsg("user", prompt)]
 
@@ -125,9 +132,14 @@ class ResearchModels:
             return await current_model.generate_structured_output(messages, schema)
 
         async def call():
-            response = await middleware.policy.invoke(
-                invoke, {"messages": messages}, state
+            from open_deep_research.agentscope_runtime.runtime_limits import (
+                attributed,
+                call_context,
             )
+
+
+            with attributed(purpose=purpose or call_context.get().get("purpose") or schema.__name__):
+                response = await middleware.policy.invoke(invoke, {"messages": messages}, state)
             self._attach_attempt_summary(response, state)
             return response
 
@@ -152,7 +164,7 @@ class ResearchModels:
                 role,
                 [UserMsg("user", prompt)],
                 state=state,
-                candidates=[self.model_for(role, state.get("task_id", "pipeline"))]
+                candidates=[self.model_for(role, self._call_task_id(state))]
                 if self.model_for
                 else None,
                 compact=NativeContextCompactor(

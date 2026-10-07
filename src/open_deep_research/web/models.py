@@ -12,12 +12,22 @@ class SearchRequest(BaseModel):
     """One normalized candidate-discovery request."""
 
     objective: str
-    queries: list[str] = Field(min_length=1, max_length=3)
+    queries: list[str] = Field(default_factory=list, max_length=3)
     topic: Literal["general", "news", "finance"] = "general"
     locale: str | None = None
     published_after: datetime | None = None
     candidate_limit: int = Field(default=20, ge=1, le=100)
     iteration: int = Field(default=1, ge=1)
+    allowed_domains: list[str] = Field(default_factory=list)
+    blocked_domains: list[str] = Field(default_factory=list)
+
+
+class SearchDiscovery(BaseModel):
+    """One provider's discovery of a URL, retained after deduplication."""
+
+    provider: str
+    query: str
+    rank: int = Field(ge=1)
 
 
 class CandidateSource(BaseModel):
@@ -36,6 +46,7 @@ class CandidateSource(BaseModel):
     author: str | None = None
     published_at: datetime | None = None
     content_hint: str | None = None
+    discoveries: list[SearchDiscovery] = Field(default_factory=list)
 
 
 class ProviderSynthesis(BaseModel):
@@ -47,12 +58,25 @@ class ProviderSynthesis(BaseModel):
     evidence_eligible: Literal[False] = False
 
 
+class SearchProviderResult(BaseModel):
+    """Independent provider outcome; partial results remain usable."""
+
+    provider: str
+    status: Literal["completed", "partial", "failed"]
+    result_count: int = 0
+    query_count: int = 0
+    error_codes: list[str] = Field(default_factory=list)
+
+
 class SearchBatch(BaseModel):
     """Normalized output shared by all Search providers."""
 
     candidates: list[CandidateSource] = Field(default_factory=list)
     syntheses: list[ProviderSynthesis] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    provider_results: list[SearchProviderResult] = Field(default_factory=list)
+    search_calls: int = 0
+    raw_candidate_count: int = 0
 
 
 class RankedCandidate(BaseModel):
@@ -87,6 +111,7 @@ class FetchResult(BaseModel):
     success: bool = False
     failure_class: str | None = None
     failure_message: str | None = None
+    backend_attempts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExtractedDocument(BaseModel):
@@ -123,6 +148,24 @@ class DocumentChunk(BaseModel):
     content_hash: str
 
 
+class MarkdownReadResult(BaseModel):
+    """Bounded, untrusted source reading; never a quality-approved evidence record."""
+
+    kind: Literal["web_markdown"] = "web_markdown"
+    evidence_eligible: Literal[False] = False
+    trust: Literal["external_untrusted"] = "external_untrusted"
+    url: str
+    title: str = ""
+    markdown: str = ""
+    content_hash: str = ""
+    total_chars: int = 0
+    offset: int = 0
+    next_offset: int | None = None
+    truncated: bool = False
+    security_status: Literal["accepted", "quarantined"] = "accepted"
+    errors: list[str] = Field(default_factory=list)
+
+
 class EvidenceRecord(BaseModel):
     """Claim-level evidence that can be cited by the report writer."""
 
@@ -135,7 +178,7 @@ class EvidenceRecord(BaseModel):
     source_url: str
     source_title: str = ""
     source_authority: float = Field(default=0.0, ge=0.0, le=1.0)
-    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    confidence: float | None = Field(default=0.5, ge=0.0, le=1.0)
     conflict_group: str | None = None
     security_status: Literal["accepted", "quarantined"] = "accepted"
     # Explicit provenance: web-pipeline documents always carry a stable
@@ -143,6 +186,11 @@ class EvidenceRecord(BaseModel):
     # uploaded local document. Records persisted before this field keep their
     # legacy (label-less) shape and fall back to the old heuristics.
     source_type: Literal["web", "local_document"] = "web"
+    generation_id: str | None = None
+    unit_id: str | None = None
+    fact_assertion_id: str | None = None
+    retrieval_score: float | None = None
+    relevance: int | None = Field(default=None, ge=0, le=3)
 
 
 class BudgetSnapshot(BaseModel):
@@ -194,6 +242,7 @@ class WebResearchResult(BaseModel):
     candidates: list[CandidateSource] = Field(default_factory=list)
     ranked_candidates: list[RankedCandidate] = Field(default_factory=list)
     provider_syntheses: list[ProviderSynthesis] = Field(default_factory=list)
+    provider_results: list[SearchProviderResult] = Field(default_factory=list)
     approval_batch: DomainApprovalBatch | None = None
     fetches: list[FetchResult] = Field(default_factory=list)
     documents: list[ExtractedDocument] = Field(default_factory=list)

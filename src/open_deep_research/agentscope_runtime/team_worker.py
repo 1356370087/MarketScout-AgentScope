@@ -598,6 +598,12 @@ class _Worker:
             failpoint=self.host.failpoint,
             model_accounting=self.host.recovery.model_accounting,
         )
+        parent_cache = getattr(self.host.recovery, "research_cache", None)
+        if parent_cache is not None:
+            from open_deep_research.agentscope_runtime.efficiency import ResearchCache
+
+            self.session.research_cache = ResearchCache(self.session, parent_cache.directory.parent.parent)
+            self.session.research_cache.locks = parent_cache.locks
         researcher = copy.copy(self.host.researcher)
         original = researcher.models
         researcher.models = ResearchModels(

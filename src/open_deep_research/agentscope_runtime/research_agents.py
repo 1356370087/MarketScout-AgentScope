@@ -21,8 +21,11 @@ from agentscope.message import AssistantMsg, Msg, UserMsg
 from agentscope.middleware import MiddlewareBase
 from pydantic import BaseModel, Field
 
-from open_deep_research.agentscope_runtime.native_context import ContextControlError, NativeResearchContext
 from open_deep_research.agentscope_runtime.context_tools import context_read_tools
+from open_deep_research.agentscope_runtime.native_context import (
+    ContextControlError,
+    NativeResearchContext,
+)
 from open_deep_research.agentscope_runtime.research_completion import BusinessCompletion
 from open_deep_research.agentscope_runtime.tools import (
     ToolGovernanceMiddleware,
@@ -31,14 +34,20 @@ from open_deep_research.agentscope_runtime.tools import (
 from open_deep_research.completion import CompletionDecision, CompletionPolicyContext
 from open_deep_research.configuration import Configuration
 from open_deep_research.documents.contracts import SourceMode, selection_from_config
-from open_deep_research.evidence import required_source_count, source_scoped_evidence_records
+from open_deep_research.evidence import (
+    required_source_count,
+    source_scoped_evidence_records,
+)
 from open_deep_research.prompts import lead_researcher_prompt, research_system_prompt
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
     merge_coverage_ledger,
     task_coverage_contract,
 )
-from open_deep_research.quality.gate import count_traceable_sources, QualityInputBudgetExceeded
+from open_deep_research.quality.gate import (
+    QualityInputBudgetExceeded,
+    count_traceable_sources,
+)
 from open_deep_research.tools.base import (
     ToolEffect,
     ToolExecutionZone,
@@ -49,8 +58,7 @@ from open_deep_research.tools.base import (
 from open_deep_research.tools.governance import AgentRole
 from open_deep_research.web.models import EvidenceRecord
 
-
-_CITATION_URL = re.compile(r"https?://[^\s<>\]\"'`（）；，。；【】]+")
+_CITATION_URL = re.compile(r"https?://[^\s<>\]\"'`（）；，。、；【】]+")
 
 
 def _compression_context(value, accepted_urls):
@@ -311,6 +319,33 @@ class Researcher:
         coordination_tools=(),
         worker_middlewares=(),
     ) -> ResearchHandoff:
+        from open_deep_research.agentscope_runtime.efficiency import enabled
+        from open_deep_research.agentscope_runtime.runtime_limits import limited
+
+        config = self.config_provider()
+        if not enabled(config):
+            return await self._run(assignment, contract, feedback, coordination_tools=coordination_tools,
+                                   worker_middlewares=worker_middlewares)
+        cfg = Configuration.from_runnable_config(config)
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        import time
+
+        deadline = time.time() + cfg.task_timeout_seconds
+        if cache is not None:
+            data = await cache.progress()
+            previous = data.get("tasks", {}).get(assignment.task_id, {})
+            deadline = previous.get("deadline_at", deadline)
+            await cache.progress({"tasks": {assignment.task_id: {**previous, "deadline_at": deadline,
+                "requirements": assignment.requirement_ids, "status": "running"}}})
+            budget = await self.models.recovery.store.budget(self.models.recovery.lease.run_id,
+                                                           self.models.recovery.lease.user_id)
+            if budget.get("deadline") is not None:
+                deadline = min(deadline, budget["deadline"])
+        return await limited(lambda: self._run(assignment, contract, feedback,
+            coordination_tools=coordination_tools, worker_middlewares=worker_middlewares),
+            cfg.task_timeout_seconds, deadline_at=deadline, receipt_grace=15)
+
+    async def _run(self, assignment, contract, feedback=(), *, coordination_tools=(), worker_middlewares=()):
         contract = task_coverage_contract(contract, assignment.requirement_ids).model_dump(mode="json")
         def scoped_config():
             config = self.config_provider()
@@ -320,6 +355,7 @@ class Researcher:
                     **config.get("metadata", {}),
                     "run_id": self.run_id,
                     "task_id": assignment.task_id,
+                    "coverage_contract": contract,
                     **({"source_selection": contract["source_selection"]} if contract.get("source_selection") else {}),
                 },
             }
@@ -337,13 +373,13 @@ class Researcher:
         selected_tools = await self.tools_for(assignment)
         selection = selection_from_config(scoped_config())
         if selection.mode in {SourceMode.DOCUMENTS, SourceMode.SPECIFIC}:
-            allowed = {"search_documents"} if selection.documents_enabled else set()
+            allowed = {"search_documents", "knowledge_facts", "knowledge_wiki"} if selection.documents_enabled else set()
             if selection.mode is SourceMode.SPECIFIC and selection.web_enabled:
-                allowed.update({"web_research", "fetch_url"})
+                allowed.update({"web_research", "web_search", "fetch_url"})
             selected_tools = [tool for tool in selected_tools if tool.name in allowed]
         elif not selection.documents_enabled:
             selected_tools = [
-                tool for tool in selected_tools if tool.name != "search_documents"
+                tool for tool in selected_tools if tool.name not in {"search_documents", "knowledge_facts", "knowledge_wiki"}
             ]
         tools = [
             *selected_tools,
@@ -352,6 +388,15 @@ class Researcher:
             _control_tool("ResearchComplete", _Empty, complete),
             _control_tool("think_tool", _Thought, think),
         ]
+        from open_deep_research.agentscope_runtime.efficiency import (
+            enabled,
+            evidence_read_tools,
+            research_guidance,
+        )
+
+
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        tools.extend(evidence_read_tools(cache, scoped_config()))
         toolkit = await prepare_toolkit(
             tools,
             role=AgentRole.RESEARCHER,
@@ -367,6 +412,10 @@ class Researcher:
             assignment=assignment,
             contract=contract,
         )
+        if enabled(scoped_config()) and cache is not None:
+            prior = await cache.progress()
+            for row in source_scoped_evidence_records(prior.get("candidates", {}).values(), contract):
+                observations.evidence[row["evidence_id"]] = row
         if (
             cfg.quality_evaluation_enabled
             and self.assess is None
@@ -377,13 +426,35 @@ class Researcher:
             )
 
         async def observe(name, call_id, outcome):
+            if cache is not None and outcome.result is not None:
+                reference = (outcome.result.metadata or {}).get("evidence_ref")
+                if reference and name in {"web_research", "fetch_url"}:
+                    from dataclasses import replace
+
+                    records = await cache.get(reference)
+                    if records is None:
+                        raise ValueError("authoritative evidence artifact missing")
+                    outcome = replace(outcome, result=ToolResult(output={"evidence": records}, metadata=outcome.result.metadata))
             # Journal replay skips the handler; restore this local control flag
             # from the committed result before the native loop reasons again.
             if name == "ResearchComplete" and outcome.error is None:
                 completion.requested = True
             await observations.capture(name, call_id, outcome)
+            if enabled(scoped_config()) and cache is not None and outcome.error is None and observations.evidence:
+                await cache.progress({"candidates": {key: {**row, "requirement_ids": assignment.requirement_ids}
+                                                     for key, row in observations.evidence.items()}})
 
         async def quality_boundary(agent):
+            if cfg.research_efficiency_mode == "bounded":
+                from open_deep_research.agentscope_runtime.efficiency import (
+                    research_budget_reason,
+                )
+
+
+                reason = await research_budget_reason(self.models, scoped_config())
+                if reason:
+                    completion.stopped, completion.stop_reason = True, reason
+                    return
             try:
                 assessment = await observations.assess_pending()
             except QualityInputBudgetExceeded as error:
@@ -416,10 +487,22 @@ class Researcher:
                         "gaps": sorted([gap["requirement_id"], gap["kind"], gap.get("next_query", "")]
                                        for gap in gaps if gap["kind"] in {"factual", "conflict"}),
                     }
+                    if cfg.research_efficiency_mode == "bounded":
+                        from open_deep_research.agentscope_runtime.efficiency import (
+                            progress_signature,
+                        )
+
+
+                        progress = {"facts": progress_signature(await cache.progress(), assignment.requirement_ids) if cache else progress["evidence_sha256"]}
                     previous = agent.state.middle_context.get("research_quality_progress")
                     if progress == previous:
-                        completion.stopped = True
-                        completion.stop_reason = "research_no_progress"
+                        stagnant = agent.state.middle_context.get("research_stagnant_rounds", 0) + 1
+                        agent.state.middle_context["research_stagnant_rounds"] = stagnant
+                        if cfg.research_efficiency_mode == "baseline" or stagnant >= cfg.max_no_progress_rounds:
+                            completion.stopped = True
+                            completion.stop_reason = "research_no_progress"
+                    else:
+                        agent.state.middle_context["research_stagnant_rounds"] = 0
                     agent.state.middle_context["research_quality_progress"] = progress
                 if assessment.get("evaluator_error") and not cfg.quality_evaluation_fail_open:
                     completion.stopped = True
@@ -438,7 +521,7 @@ class Researcher:
         completion.before_reasoning = quality_boundary
         toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
-        native_context = NativeResearchContext(self.models, "researcher", model)
+        native_context = NativeResearchContext(self.models, "researcher", model, scoped_config())
         from open_deep_research.skills import get_skill_researcher_context
         skill_guidance = get_skill_researcher_context(cfg.skills)
         agent = Agent(
@@ -449,7 +532,7 @@ class Researcher:
                 date=datetime.now(UTC).date().isoformat(),
                 mcp_prompt=cfg.mcp_prompt or "",
                 tool_guidance="{tool_guidance}",
-            ) + ("\n\n" + skill_guidance if skill_guidance else ""),
+            ) + research_guidance(scoped_config()) + ("\n\n" + skill_guidance if skill_guidance else ""),
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=cfg.max_react_tool_calls),
             context_config=native_context.config,
@@ -504,10 +587,19 @@ class Researcher:
                 urls,
             )
         )
+        if cfg.research_efficiency_mode == "bounded" and cache is not None:
+            from open_deep_research.agentscope_runtime.efficiency import handoff_prompt
+
+            prompt = await handoff_prompt(self.models, assignment, contract, evidence,
+                                          observations.assessments, scoped_config())
         for attempt in range(2):
-            notes = await self.models.text(
-                "compression", prompt, {"task_id": assignment.task_id}
-            )
+            if completion.stop_reason in {"report_budget_reserved", "report_time_reserved"}:
+                notes = "研究已停止新增调用，以预留报告预算。已确认的证据由结构化记录携带；剩余问题尚未证实。"
+                break
+            from open_deep_research.agentscope_runtime.runtime_limits import attributed
+
+            with attributed(purpose="handoff_compression"):
+                notes = await self.models.text("compression", prompt, {"task_id": assignment.task_id})
             cited = {
                 url.rstrip("/.,，。);；")
                 for url in _CITATION_URL.findall(notes)
@@ -573,6 +665,21 @@ class Supervisor:
 
     async def _run(self, brief, contract, feedback):
         cfg = Configuration.from_runnable_config(self.config_provider())
+        from open_deep_research.agentscope_runtime.efficiency import (
+            corpus,
+            fingerprint,
+            finish_requirements,
+            progress_signature,
+            stop_reason,
+        )
+
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        bounded = cfg.research_efficiency_mode == "bounded" and cache is not None
+        efficiency_state = await cache.progress() if bounded else {}
+        fixed_urls = corpus(self.config_provider())
+        active_work = {}
+        scheduling = asyncio.Lock()
+        budget_stop = None
         coverage = ResearchCoverageContract.model_validate(contract)
         teams_mode = cfg.enable_async_research and cfg.async_research_mode == "teams"
         if teams_mode and self.team_workers is None:
@@ -609,6 +716,7 @@ class Supervisor:
                 evidence_count=len(evidence),
                 independent_source_count=count_traceable_sources(evidence.values()),
                 active_task_count=sum(not task.done() for task in tasks.values()),
+                research_stop_reason=budget_stop or (stop_reason(efficiency_state, available_ids, self.config_provider()) if bounded else None),
                 uncovered_requirements=uncovered,
                 has_remaining_budget=self.budget_available(),
                 exhausted_reason="budget_exhausted"
@@ -624,11 +732,31 @@ class Supervisor:
             )
 
         def assign(input):
+            if cfg.research_efficiency_mode == "bounded":
+                from open_deep_research.agentscope_runtime.search_providers import (
+                    source_allowed,
+                )
+
+
+                scope_config = self.config_provider()
+                scope_config = {**scope_config, "metadata": {**scope_config.get("metadata", {}), "coverage_contract": contract}}
+                outside = [url.rstrip(".,，。);；") for url in _CITATION_URL.findall(input.research_topic)
+                           if not source_allowed(url.rstrip(".,，。);；"), scope_config)]
+                if outside:
+                    raise ValueError("planning_source_out_of_scope: " + json.dumps(outside)
+                        + "; use only source_selection URLs; related-page advice is not a user requirement.")
             if coverage.single_research_task and assignments:
                 raise ValueError("the user requested a single research task")
-            from open_deep_research.quality.contract import canonicalize_requirement_ids, validate_requirement_ids
+            from open_deep_research.quality.contract import (
+                canonicalize_requirement_ids,
+                validate_requirement_ids,
+            )
             ids = validate_requirement_ids(canonicalize_requirement_ids(input.requirement_ids, coverage),
                                            coverage, required=bool(input.requirement_ids))
+            if bounded and fixed_urls and len(fixed_urls) <= 5 and len(available_ids) <= 3:
+                process = " ".join(r.text for r in coverage.requirements if r.kind == "process")
+                if not re.search(r"(?:并行|多名|多个|两个).{0,24}(?:研究员|研究任务|智能体)|parallel|multiple researchers", process, re.IGNORECASE):
+                    ids = available_ids
             if coverage.single_research_task:
                 ids = available_ids
             elif not ids:
@@ -664,7 +792,9 @@ class Supervisor:
             recovery = getattr(self.models, "recovery", None)
             if recovery is None:
                 return
-            from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+            from open_deep_research.agentscope_runtime.native_security import (
+                NativeEventPublisher,
+            )
 
             event = {
                 "pending": "created", "running": "started",
@@ -682,8 +812,9 @@ class Supervisor:
             )
 
         async def execute_inner(assignment):
-            nonlocal ledger
+            nonlocal ledger, efficiency_state
             async with semaphore:
+                before = progress_signature(await cache.progress(), assignment.requirement_ids) if bounded else ""
                 if not teams_mode:
                     await publish_task(assignment, "running")
                 outcome = (
@@ -698,6 +829,10 @@ class Supervisor:
                         assessment = HandoffAssessment.model_validate(
                             outcome.assessment["handoff"]
                         )
+                    elif outcome.termination in {"report_budget_reserved", "report_time_reserved"}:
+                        from open_deep_research.quality.gate import HandoffAssessment
+
+                        assessment = HandoffAssessment(accepted=False, reason=outcome.termination)
                     else:
                         assessment = await self.quality.handoff(outcome, contract)
                     assessments[assignment.task_id] = assessment.model_dump(mode="json")
@@ -713,7 +848,19 @@ class Supervisor:
                             owned_requirement_ids=assignment.requirement_ids,
                         )
                 results[assignment.task_id] = outcome
-                from open_deep_research.agentscope_runtime.public_findings import publish_handoff
+                if bounded:
+                    state = await cache.progress()
+                    assessment = assessments.get(assignment.task_id, {})
+                    efficiency_state = await cache.progress({
+                        "requirements": finish_requirements(state, assignment.requirement_ids, assessment, before, assignment.task_id),
+                        "admitted": {row["evidence_id"]: row for row in outcome.evidence_registry},
+                        "assessments": {assignment.task_id: assessment},
+                        "tasks": {assignment.task_id: {**state.get("tasks", {}).get(assignment.task_id, {}),
+                            "status": "completed", "admission_status": assessment.get("admission_status", "pending")}},
+                    })
+                from open_deep_research.agentscope_runtime.public_findings import (
+                    publish_handoff,
+                )
 
                 await publish_handoff(self.models, outcome, context_chars=self.context_chars)
                 return outcome
@@ -736,24 +883,52 @@ class Supervisor:
             return result
 
         async def conduct(input, context, progress):
+            nonlocal efficiency_state, budget_stop
             assignment = assign(input)
-            recovery = getattr(self.models, "recovery", None)
-            if recovery:
-                await recovery.store.register_task(recovery.lease, assignment.task_id)
-            await publish_task(assignment, "pending")
-            if teams_mode:
-                await self.team_workers.prepare(assignment, contract, feedback,
-                    blocked_by=input.blockedBy, owner=input.owner, proposal_id=input.proposal_id,
-                    subject=input.subject, active_form=input.activeForm, metadata=input.metadata)
-            task = asyncio.create_task(execute(assignment))
-            tasks[assignment.task_id] = task
-            if cfg.enable_async_research:
-                return ToolResult(
-                    output={"task_id": assignment.task_id, "status": "queued"}
+            if bounded:
+                from open_deep_research.agentscope_runtime.efficiency import (
+                    research_budget_reason,
                 )
-            return ToolResult(
-                output=(await task).model_dump(mode="json", exclude={"agent_state"})
-            )
+
+
+                budget_stop = await research_budget_reason(self.models, self.config_provider())
+                efficiency_state = await cache.progress()
+                reason = budget_stop or stop_reason(efficiency_state, assignment.requirement_ids, self.config_provider())
+                if reason:
+                    assignments.pop(assignment.task_id, None)
+                    return ToolResult(output={"status": "research_stopped", "reason": reason,
+                        "requirement_ids": assignment.requirement_ids,
+                        "instruction": "停止重复补证，调用 ResearchComplete；保留已准入证据并列明缺口。"})
+            async with scheduling:
+                if bounded:
+                    key = fingerprint([sorted(assignment.requirement_ids), fixed_urls])
+                    duplicate = active_work.get(key)
+                    if duplicate is not None and not duplicate.done():
+                        assignments.pop(assignment.task_id, None)
+                        await cache.progress({"counters": {"duplicate_tasks_suppressed": 1}})
+                        task = duplicate
+                        task_id = next(tid for tid, item in tasks.items() if item is task)
+                    else:
+                        task = None
+                else:
+                    task = None
+                if task is None:
+                    recovery = getattr(self.models, "recovery", None)
+                    if recovery:
+                        await recovery.store.register_task(recovery.lease, assignment.task_id)
+                    await publish_task(assignment, "pending")
+                    if teams_mode:
+                        await self.team_workers.prepare(assignment, contract, feedback,
+                            blocked_by=input.blockedBy, owner=input.owner, proposal_id=input.proposal_id,
+                            subject=input.subject, active_form=input.activeForm, metadata=input.metadata)
+                    task = asyncio.create_task(execute(assignment))
+                    task_id = assignment.task_id
+                    tasks[task_id] = task
+                    if bounded:
+                        active_work[key] = task
+            if cfg.enable_async_research:
+                return ToolResult(output={"task_id": task_id, "status": "queued"})
+            return ToolResult(output=(await task).model_dump(mode="json", exclude={"agent_state"}))
 
         def snapshot(task_id):
             task = tasks[task_id]
@@ -871,7 +1046,10 @@ class Supervisor:
                 _control_tool("TaskStop", _TaskId, task_stop, idempotent=teams_mode),
             ]
         if self.team_workers is not None:
-            from open_deep_research.agentscope_runtime.teams_tools import lead_tools, communication_tools
+            from open_deep_research.agentscope_runtime.teams_tools import (
+                communication_tools,
+                lead_tools,
+            )
             tools += lead_tools(self.team_workers, cfg) if teams_mode else communication_tools(
                 self.team_workers.team, self.team_workers.team.leader, "supervisor-send:")
         tools.extend(context_read_tools(self.offloader, lambda: agent.state.session_id))
@@ -912,13 +1090,16 @@ class Supervisor:
                 max_researcher_iterations=cfg.max_researcher_iterations,
                 max_react_tool_calls=cfg.max_react_tool_calls,
             )
+        from open_deep_research.agentscope_runtime.efficiency import research_guidance
+
+        prompt += research_guidance(self.config_provider(), supervisor=True)
         model = self.models.agent_model("supervisor", "supervisor")
         team_middlewares = []
         if self.team_workers is not None:
             from open_deep_research.agentscope_runtime.team_worker import LeaderInbox
 
             team_middlewares.append(LeaderInbox(self.team_workers))
-        native_context = NativeResearchContext(self.models, "supervisor", model)
+        native_context = NativeResearchContext(self.models, "supervisor", model, self.config_provider())
         agent = Agent(
             name="supervisor",
             model=native_context.model,
@@ -981,7 +1162,12 @@ class Supervisor:
 
                 agent.state.middle_context["business_completion"] = asdict(decision)
                 if decision.action is CompletionDecision.TERMINATE:
-                    raise ResearchTerminated(
+                    if bounded and (results or budget_stop) and decision.reason in {"research_no_progress", "supplement_round_limit", "selected_sources_exhausted", "report_budget_reserved", "report_time_reserved", "iteration_limit"}:
+                        agent.state.middle_context["business_completion"] = {
+                            "action": "complete_partial", "reason": decision.reason, "gaps": list(decision.gaps),
+                        }
+                    else:
+                        raise ResearchTerminated(
                         decision,
                         [
                             {
@@ -996,7 +1182,7 @@ class Supervisor:
                     )
             agent.state.middle_context["coverage_ledger"] = ledger
             agent.state.middle_context["handoff_assessments"] = assessments
-            if not results:
+            if not results and not (bounded and agent.state.middle_context.get("business_completion", {}).get("action") == "complete_partial"):
                 raise ValueError("supervisor produced no research handoff")
             return [
                 results[key].model_dump(mode="json")

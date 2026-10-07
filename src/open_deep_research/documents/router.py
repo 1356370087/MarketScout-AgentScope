@@ -178,12 +178,13 @@ async def document_chunks(
     document_id: str,
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    generation_id: str | None = None,
     user: Principal = Depends(require_permissions(DOCUMENT_READ_OWN.code)),
 ) -> dict[str, Any]:
     """List bounded extracted chunks for preview and citation navigation."""
     _ensure_enabled()
     await _require_document(user, document_id, "view_published")
-    items = await list_chunks(user.user_id, document_id, limit=limit, offset=offset)
+    items = await list_chunks(user.user_id, document_id, limit=limit, offset=offset, generation_id=generation_id)
     if items is None:
         raise HTTPException(status_code=404, detail="document_not_found")
     return {"items": [item.model_dump(mode="json") for item in items]}

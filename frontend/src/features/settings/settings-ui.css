@@ -5,3 +5,11 @@
 .setting-field-id summary { cursor: pointer; }
 .setting-field-id code { display: block; padding-top: 5px; overflow-wrap: anywhere; }
 .settings-sections .insight-disclosure-body { padding: 0; }
+
+.search-provider-control { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.search-provider-control legend { font-size: 13px; margin-bottom: 10px; }
+.search-provider-options { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+.search-provider-options label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.search-provider-options input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.search-provider-control small { color: var(--muted); }
+.search-provider-control button { justify-self: start; }

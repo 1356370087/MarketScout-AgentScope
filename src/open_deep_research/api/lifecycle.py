@@ -75,7 +75,7 @@ class ApplicationLifecycle:
             document_schema_error: str | None = None
             if get_document_settings().enabled:
                 try:
-                    await assert_schema_current("0017_agent_teams")
+                    await assert_schema_current("0018_knowledge_execution")
                 except StartupError as exc:
                     if not str(exc).startswith("schema_revision_mismatch:"):
                         raise
@@ -84,11 +84,11 @@ class ApplicationLifecycle:
                     document_schema_error = await initialize_document_schema()
             else:
                 try:
-                    await assert_schema_current("0017_agent_teams")
+                    await assert_schema_current("0018_knowledge_execution")
                 except StartupError as exc:
                     expected_old_revision = (
                         "schema_revision_mismatch:got=0012_facts:"
-                        "expected=0017_agent_teams"
+                        "expected=0018_knowledge_execution"
                     )
                     if str(exc) != expected_old_revision:
                         raise

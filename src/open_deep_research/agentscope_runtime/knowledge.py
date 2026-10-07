@@ -88,6 +88,14 @@ class KnowledgeApplication:
             return await answer_question(scoped)
         return await unified_search(scoped)
 
+    async def search_research(self, query, *, queries, execution):
+        """Use the host's frozen run scope, never model-supplied base IDs."""
+        await self.authorize("search")
+        if execution.scope != "run":
+            raise ValueError("research_knowledge_requires_run_scope")
+        return await unified_search(SearchRequest(owner_id=self.actor_id, query=query,
+                                                   queries=queries), execution=execution)
+
     async def execute(self, command, **arguments):
         module, symbol, _ = OPERATIONS[command]
         await self.authorize(command)
@@ -247,7 +255,8 @@ class KnowledgeAccessPolicy(ResourceAccessPolicyBase):
         bindings = self.bindings
         if bindings is None:
             from open_deep_research.documents.database import (
-                document_schema_available, get_document_pool,
+                document_schema_available,
+                get_document_pool,
             )
 
             if not document_schema_available():

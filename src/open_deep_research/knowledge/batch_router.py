@@ -201,6 +201,8 @@ async def create_sync_source(
             user.user_id, knowledge_base_id, body.document_id, body.url,
             refresh_mode=body.refresh_mode,
         )
+    except authz.AuthorizationError as exc:
+        raise _forbidden(exc) from exc
     except SyncError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except DocumentConflictError as exc:
@@ -222,9 +224,16 @@ async def refresh_sync_source(
         )
     except authz.AuthorizationError as exc:
         raise _forbidden(exc) from exc
-    from .sync import run_sync
+    from .network import sync_authorizer
+    from .sync import SyncError, run_sync
 
-    return await run_sync(user.user_id, source_id)
+    try:
+        return await run_sync(user.user_id, source_id, knowledge_base_id=knowledge_base_id,
+                              authorize_url=sync_authorizer(user.roles))
+    except (PermissionError, authz.AuthorizationError) as exc:
+        raise HTTPException(403, "sync_source_not_found_or_forbidden") from exc
+    except (SyncError, ValueError) as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/knowledge-bases/{knowledge_base_id}/source-relations")

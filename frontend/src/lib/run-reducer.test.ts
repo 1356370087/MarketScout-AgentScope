@@ -13,6 +13,17 @@ const event = (sequence: number, type: string, payload: Record<string, unknown>)
 });
 
 describe("reducePublicEvent", () => {
+  it("updates inspection progress through SSE without duplicating a replay", () => {
+    const progress = { document_count: 3, processed_chunks: 9, total_chunks: 28,
+      candidate_count: 27, admitted_count: 12, counters: {}, tasks: {}, requirements: {} };
+    const update = event(3, "research.progress.updated", { progress });
+    const state = reducePublicEvent(emptyRunState("run-1"), update);
+    expect(state.efficiency).toEqual(progress);
+    expect(state.diagnostics).toEqual([]);
+    expect(reducePublicEvent(state, update)).toBe(state);
+    expect(reducePublicEvent(state, event(2, "research.progress.updated", { progress: {} }))).toBe(state);
+  });
+
   it("preserves partial completion from snapshots and terminal SSE", () => {
     const snapshot = hydrateSnapshot(emptyRunState("run-1"), {
       run_id: "run-1", status: "completed", last_event_id: 287,

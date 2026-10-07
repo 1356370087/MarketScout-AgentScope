@@ -32,6 +32,30 @@ _ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
 _WORKSPACE_MANAGER_ROLES = frozenset({"owner", "admin"})
 
 
+def readable_bases_sql(actor: str) -> str:
+    """Select readable base IDs using a caller-owned SQL parameter expression."""
+    return f"""SELECT kb.id FROM knowledge_bases kb
+        LEFT JOIN knowledge_workspaces w ON w.id=kb.workspace_id
+        LEFT JOIN knowledge_workspace_members wm
+          ON wm.workspace_id=w.id AND wm.user_id={actor}::uuid
+        LEFT JOIN knowledge_base_members bm
+          ON bm.knowledge_base_id=kb.id AND bm.user_id={actor}::uuid
+        WHERE (kb.workspace_id IS NULL AND kb.owner_id={actor}::uuid)
+           OR (w.kind='personal' AND w.created_by={actor}::uuid)
+           OR (w.kind='team' AND (
+                 wm.role IN ('owner','admin')
+                 OR (wm.role='member' AND (
+                     bm.role IN ('viewer','contributor','manager')
+                     OR (bm.role IS NULL AND kb.visibility='team')))))"""
+
+
+def document_read_sql(actor: str, alias: str = "d") -> str:
+    """Keep live document authorization inside each read/recall SQL query."""
+    return f"""(({alias}.home_knowledge_base_id IS NULL
+                  AND {alias}.owner_id={actor}::uuid)
+                 OR {alias}.home_knowledge_base_id IN ({readable_bases_sql(actor)}))"""
+
+
 class AuthorizationError(RuntimeError):
     """Raised when the actor lacks the required capability."""
 
@@ -73,6 +97,7 @@ async def kb_context(user_id: str, kb_id: str) -> dict[str, Any] | None:
             return None
         role: str | None = None
         source = "none"
+        personal = not base["workspace_id"]
         if base["workspace_id"]:
             ws_role = await connection.fetchval(
                 """SELECT role FROM knowledge_workspace_members
@@ -85,13 +110,14 @@ async def kb_context(user_id: str, kb_id: str) -> dict[str, Any] | None:
                 base["workspace_id"],
             )
             if workspace and workspace["kind"] == "personal":
+                personal = True
                 # 个人空间：唯一成员即管理者（方案 §2.3）。
                 role = "manager" if ws_role == "owner" else None
                 source = "personal"
             elif ws_role in _WORKSPACE_MANAGER_ROLES:
                 role = "manager"
                 source = "workspace"
-            else:
+            elif ws_role == "member":
                 member_role = await connection.fetchval(
                     """SELECT role FROM knowledge_base_members
                         WHERE knowledge_base_id=$1::uuid AND user_id=$2::uuid""",
@@ -104,7 +130,7 @@ async def kb_context(user_id: str, kb_id: str) -> dict[str, Any] | None:
                 elif ws_role == "member" and base["visibility"] == "team":
                     role = "viewer"
                     source = "workspace_default"
-        legacy_owner = str(base["owner_id"]) == actor
+        legacy_owner = personal and str(base["owner_id"]) == actor
         return {
             "knowledge_base": dict(base),
             "role": role,
@@ -145,29 +171,7 @@ async def readable_kb_ids(user_id: str) -> list[str]:
     actor = document_owner_id(user_id)
     pool = await get_document_pool()
     async with pool.acquire() as connection:
-        rows = await connection.fetch(
-            """
-            SELECT kb.id
-              FROM knowledge_bases kb
-             WHERE kb.workspace_id IS NULL AND kb.owner_id = $1::uuid
-            UNION
-            SELECT kb.id
-              FROM knowledge_bases kb
-              JOIN knowledge_workspaces w ON w.id = kb.workspace_id
-             WHERE w.kind = 'personal' AND w.created_by = $1::uuid
-            UNION
-            SELECT kb.id
-              FROM knowledge_bases kb
-              JOIN knowledge_workspace_members m ON m.workspace_id = kb.workspace_id
-              JOIN knowledge_workspaces w ON w.id = kb.workspace_id
-             WHERE m.user_id = $1::uuid
-               AND (w.kind = 'personal' OR kb.visibility = 'team'
-                    OR EXISTS (
-                      SELECT 1 FROM knowledge_base_members bm
-                       WHERE bm.knowledge_base_id = kb.id AND bm.user_id = $1::uuid))
-            """,
-            actor,
-        )
+        rows = await connection.fetch(readable_bases_sql("$1"), actor)
     return [str(row["id"]) for row in rows]
 
 

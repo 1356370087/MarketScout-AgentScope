@@ -108,6 +108,8 @@ class _CallTrace:
 class _DispatchedTool:
     """Keep domain metadata while routing execution to the trusted zone dispatcher."""
 
+    remote_execution = True
+
     def __init__(self, tool: Tool, dispatcher: Dispatcher) -> None:
         self.tool = tool
         self.dispatcher = dispatcher
@@ -161,6 +163,12 @@ class GovernedTool(ToolBase):
         )
 
     async def call(self, **kwargs) -> ToolChunk:
+        import time
+
+        from open_deep_research.events.task_activity import publish_task_activity
+
+
+        queued_at = time.monotonic()
         identity = self.owner.identity.get()
         if identity is None or identity.name != self.name:
             return self._denied(
@@ -187,6 +195,13 @@ class GovernedTool(ToolBase):
                     )
                 tool = _DispatchedTool(tool, self.owner.dispatcher)
             trace = _CallTrace()
+            started_at = time.monotonic()
+            await publish_task_activity(config, "tool.started", task_id=self.owner.task_id,
+                kind="tool", phase="tool_execution", status="running", title=self.name,
+                summary="开始执行工具", iteration=None, duration_ms=None,
+                payload={"tool_call_id": identity.call_id, "tool_name": self.name,
+                         "tool_category": self.domain_tool.origin.value, "args_keys": sorted(kwargs)},
+                dedupe_key=f"native-tool:{identity.operation_id}:started", update_run_summary=self.owner.task_id not in {"supervisor", "pipeline"})
             if self.owner.journal:
                 config = self.owner.journal.tool_config(config, self.name, identity.call_id, kwargs)
             async def execute():
@@ -211,6 +226,19 @@ class GovernedTool(ToolBase):
                 if self.owner.journal
                 else await execute()
             )
+            duration = max(0, int((time.monotonic() - started_at) * 1000))
+            tool_metadata = result.result.metadata or {} if result.result else {}
+            await publish_task_activity(config, "tool.failed" if result.error else "tool.completed",
+                task_id=self.owner.task_id, kind="tool", phase="tool_execution",
+                status="error" if result.error else "success", title=self.name, duration_ms=duration,
+                summary="工具调用未成功" if result.error else "工具执行完成", iteration=None,
+                payload={"tool_call_id": identity.call_id, "tool_name": self.name,
+                         "tool_category": self.domain_tool.origin.value,
+                         "error_code": result.error.error_type.value if result.error else "",
+                         "queue_ms": max(0, int((started_at - queued_at) * 1000)),
+                         "execution_ms": tool_metadata.get("execution_ms", duration),
+                         "approval_wait_ms": tool_metadata.get("approval_wait_ms", 0)},
+                dedupe_key=f"native-tool:{identity.operation_id}:completed", update_run_summary=self.owner.task_id not in {"supervisor", "pipeline"})
             if self.owner.result_observer is not None:
                 await self.owner.result_observer(self.name, identity.call_id, result)
             error_type = result.error.error_type.value if result.error else None
@@ -293,6 +321,8 @@ class GovernedToolkit(Toolkit):
                     tool.domain_tool, max_description_chars=budget
                 )
                 schemas.append({"type": "function", "function": definition})
+        if Configuration.from_runnable_config(config).research_efficiency_mode == "bounded":
+            schemas.sort(key=lambda item: item["function"]["name"])
         return schemas
 
     async def get_guidance(self) -> str:

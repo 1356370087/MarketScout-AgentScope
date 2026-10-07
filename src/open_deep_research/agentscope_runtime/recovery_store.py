@@ -156,6 +156,42 @@ class RecoveryStore:
         async with self.engine.begin() as conn:
             await conn.run_sync(self.meta.create_all)
 
+    async def research_progress(self, lease, patch=None):
+        """Share research facts under the same run fence as operation receipts."""
+        from open_deep_research.agentscope_runtime.efficiency import (
+            merge_progress,
+            progress_summary,
+        )
+
+        key = "research:progress"
+        async with self.transaction(lease) as (conn, run):
+            row = (await conn.execute(select(self.ops.c.result).where(
+                self.ops.c.run_id == lease.run_id, self.ops.c.key == key))).first()
+            state = dict(row[0] or {}) if row else {}
+            if patch is None:
+                return state
+            state = merge_progress(state, patch)
+            _no_credentials(state)
+            if row:
+                await conn.execute(update(self.ops).where(self.ops.c.run_id == lease.run_id,
+                    self.ops.c.key == key).values(result=state, fence=lease.fence))
+            else:
+                await conn.execute(insert(self.ops).values(run_id=lease.run_id, key=key,
+                    input_digest=digest({"key": key}), kind="research_progress", state="committed",
+                    replay_safe=1, fence=lease.fence, result=state, reservation={}, actual={}))
+            await self._event(conn, run, "research.progress", {
+                "progress": progress_summary(state, run["snapshot"].get("coverage_contract", {})),
+            })
+            return state
+
+    async def research_progress_view(self, run_id, user_id):
+        """Read terminal or active progress through the normal owner boundary."""
+        await self.load(run_id, user_id)
+        async with self.engine.connect() as conn:
+            value = await conn.scalar(select(self.ops.c.result).where(
+                self.ops.c.run_id == run_id, self.ops.c.key == "research:progress"))
+        return value or {}
+
     async def aclose(self):
         await self.engine.dispose()
 
@@ -440,7 +476,8 @@ class RecoveryStore:
         return row["revision"]
 
     async def begin_operation(
-        self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None
+        self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None,
+        partial_fetches=False,
     ):
         fingerprint = digest(payload)
         unknown = False
@@ -457,6 +494,7 @@ class RecoveryStore:
                 .first()
             )
             if op:
+                reserve = dict(op["reservation"])
                 if op["input_digest"] != fingerprint or op["kind"] != kind:
                     raise RecoveryConflict("operation key reused with different input")
                 if op["state"] == "committed":
@@ -489,13 +527,16 @@ class RecoveryStore:
                     and await self._now(conn) >= row["deadline"]
                 ):
                     raise DeadlineExceeded("run deadline exceeded")
-                reserve = reserve or {}
+                reserve = dict(reserve or {})
                 reserved = dict(row["reserved"])
                 for dimension, amount in reserve.items():
                     BudgetDimension(dimension)
                     if amount < 0:
                         raise ValueError("negative reservation")
                     maximum = row["limits"].get(dimension)
+                    if partial_fetches and dimension == "fetch_calls" and maximum is not None:
+                        amount = min(amount, max(0, maximum-row["used"].get(dimension, 0)-reserved.get(dimension, 0)))
+                        reserve[dimension] = amount
                     if (
                         maximum is not None
                         and row["used"].get(dimension, 0)
@@ -527,7 +568,8 @@ class RecoveryStore:
                 if observation is not None:
                     # Only content-free dimensions are accepted, never request bodies.
                     dimensions = {k: observation[k] for k in
-                                  ("task_id", "agent_role", "stage", "model", "tool_name")
+                                  ("task_id", "agent_role", "stage", "model", "tool_name",
+                                   "purpose", "logical_call_id", "parent_tool_call_id")
                                   if observation.get(k) is not None}
                     await self._event(conn, row, "research.operation_started",
                                       {"operation_key": key, "kind": kind, **dimensions})
@@ -539,7 +581,7 @@ class RecoveryStore:
                         })
         if unknown:
             raise UnknownOperation(key)
-        return {"replayed": False}
+        return {"replayed": False, **({"reservation": reserve} if partial_fetches else {})}
 
     async def commit_operation(self, lease, key, result, *, actual=None):
         _no_credentials(result)

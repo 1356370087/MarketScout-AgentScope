@@ -23,6 +23,7 @@ import portalocker
 if TYPE_CHECKING:
     from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, Field
+
 from open_deep_research.configuration import Configuration
 
 
@@ -81,6 +82,7 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
         "status", "termination_reason", "result_status", "permission_denial_count",
     },
     "run.usage.updated": {"revision", "accounting_status"},
+    "research.progress.updated": {"progress"},
     "stage.started": {"stage_id", "stage_index", "stage_count"},
     "stage.completed": {"stage_id", "stage_index", "stage_count"},
     "stage.failed": {"stage_id", "stage_index", "stage_count", "error_code", "message"},
@@ -106,7 +108,7 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
     },
     "research.source.discovered": {
         "task_id", "source_id", "title", "domain", "url", "source_type",
-        "document_id", "chunk_id", "locator",
+        "document_id", "chunk_id", "locator", "generation_id",
     },
     "research.task.completed": {
         "task_id", "wave_id", "mode", "status", "phase", "elapsed_ms", "source_count",
@@ -287,6 +289,7 @@ def canonical_local_source(
     document_id: str | None = None,
     chunk_id: str | None = None,
     locator: str | None = None,
+    generation_id: str | None = None,
 ) -> Optional[dict[str, str]]:
     """Return a safe public reference for an owner-controlled document route."""
     try:
@@ -344,6 +347,7 @@ def canonical_local_source(
         "document_id": resolved_document,
         **({"chunk_id": resolved_chunk} if resolved_chunk else {}),
         **({"locator": str(locator)[:320]} if locator else {}),
+        **({"generation_id": generation_id} if generation_id else {}),
     }
 
 
@@ -370,6 +374,7 @@ def extract_public_sources(result: dict[str, Any], *, limit: int = 10) -> list[d
                         document_id=(str(value["document_id"]) if value.get("document_id") else None),
                         chunk_id=(str(value["chunk_id"]) if value.get("chunk_id") else None),
                         locator=(str(value["locator"]) if value.get("locator") else None),
+                        generation_id=(str(value["generation_id"]) if value.get("generation_id") else None),
                     )
                 else:
                     source = canonical_public_source(str(url), title)

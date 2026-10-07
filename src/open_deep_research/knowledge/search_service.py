@@ -13,8 +13,9 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import date, datetime, time as datetime_time, timezone
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime, timezone
+from datetime import time as datetime_time
 from typing import Any
 
 from open_deep_research.documents.database import get_document_pool
@@ -23,7 +24,10 @@ from open_deep_research.documents.identity import document_owner_id
 from open_deep_research.documents.retrieval import locator_dict
 from open_deep_research.documents.settings import get_document_settings
 
-from .credentials import knowledge_service_key
+from .accounting import knowledge_query, query_usage
+from .authz import document_read_sql, readable_bases_sql
+from .evidence_projection import source_excerpt
+from .execution import SearchExecution
 from .rerank import RerankUnavailableError, rerank_segments
 
 DEFAULT_PARAMETERS: dict[str, Any] = {
@@ -34,6 +38,9 @@ DEFAULT_PARAMETERS: dict[str, Any] = {
     "context_neighbors": 1,
     "context_char_budget": 2400,
     "rerank_min_score": 2,
+    "total_context_char_budget": 24000,
+    "parent_context": True,
+    "rerank_enabled": True,
 }
 
 
@@ -58,6 +65,7 @@ class SearchRequest:
     limit: int = 12
     profile_version: str | None = None
     debug: bool = False
+    queries: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -95,19 +103,21 @@ async def load_profile(version: str | None) -> dict[str, Any]:
     async with pool.acquire() as connection:
         if version:
             row = await connection.fetchrow(
-                """SELECT parameters FROM knowledge_search_profiles
+                """SELECT version,parameters FROM knowledge_search_profiles
                     WHERE version=$1 OR (is_default AND $1='')""",
                 version,
             )
         else:
             row = await connection.fetchrow(
-                """SELECT parameters FROM knowledge_search_profiles
+                """SELECT version,parameters FROM knowledge_search_profiles
                     WHERE is_default ORDER BY created_at DESC LIMIT 1"""
             )
-    parameters = dict(DEFAULT_PARAMETERS)
+    if version and not row:
+        raise SearchScopeError("knowledge_profile_not_found")
+    parameters = {**DEFAULT_PARAMETERS, "version": row["version"] if row else "builtin-v1"}
     if row and row["parameters"]:
         parsed = locator_dict(row["parameters"])
-        parameters.update({key: value for key, value in parsed.items() if key in parameters})
+        parameters.update({key: value for key, value in parsed.items() if key in DEFAULT_PARAMETERS})
     return parameters
 
 
@@ -152,137 +162,72 @@ async def expand_entity_aliases(owner_id: str, query: str) -> tuple[str, list[st
 
 
 async def resolve_scope(request: SearchRequest) -> dict[str, Any]:
-    """Resolve kb/collection/document selections to bound published generations.
-
-    ``current`` binds the document's current published generation at query
-    time; ``pinned`` validates explicit generation ids; ``as_of`` picks the
-    newest generation published before the cut-off (plus an optional business
-    validity date that a metadata validity range must cover). Date cut-offs
-    are interpreted at 00:00 UTC, independent of the database session timezone.
-    """
-    owner_id = document_owner_id(request.owner_id)
-    published_cutoff = None
+    """Resolve authorized published generations, intersecting explicit scopes."""
+    owner = document_owner_id(request.owner_id)
+    cutoff = None
     if request.version_mode == "as_of":
         if not request.as_of_published:
             raise SearchScopeError("as_of_requires_date")
         try:
-            cutoff_date = date.fromisoformat(request.as_of_published)
-            if cutoff_date.isoformat() != request.as_of_published:
+            parsed = date.fromisoformat(request.as_of_published)
+            if parsed.isoformat() != request.as_of_published:
                 raise ValueError("expected YYYY-MM-DD")
+            cutoff = datetime.combine(parsed, datetime_time.min, timezone.utc)
         except (TypeError, ValueError) as exc:
             raise SearchScopeError("as_of_invalid_date") from exc
-        published_cutoff = datetime.combine(cutoff_date, datetime_time.min, timezone.utc)
+    if request.as_of_valid:
+        try:
+            if date.fromisoformat(request.as_of_valid).isoformat() != request.as_of_valid:
+                raise ValueError("expected YYYY-MM-DD")
+        except (TypeError, ValueError) as exc:
+            raise SearchScopeError("as_of_invalid_validity_date") from exc
+    if request.version_mode == "pinned" and not request.generation_ids:
+        raise SearchScopeError("pinned_scope_requires_generations")
     pool = await get_document_pool()
-    from .authz import resolve_readable_scope
-
-    readable_kbs = await resolve_readable_scope(
-        request.owner_id,
-        [str(item) for item in request.kb_ids] if request.kb_ids else [],
-    )
     async with pool.acquire() as connection:
-        document_ids: set[str] = {str(item) for item in request.document_ids}
+        ids = set(request.document_ids)
         if request.kb_ids or request.collection_ids:
-            # 库/集合作用域先经可读范围过滤，检索永不在召回后剔除（§2.4）。
-            linked = await connection.fetch(
-                """SELECT DISTINCT l.document_id
-                     FROM knowledge_document_links l
-                     JOIN knowledge_bases kb ON kb.id=l.knowledge_base_id
-                    WHERE (l.knowledge_base_id=ANY($2::uuid[])
-                           OR l.collection_id=ANY($3::uuid[]))
-                      AND kb.archived_at IS NULL
-                      AND (l.knowledge_base_id=ANY($4::uuid[]) OR kb.owner_id=$1::uuid)""",
-                owner_id,
-                [str(item) for item in request.kb_ids],
-                [str(item) for item in request.collection_ids],
-                readable_kbs,
+            links = await connection.fetch(
+                f"""SELECT DISTINCT l.document_id FROM knowledge_document_links l
+                JOIN knowledge_bases kb ON kb.id=l.knowledge_base_id
+                WHERE kb.archived_at IS NULL AND kb.id IN ({readable_bases_sql('$1')})
+                AND (kb.id=ANY($2::uuid[]) OR l.collection_id=ANY($3::uuid[]))""",
+                owner, request.kb_ids, request.collection_ids,
             )
-            document_ids.update(str(row["document_id"]) for row in linked)
-        if request.version_mode == "pinned":
-            if not request.generation_ids:
-                raise SearchScopeError("pinned_scope_requires_generations")
-            rows = await connection.fetch(
-                """SELECT g.id AS generation_id, g.document_id
-                     FROM research_document_generations g
-                     JOIN research_documents d ON d.id=g.document_id
-                    WHERE g.id=ANY($1::uuid[])
-                      AND d.deleted_at IS NULL AND g.status='published'
-                      AND (d.owner_id=$2::uuid
-                           OR d.home_knowledge_base_id=ANY($3::uuid[]))""",
-                [str(item) for item in request.generation_ids],
-                owner_id,
-                readable_kbs,
-            )
-            if len(rows) != len(set(str(item) for item in request.generation_ids)):
-                raise SearchScopeError("generation_not_published_or_foreign")
-            return {
-                "documents": [
-                    {"document_id": str(row["document_id"]),
-                     "generation_id": str(row["generation_id"])}
-                    for row in rows
-                ]
-            }
-        if not (request.document_ids or request.kb_ids or request.collection_ids):
-            owned = await connection.fetch(
-                "SELECT id FROM research_documents WHERE owner_id=$1::uuid "
-                "AND deleted_at IS NULL",
-                owner_id,
-            )
-            document_ids.update(str(row["id"]) for row in owned)
-            if not document_ids:
-                return {"documents": []}
-        requested_any = bool(
-            request.kb_ids or request.collection_ids or request.document_ids
+            ids.update(str(row["document_id"]) for row in links)
+        scoped = bool(request.document_ids or request.kb_ids or request.collection_ids)
+        if scoped and not ids:
+            return {"documents": []}
+        filters, filter_args = _metadata_filter_sql(request.filters, start=6)
+        rows = await connection.fetch(
+            f"""SELECT DISTINCT ON (d.id, CASE WHEN $6='pinned' THEN g.id ELSE NULL END)
+                    d.id AS document_id,
+                    g.id AS generation_id, g.metadata_snapshot, g.index_profile
+                FROM research_documents d
+                JOIN research_document_generations g ON g.document_id=d.id
+                WHERE {document_read_sql('$1')} AND d.deleted_at IS NULL
+                  AND g.status='published' AND (
+                    ($6='pinned' AND g.id=ANY($3::uuid[])) OR
+                    ($6='as_of' AND g.published_at<=$4::timestamptz) OR
+                    ($6='current' AND g.id=d.current_generation_id))
+                  AND (NOT $5::boolean OR d.id=ANY($2::uuid[])){filters}
+                ORDER BY d.id, CASE WHEN $6='pinned' THEN g.id ELSE NULL END, g.published_at DESC, g.id""",
+            owner, sorted(ids), request.generation_ids, cutoff, scoped, request.version_mode, *filter_args,
         )
-        if not document_ids:
-            if requested_any:
-                # 请求的作用域整体不可读或为空：返回空结果，不泄露存在性。
-                return {"documents": []}
-            raise SearchScopeError("scope_resolved_to_nothing")
-        if request.version_mode == "as_of":
-            rows = await connection.fetch(
-                """SELECT DISTINCT ON (g.document_id)
-                          g.document_id, g.id AS generation_id, g.metadata_snapshot
-                     FROM research_document_generations g
-                     JOIN research_documents d ON d.id=g.document_id
-                    WHERE g.document_id=ANY($1::uuid[])
-                      AND d.deleted_at IS NULL AND g.status='published'
-                      AND (d.owner_id=$2::uuid OR d.home_knowledge_base_id=ANY($3::uuid[]))
-                      AND g.published_at <= $4::timestamptz
-                    ORDER BY g.document_id, g.published_at DESC""",
-                sorted(document_ids),
-                owner_id,
-                readable_kbs,
-                published_cutoff,
-            )
-        else:
-            rows = await connection.fetch(
-                """SELECT d.id AS document_id, d.current_generation_id AS generation_id,
-                          g.metadata_snapshot
-                     FROM research_documents d
-                     JOIN research_document_generations g ON g.id=d.current_generation_id
-                    WHERE d.id=ANY($1::uuid[])
-                      AND (d.owner_id=$2::uuid OR d.home_knowledge_base_id=ANY($3::uuid[]))
-                      AND d.deleted_at IS NULL AND g.status='published'""",
-                sorted(document_ids),
-                owner_id,
-                readable_kbs,
-            )
-        resolved = []
-        validity_cut = request.as_of_valid
-        for row in rows:
-            if validity_cut:
-                metadata = locator_dict(row["metadata_snapshot"])
-                validity = (metadata.get("confirmed") or {}).get("validity") or {}
-                start, end = validity.get("start"), validity.get("end")
-                if start and validity_cut < start:
-                    continue
-                if end and validity_cut >= end:  # 左闭右开
-                    continue
-            resolved.append(
-                {"document_id": str(row["document_id"]),
-                 "generation_id": str(row["generation_id"])}
-            )
-        return {"documents": resolved}
+    if request.version_mode == "pinned" and {str(row["generation_id"]) for row in rows} != set(request.generation_ids):
+        raise SearchScopeError("generation_not_published_or_outside_scope")
+    result = []
+    for row in rows:
+        if request.as_of_valid:
+            validity = (locator_dict(row["metadata_snapshot"]).get("confirmed") or {}).get("validity") or {}
+            if validity.get("start") and request.as_of_valid < validity["start"]:
+                continue
+            if validity.get("end") and request.as_of_valid >= validity["end"]:
+                continue
+        result.append({"document_id": str(row["document_id"]),
+                       "generation_id": str(row["generation_id"]),
+                       "index_profile": locator_dict(row["index_profile"])})
+    return {"documents": result}
 
 
 _METADATA_FIELD = {
@@ -326,7 +271,7 @@ def _metadata_filter_sql(
             f"""COALESCE(
                   g.metadata_snapshot->'confirmed'->'company'->>'entity_id',
                   g.metadata_snapshot->'suggested'->'company'->0->'value'->>'entity_id'
-                ) = ANY(${next_placeholder()}::uuid[])"""
+                ) = ANY(${next_placeholder()}::text[])"""
         )
     start_date = filters.get("publish_date_start")
     end_date = filters.get("publish_date_end")
@@ -355,6 +300,8 @@ class SearchResult:
     locator: dict[str, Any]
     score: float
     relevance: int | None
+    unit_id: str | None = None
+    parent_context: str = ""
     ordinal: int = 0
     rerank_reason: str | None = None
 
@@ -368,6 +315,8 @@ class SearchResult:
             "text": self.text,
             "context_before": self.context_before,
             "context_after": self.context_after,
+            "parent_context": self.parent_context,
+            "unit_id": self.unit_id,
             "locator": self.locator,
             "score": self.score,
             "relevance": self.relevance,
@@ -383,6 +332,7 @@ async def _recall(
     filters: dict[str, Any],
     parameters: dict[str, Any],
     diagnostics: SearchDiagnostics,
+    execution: SearchExecution | None = None,
 ) -> list[dict[str, Any]]:
     """Fuse vector, full-text and trigram candidates from the database."""
     settings = get_document_settings()
@@ -391,11 +341,12 @@ async def _recall(
     if not generation_ids:
         return []
     started = time.perf_counter()
-    service_key = knowledge_service_key()
+    execution = execution or SearchExecution()
+    service_key = execution.embedding_key()
     vector = (await embed_texts(
-        [expanded_query], settings, api_key=service_key, operation="knowledge_query"
+        [expanded_query], settings, api_key=service_key, operation="knowledge_query" if execution.scope == "service" else "query"
     ))[0]
-    diagnostics.usage["embedding_calls"] = 1
+    diagnostics.usage["embedding_calls"] = diagnostics.usage.get("embedding_calls", 0) + 1
     diagnostics.stage_timings_ms["embed"] = (time.perf_counter() - started) * 1000
 
     filter_clause, filter_args = _metadata_filter_sql(filters, start=8)
@@ -422,7 +373,8 @@ async def _recall(
                    FROM research_document_segments s
                    JOIN research_document_generations g ON g.id=s.generation_id
                    JOIN research_documents d ON d.id=g.document_id
-                  WHERE d.owner_id=$1::uuid AND d.deleted_at IS NULL
+                  WHERE {document_read_sql("$1")} AND d.deleted_at IS NULL
+                    AND g.status='published'
                     AND s.generation_id=ANY($2::uuid[]){filter_clause}
                ), vector_rank AS (
                  SELECT id, row_number() OVER(ORDER BY embedding <=> $3::vector) rank
@@ -447,12 +399,17 @@ async def _recall(
                    LEFT JOIN trigram_rank g USING(id)
                   WHERE v.id IS NOT NULL OR t.id IS NOT NULL OR g.id IS NOT NULL
                )
-               SELECT e.*, f.score FROM fused f JOIN eligible e USING(id)
+               SELECT e.*, f.score,
+                      (SELECT count(*) FROM vector_rank) AS vector_count,
+                      (SELECT count(*) FROM text_rank) AS text_count,
+                      (SELECT count(*) FROM trigram_rank) AS trigram_count
+                 FROM fused f JOIN eligible e USING(id)
                 ORDER BY f.score DESC, e.ordinal""",
             *args,
         )
     diagnostics.stage_timings_ms["recall"] = (time.perf_counter() - started) * 1000
-    diagnostics.route_candidates = {"vector": per_route, "text": per_route, "trigram": per_route}
+    for name in ("vector", "text", "trigram"):
+        diagnostics.route_candidates[name] = diagnostics.route_candidates.get(name, 0) + (int(rows[0][f"{name}_count"]) if rows else 0)
     diagnostics.fused_candidates = len(rows)
     return [dict(row) for row in rows]
 
@@ -461,12 +418,29 @@ def _vector_literal(vector: list[float]) -> str:
     return "[" + ",".join(f"{float(item):.6g}" for item in vector) + "]"
 
 
-async def unified_search(request: SearchRequest) -> dict[str, Any]:
-    """Run the full retrieval pipeline and persist the query ledger row."""
+async def unified_search(request: SearchRequest, *, execution: SearchExecution | None = None) -> dict[str, Any]:
+    """Run one scope-bound pipeline with service or research credentials."""
+    execution = execution or SearchExecution()
     query_id = str(uuid.uuid4())
+    if execution.scope == "service":
+        async with knowledge_query(request.owner_id, query_id):
+            result = await _search(request, query_id, execution)
+        result["usage"] = await query_usage(query_id, request.owner_id, persist=True)
+        return result
+    return await _search(request, query_id, execution)
+
+
+async def _search(request, query_id, execution):
     diagnostics = SearchDiagnostics()
     owner_id = document_owner_id(request.owner_id)
-    parameters = await load_profile(request.profile_version)
+    parameters = dict(execution.manifest["parameters"]) if execution.manifest else await load_profile(request.profile_version)
+    if execution.scope == "run":
+        if not execution.manifest or not execution.manifest.get("documents"):
+            raise SearchScopeError("research_knowledge_manifest_missing")
+        request = replace(request, kb_ids=[], collection_ids=[],
+            document_ids=[item["document_id"] for item in execution.manifest["documents"]],
+            generation_ids=[item["generation_id"] for item in execution.manifest["documents"]],
+            version_mode="pinned", filters=execution.manifest.get("filters", {}))
     overall = time.perf_counter()
 
     started = time.perf_counter()
@@ -474,6 +448,7 @@ async def unified_search(request: SearchRequest) -> dict[str, Any]:
     diagnostics.stage_timings_ms["scope"] = (time.perf_counter() - started) * 1000
     diagnostics.resolved_scope = {
         "documents": len(scope["documents"]),
+        "generations": scope["documents"],
         "document_ids": sorted({item['document_id'] for item in scope['documents']}),
         "version_mode": request.version_mode,
     }
@@ -482,17 +457,34 @@ async def unified_search(request: SearchRequest) -> dict[str, Any]:
             query_id, request, [], diagnostics, parameters, overall,
         )
 
-    expanded_query, alias_hits = await expand_entity_aliases(owner_id, request.query)
-    diagnostics.alias_expansions = alias_hits
-    candidates = await _recall(
-        owner_id, expanded_query, scope, request.filters, parameters, diagnostics
-    )
+    expected_profile = get_document_settings().index_profile
+    profiles = [item.get("index_profile") or {} for item in scope["documents"]]
+    if any(profile != expected_profile for profile in profiles):
+        raise SearchScopeError("knowledge_index_profile_mismatch: rebuild and publish with the configured embedding model/revision")
+    if execution.manifest and any(item["index_profile"] != expected_profile for item in execution.manifest["documents"]):
+        raise SearchScopeError("frozen_knowledge_index_profile_changed")
+    variants = list(dict.fromkeys([request.query, *request.queries]))[:3]
+    fused = {}
+    for query in variants:
+        expanded_query, alias_hits = await expand_entity_aliases(owner_id, query)
+        diagnostics.alias_expansions = sorted(set(diagnostics.alias_expansions + alias_hits))
+        recalled = await _recall(owner_id, expanded_query, scope, request.filters, parameters, diagnostics, execution)
+        for row in recalled:
+            key = str(row["id"])
+            if key in fused:
+                fused[key]["score"] += float(row["score"])
+            else:
+                fused[key] = dict(row)
+    candidates = sorted(fused.values(), key=lambda row: (-float(row["score"]), int(row.get("ordinal") or 0), str(row["id"])))
+    diagnostics.fused_candidates = len(candidates)
 
     rerank_pool = candidates[: int(parameters["rerank_candidates"])]
     relevance: dict[str, tuple[int, str | None]] = {}
-    if rerank_pool:
+    if not parameters.get("rerank_enabled", True):
+        diagnostics.rerank_completed = False
+    if rerank_pool and parameters.get("rerank_enabled", True):
         try:
-            scores = await rerank_segments(request.query, rerank_pool)
+            scores = await rerank_segments(request.query, rerank_pool, execution=execution)
             diagnostics.usage["rerank_calls"] = 1
             relevance = scores
         except RerankUnavailableError:
@@ -513,7 +505,7 @@ async def unified_search(request: SearchRequest) -> dict[str, Any]:
         else:
             diagnostics.rerank_dropped += 1
     if relevance:
-        diagnostics.fused_candidates = len(candidates)
+        kept.sort(key=lambda row: (-row["relevance"], -float(row["score"]), int(row.get("ordinal") or 0), str(row["id"])))
 
     quota = int(parameters["per_document_quota"])
     single_document = len({row["document_id"] for row in scope["documents"]}) == 1
@@ -527,25 +519,28 @@ async def unified_search(request: SearchRequest) -> dict[str, Any]:
         per_doc[document_id] = per_doc.get(document_id, 0) + 1
         quota_kept.append(row)
 
+    selected = quota_kept[: min(request.limit, int(parameters["result_limit"]))]
+    text_budget = min(1600, int(parameters.get("total_context_char_budget", 24000)) // max(1, len(selected)))
     results = [
         SearchResult(
             segment_id=str(row["id"]),
             document_id=str(row["document_id"]),
             generation_id=str(row["generation_id"]),
             filename=row["filename"],
-            text=row["text"],
+            text=source_excerpt(row["text"], text_budget, request.query),
             context_before="",
             context_after="",
             locator=locator_dict(row["locator"]),
             score=float(row["score"]),
             relevance=row.get("relevance"),
             ordinal=int(row.get("ordinal") or 0),
+            unit_id=str(row["unit_id"]) if row.get("unit_id") else None,
             rerank_reason=row.get("rerank_reason"),
         )
-        for row in quota_kept[: int(parameters["result_limit"])]
+        for row in selected
     ]
-    if int(parameters["context_neighbors"]) > 0 and results:
-        await _expand_context(results, parameters, diagnostics)
+    if results and (int(parameters["context_neighbors"]) > 0 or parameters.get("parent_context", True)):
+        await _expand_context(results, parameters, diagnostics, owner_id)
 
     return await _finalize(
         query_id, request, [item.as_dict() for item in results],
@@ -553,35 +548,52 @@ async def unified_search(request: SearchRequest) -> dict[str, Any]:
     )
 
 
-async def _expand_context(
-    results: list[SearchResult], parameters: dict[str, Any], diagnostics: SearchDiagnostics
-) -> None:
-    """Attach bounded neighbouring segments as before/after context."""
+async def _expand_context(results, parameters, diagnostics, owner_id):
+    """Read source units and neighbours with per-result and total text budgets."""
     started = time.perf_counter()
     pool = await get_document_pool()
-    budget = int(parameters["context_char_budget"])
+    total_room = max(0, int(parameters.get("total_context_char_budget", 24000)) - sum(len(result.text) for result in results))
+    neighbours = max(0, int(parameters["context_neighbors"]))
     async with pool.acquire() as connection:
         for result in results:
-            used = 0
+            room = min(int(parameters["context_char_budget"]), total_room)
+            if room <= 0:
+                break
+            if parameters.get("parent_context", True) and result.unit_id:
+                parent = await connection.fetchrow(
+                    f"""SELECT u.index_text,u.unit_type,u.attributes FROM research_document_units u
+                    JOIN research_document_generations g ON g.id=u.generation_id
+                    JOIN research_documents d ON d.id=g.document_id
+                    WHERE u.id=$1::uuid AND u.generation_id=$2::uuid
+                      AND {document_read_sql('$3')}""",
+                    result.unit_id, result.generation_id, owner_id)
+                if parent and parent["index_text"] != result.text:
+                    attributes = locator_dict(parent["attributes"])
+                    context = parent["index_text"]
+                    if parent["unit_type"] == "table":
+                        table_context = "\n".join(part for part in [" | ".join(str(item) for item in attributes.get("header", [])),
+                            str(attributes.get("unit_note") or ""), str(attributes.get("footnotes") or "")] if part)
+                        context = table_context or context
+                    result.parent_context = context[:room]
+                    room -= len(result.parent_context)
+                    total_room -= len(result.parent_context)
             for direction in ("before", "after"):
-                operator = "<" if direction == "before" else ">"
-                order = "DESC" if direction == "before" else "ASC"
-                row = await connection.fetchrow(
-                    f"""SELECT index_text FROM research_document_segments
-                        WHERE generation_id=$1::uuid AND ordinal {operator} $2::int
-                        ORDER BY ordinal {order} LIMIT 1""",
-                    result.generation_id,
-                    result.ordinal,
-                )
-                if not row:
-                    continue
-                room = max(0, budget - used)
-                snippet = str(row["index_text"])[:room]
-                used += len(snippet)
+                operator, order = ("<", "DESC") if direction == "before" else (">", "ASC")
+                rows = await connection.fetch(
+                    f"""SELECT s.index_text FROM research_document_segments s
+                    JOIN research_document_generations g ON g.id=s.generation_id
+                    JOIN research_documents d ON d.id=g.document_id
+                    WHERE s.generation_id=$1::uuid AND s.ordinal {operator} $2::int
+                      AND {document_read_sql('$4')}
+                    ORDER BY s.ordinal {order} LIMIT $3""",
+                    result.generation_id, result.ordinal, neighbours, owner_id)
                 if direction == "before":
-                    result.context_before = snippet
-                else:
-                    result.context_after = snippet
+                    rows = list(reversed(rows))
+                text = "\n".join(str(row["index_text"]) for row in rows)
+                snippet = text[-room:] if direction == "before" and room else text[:room]
+                setattr(result, "context_" + direction, snippet)
+                room -= len(snippet)
+                total_room -= len(snippet)
     diagnostics.stage_timings_ms["context"] = (time.perf_counter() - started) * 1000
 
 
@@ -608,6 +620,8 @@ async def _finalize(
                     {
                         "kb_ids": request.kb_ids, "collection_ids": request.collection_ids,
                         "resolved_document_ids": diagnostics.resolved_scope.get('document_ids', []),
+                        "resolved_generations": diagnostics.resolved_scope.get("generations", []),
+                        "effective_profile": parameters,
                         "document_ids": request.document_ids,
                         "generation_ids": request.generation_ids,
                         "version_mode": request.version_mode,
@@ -618,7 +632,7 @@ async def _finalize(
                     },
                     ensure_ascii=False, default=str,
                 ),
-                request.profile_version,
+                parameters.get("version", request.profile_version),
                 json.dumps(
                     {
                         "hits": len(results),

@@ -50,7 +50,6 @@ def client(monkeypatch):
     monkeypatch.setattr(authz, "readable_kb_ids", _readable)
     monkeypatch.setattr(authz, "require_kb_capability", _require)
     monkeypatch.setattr(authz, "record_audit", _audit_noop)
-    server._runs.clear()
     return TestClient(server.app, raise_server_exceptions=False)
 
 

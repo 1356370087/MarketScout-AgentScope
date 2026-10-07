@@ -106,4 +106,8 @@ def _stable_output(
         "usage": outcome.get("usage") or {},
         "usage_accounting": outcome.get("usage_accounting"),
         "metrics": outcome.get("metrics") or {},
+        "completion_status": outcome.get("completion_status"),
+        "stop_reason": outcome.get("stop_reason"),
+        "uncovered_requirements": outcome.get("uncovered_requirements", []),
+        "research_gaps": outcome.get("research_gaps", []),
     }

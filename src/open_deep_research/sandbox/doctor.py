@@ -35,8 +35,6 @@ def diagnose() -> dict:
         return {"ready": False, "failures": [str(exc)], "warnings": []}
     if not configurable.sandbox_enabled:
         failures.append("SANDBOX_ENABLED is false")
-    if not configurable.enable_async_research:
-        failures.append("ENABLE_ASYNC_RESEARCH is false")
     try:
         bundle = load_policy_bundle(configurable.sandbox_policy_path)
     except Exception as exc:

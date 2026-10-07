@@ -5,6 +5,7 @@ from contextlib import aclosing
 
 from agentscope.model import AnthropicChatModel, GeminiChatModel, DeepSeekChatModel
 from open_deep_research.agentscope_runtime.gateway import GovernedModelMixin
+from open_deep_research.agentscope_runtime.model_accounting import cache_usage
 
 
 class GovernedAnthropicChatModel(GovernedModelMixin, AnthropicChatModel):
@@ -12,6 +13,10 @@ class GovernedAnthropicChatModel(GovernedModelMixin, AnthropicChatModel):
         result = await super()._parse_anthropic_completion_response(
             start_datetime, response
         )
+        facts = cache_usage(response.usage.model_dump(exclude_none=True))
+        result.metadata["cache_usage"] = facts
+        if result.usage is not None:
+            result.usage.input_tokens = response.usage.input_tokens + sum(facts.values())
         result.metadata.update(
             provider_finish_reason=response.stop_reason,
             request_id=response.id,
@@ -31,6 +36,9 @@ class GovernedAnthropicChatModel(GovernedModelMixin, AnthropicChatModel):
                     metadata.update(
                         request_id=event.message.id, served_model=event.message.model
                     )
+                    facts = cache_usage(event.message.usage.model_dump(exclude_none=True))
+                    metadata["cache_usage"] = facts
+                    metadata["total_input_tokens"] = event.message.usage.input_tokens + sum(facts.values())
                 elif event.type == "message_delta" and event.delta.stop_reason:
                     metadata["provider_finish_reason"] = event.delta.stop_reason
                 current = self._call_metadata.get()
@@ -52,6 +60,8 @@ class GovernedAnthropicChatModel(GovernedModelMixin, AnthropicChatModel):
         ) as parsed:
             async for chunk in parsed:
                 chunk.metadata.update(metadata)
+                if chunk.usage is not None and "total_input_tokens" in metadata:
+                    chunk.usage.input_tokens = metadata["total_input_tokens"]
                 yield chunk
 
 
@@ -79,6 +89,7 @@ class GovernedGeminiChatModel(GovernedModelMixin, GeminiChatModel):
             "provider_finish_reason": getattr(reason, "value", reason),
             "request_id": response.response_id,
             "served_model": response.model_version,
+            "cache_usage": cache_usage(response.usage_metadata.model_dump(exclude_none=True) if response.usage_metadata else {}),
         }
 
     def _parse_completion_response(self, start_datetime, response):
@@ -114,6 +125,7 @@ class GovernedGeminiChatModel(GovernedModelMixin, GeminiChatModel):
 class GovernedDeepSeekChatModel(GovernedModelMixin, DeepSeekChatModel):
     def _parse_completion_response(self, start_datetime, response):
         result = super()._parse_completion_response(start_datetime, response)
+        result.metadata["cache_usage"] = cache_usage(response.usage.model_dump(exclude_none=True) if response.usage else {})
         result.metadata.update(
             provider_finish_reason=response.choices[0].finish_reason,
             request_id=response.id,
@@ -128,6 +140,8 @@ class GovernedDeepSeekChatModel(GovernedModelMixin, DeepSeekChatModel):
         async def observed(stream):
             async for raw in stream:
                 metadata.update(request_id=raw.id, served_model=raw.model)
+                if raw.usage is not None:
+                    metadata["cache_usage"] = cache_usage(raw.usage.model_dump(exclude_none=True))
                 for choice in raw.choices:
                     if choice.finish_reason is not None:
                         metadata["provider_finish_reason"] = choice.finish_reason

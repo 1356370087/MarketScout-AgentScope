@@ -228,6 +228,16 @@ class GatewayModelOutcomeV1(BaseModel):
     model: str | None = None
 
 
+class ServerSearchRequest(BaseModel):
+    """A bounded native search operation; endpoint selection remains server-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["openai", "anthropic"]
+    query: str = Field(min_length=1, max_length=20_000)
+    allowed_domains: list[str] = Field(default_factory=list)
+    blocked_domains: list[str] = Field(default_factory=list)
+
+
 class GatewayModelRequestV2(BaseModel):
     """OpenAI-compatible, secret-free model request used by Sandbox Workers."""
 
@@ -247,6 +257,7 @@ class GatewayModelRequestV2(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1)
     temperature: float | None = Field(default=None, ge=0, le=2)
     trace_metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    server_search: ServerSearchRequest | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def validate_wire_payload(self) -> GatewayModelRequestV2:
@@ -257,6 +268,10 @@ class GatewayModelRequestV2(BaseModel):
         _assert_json_safe(self.structured_schema, "$.structured_schema")
         if self.structured_schema is not None and self.tools:
             raise ValueError("structured output cannot be combined with ordinary tools")
+        if self.server_search is not None and (
+            self.role != f"{self.server_search.provider}_search" or self.tools or self.structured_schema
+        ):
+            raise ValueError("server search requires its own model role and tool contract")
         for item in self.messages:
             if item.get("role") not in {"system", "user", "assistant", "tool"}:
                 raise ValueError("Gateway Wire V2 message has an unsupported role")
@@ -284,6 +299,7 @@ class GatewayModelOutcomeV2(BaseModel):
     latency_ms: float | None = None
     logical_retry_count: int = 0
     error_code: str | None = None
+    search_result: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GatewayOperationLookupRequestV1(BaseModel):
@@ -325,6 +341,7 @@ class GatewayToolRequestV1(BaseModel):
     # Research wave ("wave-0" is the first research batch). Empty for legacy
     # callers; later batches may draw the run's follow-up fetch headroom.
     wave_id: str = ""
+    deadline_at: float | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class GatewayToolOutcomeV1(BaseModel):
@@ -339,6 +356,7 @@ class GatewayToolOutcomeV1(BaseModel):
     output: Any = None
     error: dict[str, Any] | None = None
     approval_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class GatewayToolCatalogRequestV1(BaseModel):

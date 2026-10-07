@@ -822,10 +822,11 @@ async def test_complete_pipeline_recovers_after_tool_commit_without_repeating_to
             return StructuredResponse(content={"research_brief": "市场规模"})
 
     class Factory:
-        run = SimpleNamespace(get=lambda name: {})
+        run = SimpleNamespace(get=lambda name: {}, compatibility_projection=lambda: {"metadata": {"run_config_schema_version": 17}})
 
         def __init__(self):
             self.models = {
+                "compression": Model([]),
                 "supervisor": Model(
                     [
                         [
@@ -1190,6 +1191,38 @@ async def test_team_message_error_has_durable_receipt_without_unknown_write(stor
     assert first.error.error_type == replay.error.error_type
     assert calls == [1]
     assert session.problem is None
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_web_failure_receipt_is_distinct_from_lost_gateway_response(store, confirmed):
+    from pydantic import BaseModel
+    from open_deep_research.tools.base import ToolExecutionZone, ToolOrigin, build_tool
+    from open_deep_research.tools.governance import ToolError
+
+    state, lease = await create(store)
+    tool = build_tool(name="fetch_url", input_schema=BaseModel, description="fetch",
+                      call=lambda *_: None, origin=ToolOrigin.SEARCH,
+                      execution_zone=ToolExecutionZone.GATEWAY, effect=ToolEffect.READ_ONLY)
+    calls = []
+
+    async def handler():
+        calls.append(1)
+        return GovernedToolCallResult(
+            ToolOutcomeMessage("rejected" if confirmed else "response lost", "fetch_url", "call"),
+            error=ToolError(error_type="unknown", tool_name="fetch_url", message="failed"),
+            confirmed_outcome=confirmed,
+        )
+
+    session = RecoverySession(store, lease, state)
+    if confirmed:
+        first = await session.tool(tool, "call", {}, handler, bill=False)
+        replay = await session.tool(tool, "call", {}, handler, bill=False)
+        assert first.error == replay.error
+        assert session.problem is None
+    else:
+        with pytest.raises(UnknownOperation):
+            await session.tool(tool, "call", {}, handler, bill=False)
+    assert calls == [1]
 
 
 async def test_public_approval_projection_retains_unresolved_item(store, tmp_path):

@@ -163,7 +163,10 @@ async def test_sync_source_lifecycle_and_dedup(monkeypatch):
 
         original_discover = sync.WebAdapter.discover_changes
         sync.WebAdapter.discover_changes = mock_discover
-        result_unchanged = await sync.run_sync(OWNER, source["id"])
+        async def authorize(url):
+            assert url.startswith("https://")
+
+        result_unchanged = await sync.run_sync(OWNER, source["id"], authorize_url=authorize)
         assert result_unchanged["status"] == "unchanged"
 
         # Sync with changed content
@@ -177,7 +180,7 @@ async def test_sync_source_lifecycle_and_dedup(monkeypatch):
             )
 
         sync.WebAdapter.discover_changes = mock_changed
-        result_updated = await sync.run_sync(OWNER, source["id"])
+        result_updated = await sync.run_sync(OWNER, source["id"], authorize_url=authorize)
         assert result_updated["status"] == "updated"
         assert result_updated["version"]["version_no"] == 2
 
@@ -198,7 +201,7 @@ async def test_sync_source_lifecycle_and_dedup(monkeypatch):
 
         # Pending draft blocks new sync version creation (single-pending guard)
         sync.WebAdapter.discover_changes = mock_changed
-        result_blocked = await sync.run_sync(OWNER, source["id"])
+        result_blocked = await sync.run_sync(OWNER, source["id"], authorize_url=authorize)
         # Second sync is blocked by the in-progress ingest job (方案 KB-10：
         # 存在待审核更新时暂停自动追加版本)
         assert result_blocked["status"] == "error"

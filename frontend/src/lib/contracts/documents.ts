@@ -2,9 +2,18 @@
 export type SourceMode = "web" | "documents" | "hybrid" | "specific";
 export type SourceRef =
   | { type: "document"; id: string }
+  | { type: "knowledge_base"; id: string }
+  | { type: "collection"; id: string }
   | { type: "url"; url: string }
   | { type: "domain"; domain: string };
-export interface SourceSelection { mode: SourceMode; sources: SourceRef[] }
+export type MaterialRetrievalOptions = {
+  version_mode?: "current" | "as_of";
+  as_of_published?: string | null;
+  as_of_valid?: string | null;
+  filters?: { doc_types?: string[]; languages?: string[]; entity_ids?: string[]; publish_date_start?: string; publish_date_end?: string };
+  profile_version?: string | null;
+};
+export interface SourceSelection { mode: SourceMode; sources: SourceRef[]; retrieval?: MaterialRetrievalOptions }
 export type DocumentStatus = "queued" | "processing" | "ready" | "failed" | "deleting";
 export interface ResearchDocument {
   id: string;
@@ -23,6 +32,10 @@ export interface ResearchDocument {
   current_generation_id?: string | null;
 }
 export interface DocumentChunk {
+  generation_id?: string | null;
+  version_no?: number | null;
+  generation_status?: string | null;
+  location?: Record<string, unknown>;
   id: string;
   document_id: string;
   ordinal: number;

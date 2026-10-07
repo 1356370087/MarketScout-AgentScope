@@ -31,7 +31,12 @@ export const documentsApi = {
   listDocuments: listDocumentsPage,
   listAllDocuments: (params: Omit<DocumentListParams, "limit" | "offset"> = {}) => listAllDocuments(params),
   getDocument: (id: string) => apiFetch<ResearchDocument>(`/documents/${encodeURIComponent(id)}`),
-  documentChunks: (id: string) => apiFetch<{ items: DocumentChunk[] }>(`/documents/${encodeURIComponent(id)}/chunks`),
+  documentChunk: (id: string, chunk: string) => apiFetch<DocumentChunk>(`/documents/${encodeURIComponent(id)}/chunks/${encodeURIComponent(chunk)}`),
+  documentChunks: (id: string, options: { offset?: number; limit?: number; generation_id?: string } = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(options).forEach(([key, value]) => { if (value !== undefined) params.set(key, String(value)); });
+    return apiFetch<{ items: DocumentChunk[] }>(`/documents/${encodeURIComponent(id)}/chunks?${params}`);
+  },
   uploadDocument: async (file: File) => {
     const form = new FormData(); form.set("file", file);
     return apiFetch<{ document: ResearchDocument; deduplicated: boolean }>("/documents", { method: "POST", body: form });

@@ -1228,5 +1228,70 @@
     "group": "memory",
     "target": "RunConfig.memory.memory_half_life_days",
     "handling": "业务保留并接入"
+  },
+  "knowledge_rerank_model": {
+    "group": "knowledge",
+    "target": "RunConfig.knowledge.knowledge_rerank_model",
+    "handling": "业务保留并接入"
+  },
+  "knowledge_answer_model": {
+    "group": "knowledge",
+    "target": "RunConfig.knowledge.knowledge_answer_model",
+    "handling": "业务保留并接入"
+  },
+  "search_providers": {
+    "group": "web",
+    "target": "RunConfig.web.search_providers",
+    "handling": "业务保留并接入"
+  },
+  "search_max_concurrency": {
+    "group": "web",
+    "target": "RunConfig.web.search_max_concurrency",
+    "handling": "业务保留并接入"
+  },
+  "openai_search_model": {
+    "group": "web",
+    "target": "RunConfig.web.openai_search_model",
+    "handling": "业务保留并接入"
+  },
+  "anthropic_search_model": {
+    "group": "web",
+    "target": "RunConfig.web.anthropic_search_model",
+    "handling": "业务保留并接入"
+  },
+  "web_shadow_fetch_top_k": {
+    "group": "web",
+    "target": "RunConfig.web.web_shadow_fetch_top_k",
+    "handling": "业务保留并接入"
+  },
+  "web_shadow_timeout_seconds": {
+    "group": "web",
+    "target": "RunConfig.web.web_shadow_timeout_seconds",
+    "handling": "业务保留并接入"
+  },
+  "research_efficiency_mode": {
+    "group": "research",
+    "target": "RunConfig.research.research_efficiency_mode",
+    "handling": "原生运行级效率策略，冻结并恢复"
+  },
+  "max_supplement_rounds": {
+    "group": "research",
+    "target": "RunConfig.research.max_supplement_rounds",
+    "handling": "原生运行级效率策略，冻结并恢复"
+  },
+  "max_no_progress_rounds": {
+    "group": "research",
+    "target": "RunConfig.research.max_no_progress_rounds",
+    "handling": "原生运行级效率策略，冻结并恢复"
+  },
+  "research_context_target_tokens": {
+    "group": "research",
+    "target": "RunConfig.research.research_context_target_tokens",
+    "handling": "原生运行级效率策略，冻结并恢复"
+  },
+  "handoff_context_target_tokens": {
+    "group": "research",
+    "target": "RunConfig.research.handoff_context_target_tokens",
+    "handling": "原生运行级效率策略，冻结并恢复"
   }
 }

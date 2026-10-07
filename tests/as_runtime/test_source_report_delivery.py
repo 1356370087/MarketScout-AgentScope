@@ -24,6 +24,7 @@ from open_deep_research.agentscope_runtime.research_pipeline import ResearchPipe
 from open_deep_research.agentscope_runtime.research_stages import NativeResearchStages
 from open_deep_research.api.native_runs import NativeRuns
 from open_deep_research.api.research_router import build_research_router
+from open_deep_research.documents.contracts import SourceSelection
 from open_deep_research.report.publication_store import PublisherSettings
 from open_deep_research.report.publisher_worker import PublisherWorker
 from security.rbac.dependencies import get_current_principal
@@ -83,7 +84,7 @@ async def test_long_handoff_approved_report_and_download(tmp_path, monkeypatch, 
     async def pipeline(snapshot, frozen, recovery):
         cfg = {"configurable": snapshot.application["request_configurable"],
                "metadata": {"source_selection": snapshot.application["source_selection"]}}
-        assert cfg["metadata"]["source_selection"] == selection
+        assert cfg["metadata"]["source_selection"] == SourceSelection.model_validate(selection).model_dump(mode="json")
         models = ResearchModels(factory, recovery=recovery)
 
         class Stages(NativeResearchStages):
@@ -158,6 +159,7 @@ async def test_long_handoff_approved_report_and_download(tmp_path, monkeypatch, 
 @pytest.mark.asyncio
 async def test_finalization_uses_revised_markdown_and_preserves_partial_status():
     from test_report_native import state
+
     from open_deep_research.agentscope_runtime.report import _ReportRun
     from open_deep_research.report.models import ReportDraft, SourceRef
     from open_deep_research.report.orchestrator import finalize_report

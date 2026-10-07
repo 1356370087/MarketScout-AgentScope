@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
-from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.configuration import Configuration
 from open_deep_research.sandbox.schema import NetworkPolicy, resolve_profile
 from open_deep_research.security.network import normalize_egress_host
 
@@ -57,14 +57,14 @@ def allowed_domains(configurable: Configuration) -> list[str]:
         elif model.startswith("deepseek:"):
             domains.add("api.deepseek.com")
 
-    search_api = configurable.search_api
-    search_value = search_api.value if isinstance(search_api, SearchAPI) else str(search_api)
-    if search_value == SearchAPI.TAVILY.value:
+    from open_deep_research.web.sources import PROVIDER_URLS
+
+    for provider in configurable.resolved_search_providers:
+        domains.add(urlparse(PROVIDER_URLS[provider.value]).hostname)
+    if "tavily_extract" in configurable.external_extract_backends:
         domains.add("api.tavily.com")
-    elif search_value == SearchAPI.OPENAI.value:
-        domains.add("api.openai.com")
-    elif search_value == SearchAPI.ANTHROPIC.value:
-        domains.add("api.anthropic.com")
+    if "firecrawl" in configurable.external_extract_backends:
+        domains.add("api.firecrawl.dev")
 
     if configurable.mcp_config and configurable.mcp_config.url:
         host = urlparse(configurable.mcp_config.url).hostname

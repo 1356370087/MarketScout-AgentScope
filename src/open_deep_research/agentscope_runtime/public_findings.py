@@ -10,8 +10,11 @@ from open_deep_research.agentscope_runtime.recovery_store import (
     RecoveryConflict,
     UnknownOperation,
 )
-from open_deep_research.events.public import PublicFindingsSummary, extract_public_sources
 from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
+from open_deep_research.events.public import (
+    PublicFindingsSummary,
+    extract_public_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,7 @@ async def publish_handoff(models, outcome, *, context_chars):
     records = [
         {key: record[key] for key in (
             "source_url", "source_uri", "source_title", "source_type",
-            "document_id", "chunk_id", "locator",
+            "document_id", "chunk_id", "locator", "generation_id",
         ) if key in record}
         for record in outcome.evidence_registry
     ]

@@ -102,14 +102,21 @@ class ProductionRunFactory:
             user_id=principal.user_id,
             run_fence_token=recovery.lease.fence,
             source_selection=snapshot.application.get("source_selection", {}),
+            knowledge_manifest=snapshot.application.get("knowledge_manifest"),
             publication_theme=snapshot.application.get("publication_theme", {}),
             sandbox_egress_intent=user_egress_intent(snapshot.messages),
         )
         selected = snapshot.application.get("selected_source_snapshots", [])
+        if selected and not config["metadata"].get("knowledge_manifest") and config["metadata"]["run_config_schema_version"] < 15:
+            from open_deep_research.knowledge.run_scope import legacy_knowledge_manifest
+
+            config["metadata"]["knowledge_manifest"] = await legacy_knowledge_manifest(principal.user_id, selected)
         if selected:
             from open_deep_research.documents.repository import bind_run_sources
             await bind_run_sources(recovery.lease.run_id, principal.user_id, selected)
-        from open_deep_research.agentscope_runtime.native_security import NativeEventPublisher
+        from open_deep_research.agentscope_runtime.native_security import (
+            NativeEventPublisher,
+        )
         config["_event_publisher"] = NativeEventPublisher(recovery.store, recovery.lease)
         if snapshot.application.get("evaluation_capture"):
             from open_deep_research.evaluation.trace import EvaluationRecorder
@@ -170,12 +177,20 @@ class ProductionRunFactory:
             if ledger is not None:
                 ledger.config = config
                 ledger.team = team
+                from open_deep_research.agentscope_runtime.efficiency import (
+                    ResearchCache,
+                )
+
+
+                ledger.research_cache = ResearchCache(recovery, self.runs_dir)
+                recovery.research_cache = ledger.research_cache
             try:
                 yield pipeline
             finally:
                 self.active.pop(recovery.lease.run_id, None)
                 if pipeline.team_workers:
                     await pipeline.team_workers.aclose()
-                from open_deep_research.agentscope_runtime.telemetry import flush
                 import asyncio
+
+                from open_deep_research.agentscope_runtime.telemetry import flush
                 await asyncio.to_thread(flush)

@@ -57,6 +57,15 @@ class DocumentSettings:
     embedding_dimensions: int = field(
         default_factory=lambda: _int("DOCUMENT_EMBEDDING_DIMENSIONS", 1536)
     )
+    embedding_revision: str = field(
+        default_factory=lambda: os.getenv("DOCUMENT_EMBEDDING_REVISION", "v1").strip()
+    )
+
+    @property
+    def index_profile(self) -> dict:
+        """Identify the vector space; increment revision when an alias changes."""
+        return {"model": self.embedding_model, "dimensions": self.embedding_dimensions,
+                "revision": self.embedding_revision}
     embedding_batch_size: int = field(
         default_factory=lambda: _int("DOCUMENT_EMBEDDING_BATCH_SIZE", 64)
     )

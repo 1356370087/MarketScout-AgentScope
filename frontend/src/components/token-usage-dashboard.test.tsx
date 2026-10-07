@@ -31,6 +31,13 @@ const response: RunUsageResponse = {
 };
 
 describe("TokenUsageDashboard", () => {
+  it("displays cache facts without subtracting them from total input", () => {
+    useRunUsage.mockReturnValue({ data: { ...response, cache_reporting: { status: "reported", reported_calls: 1, not_reported_calls: 0, cached_input_tokens: 40, non_cached_input_tokens: 44, cache_creation_input_tokens: null } } });
+    render(<TokenUsageDashboard runId="run-1" visible terminal />);
+    expect(screen.getByLabelText("已结算调用的缓存输入")).toHaveTextContent("已报告缓存读取 40 · 非缓存输入 44 · 缓存写入 未报告");
+    expect(screen.getByLabelText("已结算调用的缓存输入")).toHaveTextContent("总输入 Token 包含缓存命中");
+  });
+
   it("labels native tool and fetch budgets with accessible fallback for future dimensions", () => {
     useRunUsage.mockReturnValue({ data: { ...response, totals: { ...response.totals, budgets: Object.fromEntries(["tool_calls", "fetch_calls", "future"].map((name) => [name, { settled: 2, estimated: 0, reserved: 0, limit: null }])) }, operations: { ...response.operations, tool_success_rate: null } } });
     render(<TokenUsageDashboard runId="run-1" visible terminal />);

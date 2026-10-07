@@ -31,6 +31,22 @@ def response_usage(response):
     return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
 
 
+def cache_usage(raw):
+    """Normalize only cache facts explicitly present in a provider response."""
+    raw = raw or {}
+    details = raw.get("prompt_tokens_details") or raw.get("input_tokens_details") or {}
+    result = {}
+    for value in (details.get("cached_tokens"), raw.get("cache_read_input_tokens"),
+                  raw.get("prompt_cache_hit_tokens"), raw.get("cached_input_tokens"),
+                  raw.get("cached_content_token_count")):
+        if value is not None:
+            result["cached_input_tokens"] = value
+            break
+    if raw.get("cache_creation_input_tokens") is not None:
+        result["cache_creation_input_tokens"] = raw["cache_creation_input_tokens"]
+    return result
+
+
 class AttemptAccounting:
     """Scoped to a logical model operation; candidate/continuation calls share IDs."""
 
@@ -66,6 +82,8 @@ class AttemptAccounting:
             reserve["cost_micro_usd"] = math.ceil(
                 reserve["input_tokens"] * pricing[0] + reserve["output_tokens"] * pricing[1]
             )
+        from open_deep_research.agentscope_runtime.runtime_limits import call_context
+
         record = await self.session.store.begin_operation(
             self.session.lease, key, "model_attempt",
             {"model": getattr(model, "model", None),
@@ -74,6 +92,9 @@ class AttemptAccounting:
             observation={"task_id": self.session.task_id.get(),
                          "stage": self.session.stage.get().rsplit(":", 1)[0],
                          "agent_role": self.key.split(":model:")[-1].split(":")[0],
+                         "logical_call_id": call_context.get().get("logical_call_id") or self.key,
+                         "purpose": call_context.get().get("purpose"),
+                         "parent_tool_call_id": call_context.get().get("parent_tool_call_id"),
                          "model": getattr(model, "model", None)},
         )
         if record["replayed"]:
@@ -108,7 +129,8 @@ class AttemptAccounting:
             usage = getattr(response, "usage", None)
             cached = getattr(usage, "cache_input_tokens", None)
             raw_usage = metadata.get("raw_usage") or (getattr(usage, "metadata", None) or {}).get("raw_usage") or {}
-            cached = raw_usage.get("cached_input_tokens", cached if cached else None)
+            facts = metadata.get("cache_usage") or cache_usage(raw_usage)
+            cached = facts.get("cached_input_tokens", cached if cached else None)
             receipt = {
                 "status": "completed" if complete else "failed",
                 "operation_id": key,
@@ -116,7 +138,7 @@ class AttemptAccounting:
                 "usage_status": "reported" if observed is not None and len(observed) == 2 and (complete or billed is not None) else "estimated",
                 # Native ChatUsage defaults to zero; absent provider facts stay unknown.
                 "cached_input_tokens": cached,
-                "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None) or None,
+                "cache_creation_input_tokens": facts.get("cache_creation_input_tokens", getattr(usage, "cache_creation_input_tokens", None) or None),
                 "response_cost_usd": cost,
                 "cost_status": "reported" if cost is not None and complete else "estimated" if pricing is not None or cost is not None else "unknown",
                 "pricing_micro_usd": pricing,

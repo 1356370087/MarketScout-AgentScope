@@ -260,3 +260,37 @@ async def test_otlp_http_exports_to_collector_and_langfuse_with_no_content(monke
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+@pytest.mark.parametrize("cached", [None, 0, 4])
+async def test_billing_correction_preserves_provider_cache_facts(store, cached):  # noqa: F811 - injected fixture
+    state, lease = await create(store)
+    await store.begin_operation(lease, "cache-bill", "gateway:model", {}, reserve={"model_calls": 1})
+    measured = {"input_tokens": 10, "output_tokens": 2}
+    if cached is not None:
+        measured.update(cached_input_tokens=cached, cache_creation_input_tokens=3)
+    await store.commit_operation(lease, "cache-bill", {"status": "completed", "outcome": {"usage": measured}},
+        actual={"model_calls": 1, "input_tokens": 10, "output_tokens": 2, "cost_micro_usd": 5})
+    await store.reconcile_model_usage(lease, "cache-bill", receipt_id="invoice", input_tokens=10, output_tokens=2, cost_micro_usd=4)
+    result = await project_usage(store, state.run_id, "owner", empty_response())
+    cache = result["cache_reporting"]
+    assert cache["status"] == ("not_reported" if cached is None else "reported")
+    assert cache["cached_input_tokens"] == (cached or 0)
+    assert cache["cache_creation_input_tokens"] == (None if cached is None else 3)
+    assert cache["non_cached_input_tokens"] == (None if cached is None else 10 - cached)
+    assert result["totals"]["reported"]["input_tokens"] == 10
+    assert result["totals"]["cost"]["estimated_cost_micro_usd"] == 4
+    assert result["totals"]["calls"]["attempts"] == 1
+
+async def test_terminal_run_duration_uses_persisted_end_time(store, monkeypatch):  # noqa: F811 - injected fixture
+    import time
+
+    state, lease = await create(store)
+    state.application["created_at"] = time.time() - 10
+    state.status = "completed"
+    await store.save(lease, state)
+    first = await project_usage(store, state.run_id, "owner", empty_response())
+    assert first["duration_ms"] >= 10_000
+    current = time.time()
+    monkeypatch.setattr(time, "time", lambda: current + 10_000)
+    second = await project_usage(store, state.run_id, "owner", empty_response())
+    assert second["duration_ms"] == first["duration_ms"]

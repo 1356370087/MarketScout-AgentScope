@@ -19,6 +19,8 @@ from open_deep_research.documents import repository, retrieval, versioning
 from open_deep_research.documents.chunking import DocumentChunk
 from open_deep_research.documents.settings import get_document_settings
 from open_deep_research.documents.storage import StagedUpload
+from open_deep_research.knowledge import search_service
+from open_deep_research.models.credentials_context import bind_run_key, reset_run_key
 
 _TEST_DSN = os.environ.get("IAM_TEST_DATABASE_URL", "")
 
@@ -47,9 +49,13 @@ def _chunk(ordinal: int, heading: str, text: str) -> DocumentChunk:
 
 
 async def _search(owner: str, doc_id: str, *, run_id: str | None = None):
-    return await retrieval.search_document_chunks(
-        owner_id=owner, document_ids=[doc_id], query="定价 单价", run_id=run_id,
-    )
+    token = bind_run_key("fixture-run") if run_id else None
+    try:
+        return await retrieval.search_document_chunks(owner_id=owner, document_ids=[doc_id], query="定价 单价", run_id=run_id)
+    finally:
+        if token is not None:
+            reset_run_key(token)
+
 
 
 async def _finish_jobs(doc_id: str) -> None:
@@ -80,7 +86,8 @@ async def test_publish_lifecycle_gates_retrieval_and_freezes_runs(
     async def fake_embed(texts, settings, **_kwargs):
         return [VEC for _ in texts]
 
-    monkeypatch.setattr(retrieval, "embed_texts", fake_embed)
+    monkeypatch.setattr(search_service, "embed_texts", fake_embed)
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "fixture-service")
     settings = get_document_settings()
     document, deduplicated = await repository.create_document(
         owner,

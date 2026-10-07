@@ -16,23 +16,31 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from open_deep_research.agentscope_runtime.models import ModelFactory
-from open_deep_research.configuration import Configuration, SearchAPI
+from open_deep_research.agentscope_runtime.search_providers import (
+    SearchResources,
+    SearchService,
+    deduplicate_sources,
+    parse_anthropic_search,
+    parse_openai_search,
+)
+from open_deep_research.configuration import Configuration
 from open_deep_research.prompts import summarize_webpage_prompt
-from open_deep_research.sandbox.policy import network_policy_mode
+from open_deep_research.tools.availability import (
+    provider_search_enabled,
+    search_enabled,
+)
 from open_deep_research.tools.base import (
-    Tool,
-    ToolContext,
     ToolOrigin,
     ToolResult,
     build_tool,
 )
+from open_deep_research.web.models import SearchRequest
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +66,7 @@ class SearchQueries(BaseModel):
     Explicit tool, URL and source restrictions always take precedence.
     """
 
-    queries: list[str] = Field(min_length=1)
-
-
-def provider_search_enabled(config: dict[str, Any], search_api: SearchAPI) -> bool:
-    """原生可用性谓词：legacy/shadow 模式 + 分支匹配 + 非离线网络。"""
-    configurable = Configuration.from_runnable_config(config)
-    if configurable.web_pipeline_mode == "enforced":
-        return False
-    if configurable.search_api != search_api:
-        return False
-    return network_policy_mode(configurable) != "offline"
+    queries: list[str] = Field(min_length=1, max_length=24)
 
 
 class NativeSummarizer:
@@ -92,9 +90,21 @@ class NativeSummarizer:
         async def handler(current_model: Any, messages: Any, **_: Any):
             from agentscope.message import UserMsg
 
-            return await current_model.generate_structured_output(
-                [UserMsg("user", prompt)], SummaryOutput
-            )
+            try:
+                return await current_model.generate_structured_output(
+                    [UserMsg("user", prompt)], SummaryOutput
+                )
+            except asyncio.CancelledError:
+                from open_deep_research.agentscope_runtime.gateway import (
+                    SandboxChatModel,
+                )
+                from open_deep_research.agentscope_runtime.recovery_store import (
+                    UnknownOperation,
+                )
+
+                if isinstance(current_model, SandboxChatModel):
+                    raise UnknownOperation("web_summary_outcome_unknown") from None
+                raise
 
         try:
             middleware = self.factory.policy_middleware("summarization")
@@ -111,353 +121,207 @@ class NativeSummarizer:
                 "Summarization timed out after %s seconds; content quarantined", timeout
             )
             return _QUARANTINE_TIMEOUT
-        except Exception as exc:  # noqa: BLE001 - external content remains quarantined
+        except Exception as exc:  # deterministic content fallback only  # noqa: BLE001 - normalize external failures after preserving runtime control
+            from open_deep_research.agentscope_runtime.search_providers import (
+                preserve_control_error,
+            )
+
+            preserve_control_error(exc)
             logger.warning(
                 "Summarization failed; external content quarantined: %s", str(exc)[:200]
             )
             return _QUARANTINE_FAILED
 
 
-def parse_openai_search(response: Any) -> tuple[str, list[dict[str, str]]]:
-    """Extract synthesized text and URL citations from OpenAI Responses."""
-    text = str(getattr(response, "output_text", "") or "")
-    sources: list[dict[str, str]] = []
-    for item in getattr(response, "output", None) or []:
-        if getattr(item, "type", None) != "message":
-            continue
-        for part in getattr(item, "content", None) or []:
-            for annotation in getattr(part, "annotations", None) or []:
-                url = getattr(annotation, "url", None)
-                if url:
-                    sources.append(
-                        {
-                            "url": str(url),
-                            "title": str(getattr(annotation, "title", None) or url),
-                        }
-                    )
-    return text, sources
-
-
-def parse_anthropic_search(response: Any) -> tuple[str, list[dict[str, str]]]:
-    """Extract synthesized text and sources from Anthropic web-search blocks."""
-    text_parts: list[str] = []
-    sources: list[dict[str, str]] = []
-    for block in getattr(response, "content", None) or []:
-        block_type = getattr(block, "type", None)
-        if block_type == "text":
-            text_parts.append(str(getattr(block, "text", "") or ""))
-        elif block_type == "web_search_tool_result":
-            for result in getattr(block, "content", None) or []:
-                url = getattr(result, "url", None)
-                if url:
-                    sources.append(
-                        {
-                            "url": str(url),
-                            "title": str(getattr(result, "title", None) or url),
-                        }
-                    )
-    return "\n".join(text_parts), sources
-
-
-def deduplicate_sources(sources: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Deduplicate sources by URL while preserving discovery order."""
-    seen: set[str] = set()
-    unique: list[dict[str, str]] = []
-    for source in sources:
-        if source["url"] not in seen:
-            seen.add(source["url"])
-            unique.append(source)
-    return unique
-
-
-def _build_openai_client(config: dict[str, Any]):
-    import httpx
-    from openai import AsyncOpenAI
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    configurable = Configuration.from_runnable_config(config)
-    return AsyncOpenAI(
-        api_key=resolve_named_api_key("OPENAI_API_KEY", config),
-        timeout=httpx.Timeout(60.0),
-        max_retries=0,
-        base_url=configurable.openai_base_url or None,
-    )
-
-
-def _build_anthropic_client(config: dict[str, Any]):
-    import httpx
-    from anthropic import AsyncAnthropic
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    return AsyncAnthropic(
-        api_key=resolve_named_api_key("ANTHROPIC_API_KEY", config),
-        timeout=httpx.Timeout(60.0),
-        max_retries=0,
-    )
-
-
-def _build_tavily_client(config: dict[str, Any]):
-    from tavily import AsyncTavilyClient
-
-    from open_deep_research.models.resolution import resolve_named_api_key
-
-    return AsyncTavilyClient(api_key=resolve_named_api_key("TAVILY_API_KEY", config))
-
-
-async def _format_synthesized_search(
-    summarizer: NativeSummarizer,
-    synthesized_text: str,
-    sources: list[dict[str, str]],
-    config: dict[str, Any],
-) -> str:
-    if not sources and not synthesized_text.strip():
-        return _NO_RESULTS
-    configurable = Configuration.from_runnable_config(config)
-    summary = await summarizer.summarize(
-        synthesized_text[: configurable.max_content_length] if synthesized_text else "",
-        config,
-    )
-    output = "Search results: \n"
-    for index, source in enumerate(sources, 1):
-        output += (
-            f"\n\n--- SOURCE {index}: {source['title']} ---\n" f"URL: {source['url']}\n"
+async def format_search_batch(batch, summarizer, config):
+    """Keep the legacy summary presentation over the shared discovery contract."""
+    if not batch.candidates and not batch.syntheses:
+        return (
+            "Search failed: " + "; ".join(batch.errors) if batch.errors else _NO_RESULTS
         )
-    return output + f"\n\nSUMMARY:\n{summary}\n\n" + ("-" * 80) + "\n"
+    cfg = Configuration.from_runnable_config(config)
+
+    async def summarize(item):
+        return (
+            await summarizer.summarize(
+                item.content_hint[: cfg.max_content_length], config
+            )
+            if item.content_hint
+            else item.snippet
+        )
+
+    summaries = await asyncio.gather(*(summarize(item) for item in batch.candidates))
+    output = "Search results:\n"
+    for index, (item, summary) in enumerate(zip(batch.candidates, summaries), 1):
+        output += f"\n\n--- SOURCE {index}: {item.title} ---\nURL: {item.canonical_url}\n\nSUMMARY:\n{summary}\n"
+    if batch.syntheses:
+        text = "\n\n".join(item.text for item in batch.syntheses)
+        output += "\nSUMMARY:\n" + await summarizer.summarize(
+            text[: cfg.max_content_length], config
+        )
+    if batch.errors:
+        output += "\nProvider diagnostics: " + "; ".join(batch.errors)
+    return output
 
 
-def tavily_search_tool(
-    run_config_getter: Callable[[], dict[str, Any]],
-    summarizer: NativeSummarizer,
+def _search_tool(
+    name,
+    run_config_getter,
+    factory,
     *,
-    client_factory: Callable[[dict[str, Any]], Any] = _build_tavily_client,
-    description: str = "Search the web with Tavily and return a multi-source research digest.",
-    prompt: str = (
-        "Use tavily_search in legacy or shadow web pipeline modes. Start broad, "
-        "inspect the returned sources, then refine only when the evidence leaves "
-        "a concrete gap."
-    ),
-) -> Tool:
-    """并行搜索 → URL 去重 → 原生摘要隔离的 Tavily 工具。"""
+    resources=None,
+    client_factories=None,
+    ledger=None,
+    browser_tools=(),
+    summarizer=None,
+):
+    from open_deep_research.agentscope_runtime.web_tools import WebFetchLedger
 
-    async def _no_summary() -> None:
-        return None
+    ledger = ledger or WebFetchLedger()
+    summarizer = summarizer or NativeSummarizer(factory)
 
-    async def call(input: SearchQueries, context: ToolContext, progress=None):
-        config = context.config
-        client = client_factory(config)
-        responses = await asyncio.gather(
-            *[
-                client.search(
-                    query,
-                    max_results=5,
-                    topic="general",
-                    include_raw_content=True,
-                )
-                for query in input.queries
-            ]
+    async def call(input, context, progress=None):
+        from open_deep_research.agentscope_runtime.web_progress import WebProgress
+        from open_deep_research.agentscope_runtime.web_shadow import evaluate_shadow
+        from open_deep_research.agentscope_runtime.web_tools import execution_config
+
+        config = execution_config(context)
+        emitter = progress or WebProgress(
+            config,
+            task_id=str(config.get("metadata", {}).get("task_id") or "task"),
+            tool_call_id=context.tool_call_id,
+            operation_id=context.operation_id,
+            tool_name=name,
         )
-        unique_results: dict[str, dict] = {}
-        for response in responses:
-            for result in response["results"]:
-                unique_results.setdefault(
-                    result["url"], {**result, "query": response["query"]}
-                )
-        configurable = Configuration.from_runnable_config(config)
-        summaries = await asyncio.gather(
-            *[
-                summarizer.summarize(
-                    result["raw_content"][: configurable.max_content_length],
-                    config,
-                )
-                if result.get("raw_content")
-                else _no_summary()
-                for result in unique_results.values()
-            ]
-        )
-        if not unique_results:
-            return ToolResult(output=_NO_RESULTS)
-        output = "Search results: \n\n"
-        for index, ((url, result), summary) in enumerate(
-            zip(unique_results.items(), summaries), 1
-        ):
-            content = result.get("content", "") if summary is None else summary
-            output += f"\n\n--- SOURCE {index}: {result['title']} ---\n"
-            output += f"URL: {url}\n\nSUMMARY:\n{content}\n\n"
-            output += "\n\n" + "-" * 80 + "\n"
-        return ToolResult(output=output)
+        clients = resources or SearchResources(client_factories)
+        try:
+            request = SearchRequest(
+                objective=" ".join(input.queries),
+                queries=input.queries[:3],
+                candidate_limit=min(
+                    100,
+                    max(
+                        Configuration.from_runnable_config(
+                            config
+                        ).search_candidate_limit,
+                        5 * len(input.queries),
+                    ),
+                ),
+            )
+            request = request.model_copy(update={"queries": input.queries})
+            batch = await SearchService(
+                config, factory, clients, progress=emitter, legacy=True
+            ).discover(request)
+            output = await format_search_batch(batch, summarizer, config)
+            diagnostics, fetches = await evaluate_shadow(
+                config,
+                request,
+                batch,
+                factory,
+                clients,
+                ledger,
+                browser_tools=browser_tools,
+                progress=emitter,
+            )
+            return ToolResult(
+                output=output,
+                metadata={
+                    "physical_fetches": fetches,
+                    "transport_failed_fetches": fetches
+                    - diagnostics.get("charged_fetch_calls", fetches),
+                    "web_diagnostics": {
+                        "providers": [p.model_dump() for p in batch.provider_results],
+                        "shadow": diagnostics,
+                    },
+                },
+            )
+        finally:
+            if resources is None:
+                await clients.aclose()
 
     return build_tool(
-        name="tavily_search",
-        description=description,
+        name=name,
+        description="Search configured web providers in parallel and return cited summaries.",
         input_schema=SearchQueries,
         call=call,
         origin=ToolOrigin.SEARCH,
-        retryable=True,
         concurrency_safe=True,
-        prompt=prompt,
-        is_enabled=lambda config: provider_search_enabled(config, SearchAPI.TAVILY),
+        retryable=False,
+        prompt=f"Use {name} for discovery. Start broad when unconstrained; refine only when the evidence leaves a concrete gap. Search summaries and snippets are discovery hints. Fetch original sources for report evidence.",
+        is_enabled=search_enabled,
+    )
+
+
+def tavily_search_tool(run_config_getter, summarizer, *, client_factory=None, **kwargs):
+    """Compatibility alias for persisted Tavily calls."""
+    return _search_tool(
+        "tavily_search",
+        run_config_getter,
+        getattr(summarizer, "factory", None),
+        summarizer=summarizer,
+        client_factories={"tavily": client_factory} if client_factory else None,
     )
 
 
 def openai_web_search_tool(
-    run_config_getter: Callable[[], dict[str, Any]],
-    summarizer: NativeSummarizer,
-    *,
-    client_factory: Callable[[dict[str, Any]], Any] = _build_openai_client,
-    description: str = "Search the web using OpenAI native web search.",
-    prompt: str = (
-        "Use openai_web_search in legacy or shadow web pipeline modes. The tool "
-        "runs server-side web search and returns a cited digest."
-    ),
-) -> Tool:
-    """OpenAI Responses 服务端搜索 → URL 去重 → 摘要格式化。"""
-
-    async def call(input: SearchQueries, context: ToolContext, progress=None):
-        config = context.config
-        configurable = Configuration.from_runnable_config(config)
-        client = client_factory(config)
-        model = configurable.research_model
-        if model and ":" in model and model.split(":", 1)[0] == "openai":
-            model = model.split(":", 1)[1]
-        responses = await asyncio.gather(
-            *[
-                client.responses.create(
-                    model=model,
-                    input=query,
-                    tools=[{"type": "web_search_preview"}],
-                )
-                for query in input.queries
-            ]
-        )
-        text_parts: list[str] = []
-        all_sources: list[dict[str, str]] = []
-        for response in responses:
-            text, sources = parse_openai_search(response)
-            if text:
-                text_parts.append(text)
-            all_sources.extend(sources)
-        synthesized = "\n\n".join(text_parts)
-        capped = deduplicate_sources(all_sources)[: 5 * max(1, len(input.queries))]
-        return ToolResult(
-            output=await _format_synthesized_search(
-                summarizer, synthesized, capped, config
-            )
-        )
-
-    return build_tool(
-        name="openai_web_search",
-        description=description,
-        input_schema=SearchQueries,
-        call=call,
-        origin=ToolOrigin.SEARCH,
-        retryable=True,
-        concurrency_safe=True,
-        prompt=prompt,
-        is_enabled=lambda config: provider_search_enabled(config, SearchAPI.OPENAI),
+    run_config_getter, summarizer, *, client_factory=None, **kwargs
+):
+    """Compatibility alias for persisted OpenAI calls."""
+    return _search_tool(
+        "openai_web_search",
+        run_config_getter,
+        getattr(summarizer, "factory", None),
+        summarizer=summarizer,
+        client_factories={"openai": client_factory} if client_factory else None,
     )
 
 
 def anthropic_web_search_tool(
-    run_config_getter: Callable[[], dict[str, Any]],
-    summarizer: NativeSummarizer,
-    *,
-    client_factory: Callable[[dict[str, Any]], Any] = _build_anthropic_client,
-    description: str = "Search the web using Anthropic native web search.",
-    prompt: str = (
-        "Use anthropic_web_search in legacy or shadow web pipeline modes. The "
-        "tool runs server-side web search and returns a cited digest."
-    ),
-) -> Tool:
-    """Anthropic 服务端 web_search 工具 → URL 去重 → 摘要格式化。"""
-
-    async def call(input: SearchQueries, context: ToolContext, progress=None):
-        config = context.config
-        configurable = Configuration.from_runnable_config(config)
-        client = client_factory(config)
-        model = configurable.research_model
-        if model and ":" in model and model.split(":", 1)[0] == "anthropic":
-            model = model.split(":", 1)[1]
-        responses = await asyncio.gather(
-            *[
-                client.messages.create(
-                    model=model,
-                    max_tokens=configurable.research_model_max_tokens,
-                    messages=[{"role": "user", "content": query}],
-                    tools=[
-                        {
-                            "type": "web_search_20250305",
-                            "name": "web_search",
-                            "max_uses": 5,
-                        }
-                    ],
-                )
-                for query in input.queries
-            ]
-        )
-        text_parts: list[str] = []
-        all_sources: list[dict[str, str]] = []
-        for response in responses:
-            text, sources = parse_anthropic_search(response)
-            if text:
-                text_parts.append(text)
-            all_sources.extend(sources)
-        synthesized = "\n\n".join(text_parts)
-        capped = deduplicate_sources(all_sources)[: 5 * max(1, len(input.queries))]
-        return ToolResult(
-            output=await _format_synthesized_search(
-                summarizer, synthesized, capped, config
-            )
-        )
-
-    return build_tool(
-        name="anthropic_web_search",
-        description=description,
-        input_schema=SearchQueries,
-        call=call,
-        origin=ToolOrigin.SEARCH,
-        retryable=True,
-        concurrency_safe=True,
-        prompt=prompt,
-        is_enabled=lambda config: provider_search_enabled(config, SearchAPI.ANTHROPIC),
+    run_config_getter, summarizer, *, client_factory=None, **kwargs
+):
+    """Compatibility alias for persisted Anthropic calls."""
+    return _search_tool(
+        "anthropic_web_search",
+        run_config_getter,
+        getattr(summarizer, "factory", None),
+        summarizer=summarizer,
+        client_factories={"anthropic": client_factory} if client_factory else None,
     )
 
 
 def search_provider_tools(
-    run_config_getter: Callable[[], dict[str, Any]],
-    factory: ModelFactory,
+    run_config_getter,
+    factory,
     *,
-    client_factories: dict[str, Callable[[dict[str, Any]], Any]] | None = None,
-) -> list[Tool]:
-    """按 ``search_api`` 分支返回当前可用的原生搜索工具（none 返回空）。"""
-    summarizer = NativeSummarizer(factory)
-    client_factories = client_factories or {}
+    client_factories=None,
+    resources=None,
+    ledger=None,
+    browser_tools=(),
+):
+    """Expose one unified tool on new runs; preserve old frozen tool names."""
     config = run_config_getter()
-    search_api = Configuration.from_runnable_config(config).search_api
-    builders = {
-        SearchAPI.TAVILY: tavily_search_tool,
-        SearchAPI.OPENAI: openai_web_search_tool,
-        SearchAPI.ANTHROPIC: anthropic_web_search_tool,
-    }
-    builder = builders.get(search_api)
-    if builder is None:
+    cfg = Configuration.from_runnable_config(config)
+    if not cfg.resolved_search_providers:
         return []
-    factory_key = {
-        SearchAPI.TAVILY: "tavily",
-        SearchAPI.OPENAI: "openai",
-        SearchAPI.ANTHROPIC: "anthropic",
-    }[search_api]
+    version = config.get("metadata", {}).get("run_config_schema_version", 16)
+    name = (
+        {
+            "tavily": "tavily_search",
+            "openai": "openai_web_search",
+            "anthropic": "anthropic_web_search",
+        }.get(cfg.search_api.value, "web_search")
+        if version < 16
+        else "web_search"
+    )
     return [
-        builder(
+        _search_tool(
+            name,
             run_config_getter,
-            summarizer,
-            client_factory=client_factories.get(factory_key)
-            or {
-                "tavily": _build_tavily_client,
-                "openai": _build_openai_client,
-                "anthropic": _build_anthropic_client,
-            }[factory_key],
+            factory,
+            resources=resources,
+            client_factories=client_factories,
+            ledger=ledger,
+            browser_tools=browser_tools,
         )
     ]
 
@@ -466,12 +330,9 @@ __all__ = [
     "NativeSummarizer",
     "SearchQueries",
     "SummaryOutput",
-    "anthropic_web_search_tool",
     "deduplicate_sources",
-    "openai_web_search_tool",
     "parse_anthropic_search",
     "parse_openai_search",
     "provider_search_enabled",
     "search_provider_tools",
-    "tavily_search_tool",
 ]

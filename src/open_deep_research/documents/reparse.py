@@ -23,7 +23,7 @@ from .embeddings import embed_texts
 from .identity import document_owner_id
 from .repository import DocumentConflictError
 from .retrieval import locator_dict
-from .settings import DocumentSettings
+from .settings import DocumentSettings, get_document_settings
 from .storage import resolve_storage_key
 from .structuring import StructuredUnit
 
@@ -68,6 +68,8 @@ async def queue_scoped_reparse(
         )
         if not source:
             raise DocumentConflictError("reparse_source_not_published")
+        if locator_dict(source["index_profile"]) != get_document_settings().index_profile:
+            raise DocumentConflictError("knowledge_index_profile_mismatch: full reindex required")
         active = await connection.fetchval(
             """SELECT EXISTS(
                  SELECT 1 FROM research_document_jobs
@@ -104,15 +106,16 @@ async def queue_scoped_reparse(
 
         generation_id = await connection.fetchval(
             """INSERT INTO research_document_generations
-               (document_id, version_id, metadata_snapshot, reparse_scope)
+               (document_id, version_id, metadata_snapshot, reparse_scope, index_profile)
                VALUES ($1::uuid, $2::uuid,
                        jsonb_set($3::jsonb, '{confirmed}', '{}'::jsonb),
-                       $4::jsonb)
+                       $4::jsonb, $5::jsonb)
                RETURNING id""",
             document_id,
             source["version_id"],
             _json_literal(locator_dict(source["metadata_snapshot"])),
             _json_literal(scope),
+            _json_literal(locator_dict(source["index_profile"])),
         )
 
         # Copy every unit with fresh ids; segments carry their vectors over.
@@ -215,6 +218,8 @@ async def execute_scoped_reparse(
     vectors. Replacements are planned and embedded first, then applied in a
     single transaction so a worker crash never leaves a half-replaced draft.
     """
+    if locator_dict(generation["index_profile"]) != settings.index_profile:
+        raise DocumentConflictError("knowledge_index_profile_mismatch: full reindex required")
     scope = locator_dict(generation["reparse_scope"]) if generation.get("reparse_scope") else {}
     pages = [int(page) for page in scope.get("pages") or []]
     sheets = [str(sheet) for sheet in scope.get("sheets") or []]

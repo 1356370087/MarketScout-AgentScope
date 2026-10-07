@@ -33,7 +33,7 @@ export function SourceDetail({ source, task, onTask, onFindCitation, onClose }: 
   return <section ref={detail} tabIndex={-1} className="source-detail" aria-label="来源详情">
     <header><h2>来源详情</h2>{onClose && <button className="ui-icon" type="button" aria-label="返回来源列表" onClick={onClose}><X size={16} /></button>}</header>
     <SourceCard source={source} />
-    <dl className="source-facts"><div><dt>所属任务</dt><dd>{task?.title || source.task_id || "尚未记录归属"}</dd></div>{source.chunk_id && <div><dt>资料位置</dt><dd>已关联文档片段</dd></div>}</dl>
+    <dl className="source-facts"><div><dt>所属任务</dt><dd>{task?.title || source.task_id || "尚未记录归属"}</dd></div>{source.chunk_id && <div><dt>资料位置</dt><dd>{source.locator || "已关联文档片段"}</dd></div>}{source.generation_id && <div><dt>发布代次</dt><dd>{source.generation_id}</dd></div>}</dl>
     <div className="source-relations">
       {task && source.task_id && onTask && <button className="secondary" type="button" onClick={() => onTask(source.task_id!)}><Bot size={15} />查看关联任务<ArrowUpRight size={14} /></button>}
       {onFindCitation && <button className="secondary" type="button" onClick={onFindCitation}><Link2 size={15} />在报告中查找引用</button>}

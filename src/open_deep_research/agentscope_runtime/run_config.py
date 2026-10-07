@@ -1,14 +1,16 @@
 """原生运行配置：复用既有校验/冻结算法，内部不传播 RunnableConfig。"""
 
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
 from open_deep_research.configuration import (
-    Configuration,
     RUN_CONFIG_SCHEMA_VERSION,
+    Configuration,
     freeze_run_config,
     frozen_run_config_values,
     run_config_fingerprint,
@@ -114,7 +116,7 @@ class RunConfig:
         contract = snapshot["contract"]
         if (
             contract.get("metadata", {}).get("run_config_schema_version")
-            not in {13, RUN_CONFIG_SCHEMA_VERSION}
+            not in {13, 14, 15, 16, RUN_CONFIG_SCHEMA_VERSION}
         ):
             raise ValueError("unsupported native frozen contract version")
         if not contract["metadata"].get("run_config_fingerprint"):

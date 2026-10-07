@@ -70,11 +70,15 @@ LEGACY_SANDBOX_HTTP_CONFIG_KEYS = frozenset(
 PROTECTED_HTTP_METADATA_KEYS = frozenset(
     {
         "owner",
+        "knowledge_manifest",
+        "selected_source_snapshots",
         "user_id",
         "approved_sensitive_tool_call_ids",
         "deployment_surface",
         "sandbox_gateway_authorized_hosts",
         "fetch_budget_extension",
+        "sql_fetch_grant",
+        "execution_deadline_at",
         "sandbox_egress_intent",
     }
 )

@@ -9,6 +9,8 @@ from typing import Any
 
 import asyncpg
 
+from open_deep_research.knowledge.authz import document_read_sql
+
 from .contracts import (
     DocumentChunkView,
     DocumentStatus,
@@ -223,7 +225,7 @@ async def list_documents(
     """List non-deleted owner documents with bounded filtering."""
     owner_id = document_owner_id(owner_id)
     pool = await get_document_pool()
-    clauses = ["owner_id=$1::uuid", "deleted_at IS NULL"]
+    clauses = [document_read_sql("$1", "research_documents"), "deleted_at IS NULL"]
     args: list[Any] = [owner_id]
     if query:
         args.append(f"%{query.strip()}%")
@@ -253,7 +255,7 @@ async def get_document(
     deleted = "" if include_deleted else " AND deleted_at IS NULL"
     async with pool.acquire() as connection:
         return await connection.fetchrow(
-            f"SELECT * FROM research_documents WHERE id=$1::uuid AND owner_id=$2::uuid{deleted}",
+            f"SELECT d.* FROM research_documents d WHERE d.id=$1::uuid AND {document_read_sql('$2')}{deleted}",
             document_id,
             owner_id,
         )
@@ -267,77 +269,50 @@ async def get_document_summary(
     return _summary(row) if row else None
 
 
-async def get_chunk(
-    owner_id: str, document_id: str, chunk_id: str
-) -> DocumentChunkView | None:
-    """Return one segment by id, including withdrawn history for old citations."""
+def _chunk_view(row) -> DocumentChunkView:
+    locator = locator_dict(row["locator"])
+    return DocumentChunkView(id=str(row["id"]), document_id=str(row["document_id"]),
+        generation_id=str(row["generation_id"]), version_no=row["version_no"],
+        generation_status=row["generation_status"], ordinal=int(row["ordinal"]),
+        locator=str(locator.get("source") or ""), location=locator,
+        heading=locator.get("heading"), text=row["index_text"])
+
+
+async def get_chunk(owner_id: str, document_id: str, chunk_id: str) -> DocumentChunkView | None:
+    """Read an exact published/historical segment using live base permissions."""
     owner_id = document_owner_id(owner_id)
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
-            """SELECT s.*, g.document_id AS document_id
-                 FROM research_document_segments s
-                 JOIN research_document_generations g ON g.id=s.generation_id
-                 JOIN research_documents d ON d.id=g.document_id
-                WHERE s.id=$1::uuid AND g.document_id=$2::uuid AND d.owner_id=$3::uuid""",
-            chunk_id,
-            document_id,
-            owner_id,
-        )
-    if not row:
+            f"""SELECT s.*, g.document_id, g.status AS generation_status, v.version_no
+                FROM research_document_segments s
+                JOIN research_document_generations g ON g.id=s.generation_id
+                JOIN research_document_versions v ON v.id=g.version_id
+                JOIN research_documents d ON d.id=g.document_id
+                WHERE s.id=$1::uuid AND d.id=$2::uuid AND {document_read_sql('$3')}
+                  AND g.published_at IS NOT NULL""", chunk_id, document_id, owner_id)
+    return _chunk_view(row) if row else None
+
+
+async def list_chunks(owner_id: str, document_id: str, *, limit: int = 200,
+                      offset: int = 0, generation_id: str | None = None) -> list[DocumentChunkView] | None:
+    """Page readable published segments; draft inspection uses review routes."""
+    if not await get_document(owner_id, document_id, include_deleted=True):
         return None
-    locator = locator_dict(row["locator"])
-    return DocumentChunkView(
-        id=str(row["id"]),
-        document_id=str(row["document_id"]),
-        ordinal=int(row["ordinal"]),
-        locator=str(locator.get("source") or ""),
-        heading=locator.get("heading"),
-        text=row["index_text"],
-    )
-
-
-async def list_chunks(
-    owner_id: str, document_id: str, *, limit: int = 200, offset: int = 0
-) -> list[DocumentChunkView] | None:
-    """List the current generation's segments, or the newest when unpublished."""
-    owner_id = document_owner_id(owner_id)
     pool = await get_document_pool()
     async with pool.acquire() as connection:
-        owned = await connection.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM research_documents WHERE id=$1::uuid AND owner_id=$2::uuid)",
-            document_id,
-            owner_id,
-        )
-        if not owned:
-            return None
         rows = await connection.fetch(
-            """SELECT s.*, g.document_id AS document_id
-                 FROM research_document_segments s
-                 JOIN research_document_generations g ON g.id=s.generation_id
-                 JOIN research_documents d ON d.id=g.document_id
-                WHERE g.document_id=$1::uuid
-                  AND s.generation_id=coalesce(
-                        d.current_generation_id,
-                        (SELECT newer.id FROM research_document_generations newer
-                          WHERE newer.document_id=g.document_id
-                          ORDER BY newer.created_at DESC LIMIT 1))
+            f"""SELECT s.*, g.document_id, g.status AS generation_status, v.version_no
+                FROM research_document_segments s
+                JOIN research_document_generations g ON g.id=s.generation_id
+                JOIN research_document_versions v ON v.id=g.version_id
+                JOIN research_documents d ON d.id=g.document_id
+                WHERE d.id=$1::uuid AND {document_read_sql('$5')}
+                  AND s.generation_id=coalesce($4::uuid,d.current_generation_id)
+                  AND g.published_at IS NOT NULL
                 ORDER BY s.ordinal LIMIT $2 OFFSET $3""",
-            document_id,
-            limit,
-            offset,
-        )
-    return [
-        DocumentChunkView(
-            id=str(row["id"]),
-            document_id=str(row["document_id"]),
-            ordinal=int(row["ordinal"]),
-            locator=locator_dict(row["locator"]).get("source") or "",
-            heading=locator_dict(row["locator"]).get("heading"),
-            text=row["index_text"],
-        )
-        for row in rows
-    ]
+            document_id, limit, offset, generation_id, document_owner_id(owner_id))
+    return [_chunk_view(row) for row in rows]
 
 
 async def retry_document(owner_id: str, document_id: str) -> DocumentSummary | None:
@@ -392,61 +367,38 @@ async def soft_delete_document(
         return row
 
 
-async def validate_selection(
-    owner_id: str, selection: SourceSelection
-) -> list[asyncpg.Record]:
-    """Validate selected material atomically and preserve request order.
+async def validate_selection(owner_id: str, selection: SourceSelection) -> list[dict[str, Any]]:
+    """Freeze the same authorized published scope used by knowledge search."""
+    from open_deep_research.knowledge.search_service import SearchRequest, resolve_scope
 
-    Knowledge-base and collection references expand server-side into their
-    linked documents (published generations bound by the same call), so a
-    selection entry count limit never caps the expanded corpus (KB-03).
-    """
-    owner_id = document_owner_id(owner_id)
-    document_ids = list(dict.fromkeys(selection.document_ids))
+    owner = document_owner_id(owner_id)
     pool = await get_document_pool()
+    if selection.document_ids:
+        async with pool.acquire() as connection:
+            explicit = await connection.fetch(
+                f"SELECT d.* FROM research_documents d WHERE d.id=ANY($1::uuid[]) "
+                f"AND {document_read_sql('$2')} AND d.deleted_at IS NULL",
+                selection.document_ids, owner)
+        if len(explicit) != len(set(selection.document_ids)):
+            raise KeyError("document_not_found")
+        if any(row["status"] != "ready" and not row["current_generation_id"] for row in explicit):
+            raise DocumentConflictError("document_not_ready")
+        if any(not row["current_generation_id"] for row in explicit) and selection.retrieval.version_mode == "current":
+            raise DocumentConflictError("document_not_published")
+    scope = await resolve_scope(SearchRequest(owner_id=owner_id, query="source selection",
+        kb_ids=selection.knowledge_base_ids, collection_ids=selection.collection_ids,
+        document_ids=selection.document_ids, **selection.retrieval.model_dump()))
+    if not scope["documents"]:
+        raise DocumentConflictError("source_selection_empty_or_unpublished")
+    by_id = {item["document_id"]: item for item in scope["documents"]}
     async with pool.acquire() as connection:
-        if selection.knowledge_base_ids or selection.collection_ids:
-            linked = await connection.fetch(
-                """SELECT DISTINCT l.document_id
-                     FROM knowledge_document_links l
-                     JOIN knowledge_bases kb ON kb.id=l.knowledge_base_id
-                    WHERE kb.owner_id=$1::uuid
-                      AND (l.knowledge_base_id=ANY($2::uuid[])
-                           OR l.collection_id=ANY($3::uuid[]))""",
-                owner_id,
-                selection.knowledge_base_ids,
-                selection.collection_ids,
-            )
-            document_ids.extend(
-                str(row["document_id"]) for row in linked
-            )
-            document_ids = list(dict.fromkeys(document_ids))
-        if not document_ids:
-            return []
         rows = await connection.fetch(
-            """SELECT * FROM research_documents
-               WHERE owner_id=$1::uuid AND id=ANY($2::uuid[]) AND deleted_at IS NULL""",
-            owner_id,
-            document_ids,
-        )
-    by_id = {str(row["id"]): row for row in rows}
-    if any(document_id not in by_id for document_id in document_ids):
-        raise KeyError("document_not_found")
-    not_ready = [
-        document_id
-        for document_id in document_ids
-        if by_id[document_id]["status"] != "ready"
-    ]
-    if not_ready:
-        raise DocumentConflictError("document_not_ready:" + ",".join(not_ready))
-    unpublished = [
-        document_id
-        for document_id in document_ids
-        if not by_id[document_id]["current_generation_id"]
-    ]
-    if unpublished:
-        raise DocumentConflictError("document_not_published:" + ",".join(unpublished))
-    return [by_id[document_id] for document_id in document_ids]
+            f"SELECT d.* FROM research_documents d WHERE d.id=ANY($1::uuid[]) AND {document_read_sql('$2')}",
+            list(by_id), owner)
+    if len(rows) != len(by_id):
+        raise KeyError("document_access_changed")
+    return [{**dict(row), "current_generation_id": by_id[str(row["id"])]["generation_id"],
+             "index_profile": by_id[str(row["id"])]["index_profile"]} for row in rows]
 
 
 async def run_source_document_ids(run_id: str) -> list[str]:

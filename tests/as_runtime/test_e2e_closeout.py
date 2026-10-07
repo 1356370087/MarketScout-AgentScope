@@ -22,8 +22,13 @@ pytestmark = pytest.mark.asyncio
 
 async def test_production_context_offload_preserves_history_and_rejects_stale_owner(store, tmp_path):
     import json
+
     from agentscope.message import UserMsg
-    from open_deep_research.agentscope_runtime.context import ResearchContextMiddleware, RunContextOffloader
+
+    from open_deep_research.agentscope_runtime.context import (
+        ResearchContextMiddleware,
+        RunContextOffloader,
+    )
     from open_deep_research.agentscope_runtime.recovery_store import FenceLost
 
     state, lease = await create(store)
@@ -45,9 +50,13 @@ async def test_production_context_offload_preserves_history_and_rejects_stale_ow
 async def test_creation_freezes_document_generation_and_default_proxy_budget(
     monkeypatch,
 ):
+    from unittest.mock import AsyncMock
+
     from open_deep_research.agentscope_runtime import production_resources as resources
     from open_deep_research.api.contracts import RunRequest
-    from open_deep_research.documents import database, repository
+    from open_deep_research.documents import database
+    from open_deep_research.documents.settings import get_document_settings
+    from open_deep_research.knowledge import research_assets, run_scope
     from tests.auth_helpers import research_principal
 
     async def validate(owner, selection):
@@ -57,6 +66,7 @@ async def test_creation_freezes_document_generation_and_default_proxy_budget(
                 "filename": "a.txt",
                 "sha256": "digest",
                 "current_generation_id": "generation-1",
+                "index_profile": get_document_settings().index_profile,
             }
         ]
 
@@ -79,7 +89,9 @@ async def test_creation_freezes_document_generation_and_default_proxy_budget(
             pass
 
     monkeypatch.setattr(database, "document_schema_available", lambda: True)
-    monkeypatch.setattr(repository, "validate_selection", validate)
+    monkeypatch.setattr(run_scope, "validate_selection", validate)
+    monkeypatch.setattr(run_scope, "load_profile", AsyncMock(return_value={"version": "fixture"}))
+    monkeypatch.setattr(research_assets, "freeze_assets", AsyncMock(return_value={"facts": [], "wiki": []}))
     monkeypatch.setattr(resources, "allowed_models", lambda cfg: ["fixture"])
     monkeypatch.setattr(resources, "LiteLLMModelCatalogClient", Catalog)
     monkeypatch.setattr(
@@ -116,7 +128,8 @@ async def test_document_selection_is_authorized_before_opening_model_credentials
         prepare_production_config,
     )
     from open_deep_research.api.contracts import RunRequest
-    from open_deep_research.documents import database, repository
+    from open_deep_research.documents import database
+    from open_deep_research.knowledge import run_scope
     from tests.auth_helpers import research_principal
 
     seen = []
@@ -126,7 +139,7 @@ async def test_document_selection_is_authorized_before_opening_model_credentials
         raise KeyError("foreign document")
 
     monkeypatch.setattr(database, "document_schema_available", lambda: True)
-    monkeypatch.setattr(repository, "validate_selection", validate)
+    monkeypatch.setattr(run_scope, "validate_selection", validate)
     request = RunRequest(
         messages=[{"role": "user", "content": "q"}],
         configurable={"model_backend": "litellm"},
@@ -284,7 +297,10 @@ async def test_supervisor_task_lifecycle_reaches_public_projection(store):
     from test_research_migration import Models, cfg, contract, tool_call
 
     from open_deep_research.agentscope_runtime.recovery import RecoverySession
-    from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
+    from open_deep_research.agentscope_runtime.research_agents import (
+        ResearchHandoff,
+        Supervisor,
+    )
     from open_deep_research.events.public import PublicEvent, project_public_events
 
     state, lease = await create(store)

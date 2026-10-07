@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import jsonschema
 from contextlib import aclosing, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, fields, is_dataclass
 from uuid import NAMESPACE_URL, uuid5
 
+import jsonschema
 from agentscope.message import Msg, UserMsg
 from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatResponse, ChatUsage, FinishedReason, StructuredResponse
@@ -363,7 +362,6 @@ class RecoverySession:
             }
 
         async def invoke():
-            from open_deep_research.agentscope_runtime.native_context import ContextSummaryFailed
             from open_deep_research.agentscope_runtime.gateway import (
                 GatewayCallError,
                 gateway_operation_scope,
@@ -372,6 +370,9 @@ class RecoverySession:
                 AttemptAccounting,
                 current_accounting,
             )
+            from open_deep_research.agentscope_runtime.native_context import (
+                ContextSummaryFailed,
+            )
 
             accounting = (
                 AttemptAccounting(self, key, reserve, pricing)
@@ -379,7 +380,16 @@ class RecoverySession:
             )
             token = current_accounting.set(accounting)
             try:
-                with gateway_operation_scope(key):
+                from open_deep_research.agentscope_runtime.runtime_limits import (
+                    attributed,
+                    call_context,
+                )
+
+
+                with gateway_operation_scope(key), attributed(
+                    purpose=(request_details or {}).get("purpose") or (call_context.get().get("purpose") if not str(call_context.get().get("purpose", "")).startswith("tool:") else None) or role,
+                    logical_call_id=call_context.get().get("logical_call_id") or key,
+                ):
                     try:
                         result = await invoke_response()
                     except ContextSummaryFailed as exc:
@@ -389,7 +399,7 @@ class RecoverySession:
                             "codec": "agentscope-failed-summary-v1", "framework": "2.0.8",
                             "error_type": str(exc), "usage_details": exc.usage_details,
                         }
-                    except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, GatewayCallError) as exc:
+                    except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, GatewayCallError, ModelOutputProtocolError) as exc:
                         known_output_failure = not isinstance(exc, GatewayCallError) or (
                             not exc.uncertain and str(exc) in {"structured_output_missing", "structured_output_truncated"}
                         )
@@ -447,7 +457,9 @@ class RecoverySession:
         if result.get("codec") == "agentscope-invalid-judge-v1":
             raise ModelOutputProtocolError(result["error"])
         if result.get("codec") == "agentscope-failed-summary-v1":
-            from open_deep_research.agentscope_runtime.native_context import ContextSummaryFailed
+            from open_deep_research.agentscope_runtime.native_context import (
+                ContextSummaryFailed,
+            )
             raise ContextSummaryFailed(result["error_type"], result.get("usage_details"))
         if (
             result.get("codec") != "agentscope-response-v1"
@@ -498,6 +510,7 @@ class RecoverySession:
                 result.error
                 and not safe
                 and result.error.error_type.value not in rejected_before_execution
+                and not (tool.name in GATEWAY_WEB_TOOLS and result.confirmed_outcome)
             ):
                 # A failed response does not prove that an external write failed.
                 await self.store.begin_operation(
@@ -521,6 +534,11 @@ class RecoverySession:
         # Sensitive reads still pass governance on execution; they do not have
         # the unknown external-write effect that requires quarantine.
         safe = tool.effect in {ToolEffect.READ_ONLY, ToolEffect.SENSITIVE_READ} or tool.supports_idempotency
+        from open_deep_research.agentscope_runtime.gateway_ledger import (
+            GATEWAY_WEB_TOOLS,
+        )
+        if tool.name in GATEWAY_WEB_TOOLS:
+            safe = False
         # 远区派发的工具由 Gateway 侧统一计费；宿主回执不再重复预留 tool_calls。
         reserve = {"tool_calls": 1} if bill else None
         if bill and tool.name in {"fetch_url", "fetch_webpage", "web_research"}:
@@ -538,7 +556,7 @@ class RecoverySession:
             physical = metadata.get("physical_fetches")
             if "fetch_calls" in actual and physical is not None:
                 # 实测物理抓取数；缺失时保持预留值，不当作零。
-                actual["fetch_calls"] = int(physical)
+                actual["fetch_calls"] = max(0, int(physical) - int(metadata.get("transport_failed_fetches", 0)))
             return actual
 
         value = await self.operation(
@@ -555,7 +573,7 @@ class RecoverySession:
         )
         return GovernedToolCallResult(
             ToolOutcomeMessage(**value["message"]),
-            ToolResult(output=value["output"]) if value["has_result"] else None,
+            ToolResult(output=value["output"], metadata=value.get("tool_metadata")) if value["has_result"] else None,
             ToolError.model_validate(value["error"]) if value["error"] else None,
         )
 

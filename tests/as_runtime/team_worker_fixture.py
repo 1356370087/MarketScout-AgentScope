@@ -71,7 +71,7 @@ class Model(ScriptedModel):
 
 
 class Factory:
-    run = SimpleNamespace(get=lambda name: {})
+    run = SimpleNamespace(get=lambda name: {}, compatibility_projection=lambda: {"metadata": {"run_config_schema_version": 17}})
 
     def __init__(self, slow=False):
         self.slow = slow

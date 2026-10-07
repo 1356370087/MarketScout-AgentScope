@@ -99,9 +99,20 @@ async def embed_texts(
     vectors: list[list[float]] = []
     for start in range(0, len(texts), settings.embedding_batch_size):
         batch = list(texts[start : start + settings.embedding_batch_size])
-        response = await client.embeddings.create(
-            model=settings.embedding_model, input=batch
+        from open_deep_research.knowledge.accounting import (
+            reserve_attempt,
+            settle_attempt,
         )
+
+        attempt = await reserve_attempt("embedding", settings.embedding_model) if operation == "knowledge_query" else None
+        try:
+            response = await client.embeddings.create(model=settings.embedding_model, input=batch)
+        except BaseException as error:
+            await settle_attempt(attempt, error=error)
+            raise
+        usage = getattr(response, "usage", None)
+        await settle_attempt(attempt, usage={"input_tokens": usage.prompt_tokens, "output_tokens": 0}
+                             if usage is not None else None)
         ordered = sorted(response.data, key=lambda item: item.index)
         for item in ordered:
             vector = list(item.embedding)

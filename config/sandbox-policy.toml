@@ -21,6 +21,9 @@ deny_write = []
 [profiles.research-gateway-only.network]
 mode = "gateway-only"
 allow_domains = []
+# 启用 Web 搜索时，按实际渠道配置服务域名：api.tavily.com、www.bing.com、
+# api.search.brave.com；使用外部提取时另需 api.firecrawl.dev 或 api.tavily.com。
+# 服务域名的准入不代表搜索结果网页获准访问，网页仍按来源边界和出网审批处理。
 deny_domains = []
 allow_ports = [80, 443]
 # HTTP 代理逐请求校验方法；默认禁止 CONNECT。显式加入 CONNECT 会授权透明 TCP/TLS 隧道，无法限制隧道内的 HTTP 方法。
@@ -44,9 +47,9 @@ deny = ["*"]
 
 [profiles.research-gateway-only.tools]
 # 团队写操作仅修改当前研究团队的任务与消息，仍由宿主身份和任务归属校验。
-# 精确允许已选企业资料的检索；仍校验资料所有权、冻结版本与工具权限。
+# 精确允许已选企业资料、已发布事实和 Wiki 的只读检索；仍校验实时权限、冻结版本与工具权限。
 # deny_tools 优先于此名单，其他工具继续按效果分类判定。
-allow_tools = ["search_documents"]
+allow_tools = ["search_documents", "knowledge_facts", "knowledge_wiki"]
 allow_effects = ["read_only", "coordination_write"]
 ask_effects = []
 deny_effects = ["sensitive_read", "external_write", "local_write", "destructive"]

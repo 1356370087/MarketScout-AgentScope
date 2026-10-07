@@ -7,6 +7,7 @@ EgressAuthorizer = Callable[[str, str, bool], Awaitable[str]]
 egress_authorizer: ContextVar[EgressAuthorizer | None] = ContextVar(
     "egress_authorizer", default=None
 )
+egress_probe_only: ContextVar[bool] = ContextVar("egress_probe_only", default=False)
 
 
 async def authorize_url(url: str, capability: str = "tool.egress", consume: bool = False) -> str:

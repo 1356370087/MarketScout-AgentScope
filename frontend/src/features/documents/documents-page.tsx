@@ -8,6 +8,7 @@ import { ChoiceGroup, PageHeading } from "@/components/ui/workspace";
 import { LoadingSkeleton, MetricStrip, SearchField, SelectionSummary } from "@/components/ui/insight";
 import { UploadQueue, useDocumentUploads } from "./document-upload";
 import { AppShell } from "@/components/app-shell";
+import { isPublishedDocument } from "@/lib/source-selection";
 import { researchApi } from "@/lib/api";
 
 const statusLabels: Record<string, string> = { queued: "等待摄取", processing: "解析 / OCR / 索引", ready: "可检索", failed: "摄取失败", deleting: "等待清理" };
@@ -33,10 +34,10 @@ export default function DocumentsPage() {
   const addFiles = (files?: FileList | null) => { if (files) upload.addFiles(files); if (fileRef.current) fileRef.current.value = ""; };
   const newResearchHref = `/research/new?${new URLSearchParams(selected.map((id) => ["document", id]))}`;
   const deselect = (id: string) => setSelected((current) => current.filter((item) => item !== id));
-  const inspector = <><h2 className="inspector-title">资料库状态</h2><div className="inspector-block"><div className="summary-grid"><div><b>{documents.data?.total ?? 0}</b><span>当前筛选总数</span></div><div><b>{documents.data?.items.filter((item) => item.status === "ready").length ?? 0}</b><span>本页可检索</span></div></div></div><div className="inspector-block"><p className="eyebrow">证据边界</p><p className="empty-note">每次运行冻结为具体文档 ID。新上传文件不会自动加入已有研究，软删除也不会破坏历史引用。</p></div></>;
+  const inspector = <><h2 className="inspector-title">资料库状态</h2><div className="inspector-block"><div className="summary-grid"><div><b>{documents.data?.total ?? 0}</b><span>当前筛选总数</span></div><div><b>{documents.data?.items.filter((item) => isPublishedDocument(item)).length ?? 0}</b><span>本页可检索</span></div></div></div><div className="inspector-block"><p className="eyebrow">证据边界</p><p className="empty-note">每次运行冻结为具体文档 ID。新上传文件不会自动加入已有研究，软删除也不会破坏历史引用。</p></div></>;
   return <AppShell inspector={inspector}><div className="page documents-page">
     <PageHeading title="让每份资料，都成为研究的依据" description="上传、处理与管理企业资料。处理完成后，即可选择用于研究。" actions={<><button className="primary" onClick={() => fileRef.current?.click()}><Upload size={15} /> 上传资料</button><input ref={fileRef} hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.csv,.md,.txt,.png,.jpg,.jpeg,.tif,.tiff" onChange={(event) => addFiles(event.target.files)} /></>} />
-    <MetricStrip label="资料概况" items={[{ label: "匹配资料", value: documents.data?.total }, { label: "本页可检索", value: documents.data?.items.filter((item) => item.status === "ready").length }, { label: "本页处理中", value: documents.data?.items.filter((item) => ["queued", "processing"].includes(item.status)).length }]} />
+    <MetricStrip label="资料概况" items={[{ label: "匹配资料", value: documents.data?.total }, { label: "本页可检索", value: documents.data?.items.filter((item) => isPublishedDocument(item)).length }, { label: "本页处理中", value: documents.data?.items.filter((item) => ["queued", "processing"].includes(item.status)).length }]} />
     <UploadQueue items={upload.queue} />
     {selected.length > 0 && <SelectionSummary count={selected.length} onClear={() => setSelected([])}><Link className="primary" href={newResearchHref}>用于新研究 <ArrowRight size={15} /></Link></SelectionSummary>}
     <div className="document-toolbar"><SearchField label="搜索文件名" value={query} onChange={(value) => { setQuery(value); setPage(0); }} placeholder="搜索资料名称…" /><button aria-label="刷新资料" onClick={() => void documents.refetch()}><RefreshCw size={16} /></button></div>
@@ -46,7 +47,7 @@ export default function DocumentsPage() {
     <div className="document-table document-table-selectable" role="table" aria-label="个人资料库">
       <div className="document-table-head" role="row"><span aria-label="选择" /><span>文件</span><span>状态</span><span>规模</span><span>更新时间</span><span>操作</span></div>
       {documents.data?.items.map((document) => <div className="document-table-row" role="row" key={document.id} data-selected={selected.includes(document.id)}>
-        <input type="checkbox" aria-label={`选择 ${document.filename}`} disabled={document.status !== "ready"} checked={selected.includes(document.id)} onChange={() => setSelected((current) => current.includes(document.id) ? current.filter((id) => id !== document.id) : [...current, document.id])} />
+        <input type="checkbox" aria-label={`选择 ${document.filename}`} disabled={!isPublishedDocument(document)} checked={selected.includes(document.id)} onChange={() => setSelected((current) => current.includes(document.id) ? current.filter((id) => id !== document.id) : [...current, document.id])} />
         <Link className="document-name" href={`/documents/${document.id}`}><FileText size={17} /><span><b>{document.filename}</b><small>{document.media_type} · {document.sha256.slice(0, 10)}</small></span></Link>
         <span className="document-status" data-status={document.status}><i />{statusLabels[document.status]}</span>
         <span className="document-scale">{size(document.size_bytes)}<small>{document.page_count ?? 0} 页 / 单元 · {document.chunk_count} 个片段{document.ocr_pages ? ` · OCR ${document.ocr_pages}` : ""}</small></span>

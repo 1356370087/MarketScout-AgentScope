@@ -325,6 +325,7 @@ async def complete_generation_rich(
     embedding_model: str,
     content_hashes: list[str] | None = None,
     metadata_suggestions: dict[str, Any] | None = None,
+    index_profile: dict[str, Any] | None = None,
 ) -> None:
     """Persist structured units and row-group segments, then mark it reviewable.
 
@@ -403,7 +404,8 @@ async def complete_generation_rich(
             """UPDATE research_document_generations
                SET status='pending_review', updated_at=now(),
                    metadata_snapshot=$2::jsonb,
-                   quality_report=quality_report || $3::jsonb
+                   quality_report=quality_report || $3::jsonb,
+                   index_profile=$4::jsonb
                 WHERE id=$1::uuid RETURNING document_id""",
             generation_id,
             _json_literal(
@@ -418,6 +420,8 @@ async def complete_generation_rich(
                     "parse_method": prepared.parse_method,
                 }
             ),
+            _json_literal({**(index_profile or get_document_settings().index_profile), "model": embedding_model,
+                           "dimensions": len(vectors[0]) if vectors else get_document_settings().embedding_dimensions}),
         )
         if document_id is None:
             raise GenerationNotFoundError(f"generation_not_found:{generation_id}")

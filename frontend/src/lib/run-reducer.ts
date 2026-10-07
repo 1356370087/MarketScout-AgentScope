@@ -1,5 +1,5 @@
 import { isSecurityApprovalResolved, resolvedSecurityApprovalIds, resolvedHumanActionIds } from "./security-approvals";
-import type { PublicEvent, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./contracts/research";
+import type { PublicEvent, ResearchEfficiency, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./contracts/research";
 import type { ReportReviewSummary } from "./contracts/publications";
 
 export const STAGES: StageId[] = ["preparing", "planning", "researching", "synthesizing", "writing", "finalizing"];
@@ -250,6 +250,10 @@ export function hydrateSnapshot(state: ResearchRunState, snapshot: RunSnapshot):
     pendingHumanAction: resolvedHumanActionIds.has(`${snapshot.run_id}:${(snapshot.pending_human_action ?? progress.pending_human_action)?.action_id}`) ? undefined : snapshot.pending_human_action ?? progress.pending_human_action ?? undefined,
     pendingSecurityApprovals: (snapshot.pending_security_approvals ?? progress.pending_security_approvals ?? []).filter((item) => !isSecurityApprovalResolved(item.approval_id)),
     report: snapshot.output?.markdown ?? "",
+    efficiency: snapshot.progress?.efficiency,
+    completionStatus: snapshot.output?.completion_status ?? undefined,
+    stopReason: snapshot.output?.stop_reason ?? undefined,
+    researchGaps: snapshot.output?.research_gaps ?? [],
     artifacts: snapshot.output?.artifacts ?? [],
     publications: snapshot.output?.publications ?? [],
     preferredOutputFormat: snapshot.output?.preferred_output_format,
@@ -290,6 +294,10 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
   } else if (event.type.startsWith("research.wave.")) {
     const id = String(payload.wave_id ?? "");
     if (id) next.wavesById = { ...state.wavesById, [id]: { ...state.wavesById[id], ...payload, wave_id: id, status: event.type.endsWith("completed") ? "completed" : "running", task_ids: (payload.task_ids as string[]) ?? state.wavesById[id]?.task_ids ?? [] } };
+  } else if (event.type === "research.progress.updated") {
+    next.efficiency = payload.progress as unknown as ResearchEfficiency;
+  } else if (event.type === "run.usage.updated") {
+    // Usage refresh is handled by the stream hook, not an unknown event.
   } else if (event.type === "research.source.discovered") {
     const source = payload as unknown as ResearchSource;
     const key = sourceKey(source);

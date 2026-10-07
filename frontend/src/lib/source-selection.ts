@@ -1,4 +1,4 @@
-import type { SourceMode, SourceRef } from "@/lib/types";
+import type { ResearchDocument, SourceMode, SourceRef } from "@/lib/types";
 
 export function buildSourceRefs(
   mode: SourceMode,
@@ -24,5 +24,9 @@ export function buildSourceRefs(
 export function sourceSelectionIsValid(mode: SourceMode, refs: SourceRef[]): boolean {
   if (mode === "web") return refs.length === 0;
   if (mode === "specific") return refs.length > 0;
-  return refs.some((source) => source.type === "document");
+  return refs.some((source) => ["document", "knowledge_base", "collection"].includes(source.type));
+}
+
+export function isPublishedDocument(document: ResearchDocument): boolean {
+  return !!document.current_generation_id && document.status !== "deleting";
 }

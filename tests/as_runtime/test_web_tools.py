@@ -436,7 +436,7 @@ class _FakeRobotsSession:
 
 
 async def test_robots_rules_are_path_sensitive(monkeypatch):
-    import open_deep_research.web.pipeline as engine
+    import open_deep_research.web.fetching as engine
 
     engine._ROBOTS_CACHE.clear()
     settings = engine.WebPipelineSettings(cache_namespace="robots-test")
@@ -460,7 +460,7 @@ async def test_robots_rules_are_path_sensitive(monkeypatch):
 
 
 async def test_robots_unavailable_means_allowed(monkeypatch):
-    import open_deep_research.web.pipeline as engine
+    import open_deep_research.web.fetching as engine
 
     engine._ROBOTS_CACHE.clear()
     settings = engine.WebPipelineSettings(cache_namespace="robots-test-2")

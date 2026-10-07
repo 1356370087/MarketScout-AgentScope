@@ -156,6 +156,25 @@ def _as_payload(approval):
 
 class TestRequestNetworkApproval:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("decision,expected", [("allow_once", "allowed"), ("deny", "denied")])
+    async def test_nested_query_waits_for_new_approval_in_same_operation(self, decision, expected):
+        pending = _approval()
+        resolved = _approval(decision=decision, status="resolved")
+        internal = FakeInternal(
+            created=[_as_payload(pending)],
+            wait_responses=[[], [_as_payload(resolved)]],
+        )
+        runtime = _runtime(internal)
+        state, approval = await runtime._request_network_approval(
+            _request(), runtime.runs["run-1"], host="docs.example.com", port=443,
+            expires_at=time.time() + 60, wait_for_decision=True,
+        )
+        assert state == expected
+        assert approval.decision == decision
+        assert len(internal.create_calls) == 1
+        assert len(internal.wait_calls) == 2
+
+    @pytest.mark.asyncio
     async def test_first_call_creates_and_returns_pending(self):
         created = _approval(status="pending", domain="docs.example.com")
         internal = FakeInternal(created=[created.model_dump(mode="json")])

@@ -100,3 +100,16 @@
 @media (pointer: coarse) { .evidence-title { min-height: 44px; } .evidence-open { min-width: 44px; min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .agent-task-card { transition: none; } }
 @media print { .report-shell.report-reader { border: 0; padding: 0; box-shadow: none; } .report-reader .report-citation { color: inherit; background: transparent; outline: none; } .citation-notice { display: none; } }
+
+.web-progress-list { display: grid; gap: 10px; padding-left: 20px; margin: 12px 0; }
+.web-progress-list li { overflow-wrap: anywhere; }
+.web-progress-list strong, .web-progress-list span, .web-progress-list small { display: block; }
+.web-progress-list small { color: var(--muted); margin-top: 3px; }
+.web-progress-list li[data-status="warning"] { color: var(--warning, #9a6700); }
+/* 研究进展使用真实片段与准入计数，不将任务结束等同于质量通过。 */
+.research-efficiency-panel { border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; margin: 12px 0 20px; background: var(--panel, transparent); }
+.research-efficiency-panel p { margin: 8px 0; line-height: 1.6; }
+.research-efficiency-panel .efficiency-reuse { color: var(--muted); font-size: 13px; }
+.research-efficiency-panel summary { cursor: pointer; margin-top: 12px; }
+.research-efficiency-panel li { margin: 12px 0; }
+.research-efficiency-panel li span { display: block; color: var(--muted); font-size: 13px; }

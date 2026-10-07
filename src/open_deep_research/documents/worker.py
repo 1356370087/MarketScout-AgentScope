@@ -143,6 +143,7 @@ async def _process(worker_id: str) -> bool:
             prepared,
             vectors,
             embedding_model=settings.embedding_model,
+            index_profile=settings.index_profile,
             metadata_suggestions=suggestions,
         )
         if not await complete_job(str(job["id"]), worker_id):

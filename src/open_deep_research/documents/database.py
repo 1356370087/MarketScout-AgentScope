@@ -33,6 +33,8 @@ _REQUIRED_DOCUMENT_TABLES = (
     "research_generation_entity_links",
     "research_document_operations",
     "knowledge_queries",
+    "knowledge_usage_daily",
+    "knowledge_model_attempts",
 )
 
 

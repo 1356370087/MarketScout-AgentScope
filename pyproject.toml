@@ -38,6 +38,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+proxy = ["socksio>=1,<2"]
 evaluation-langsmith = [
     "langsmith>=0.12.6,<1",
 ]

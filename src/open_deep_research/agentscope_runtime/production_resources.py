@@ -53,6 +53,13 @@ def allowed_models(config):
     values.update(model for chain in config.model_fallbacks.values() for model in chain)
     values.add(config.report_review_model or config.quality_evaluation_model)
     values.add("if-fallback-v1")
+    for provider in config.resolved_search_providers:
+        if provider.value in {"openai", "anthropic"}:
+            try:
+                values.add(config.search_model(provider.value))
+            except ValueError:
+                # An invalid provider is reported alongside other provider results.
+                pass
     return sorted(value for value in values if value)
 
 
@@ -71,28 +78,19 @@ async def prepare_production_config(request, principal):
         from fastapi import HTTPException
 
         from open_deep_research.documents.database import document_schema_available
-        from open_deep_research.documents.repository import (
-            DocumentConflictError,
-            validate_selection,
-        )
+        from open_deep_research.documents.repository import DocumentConflictError
+        from open_deep_research.knowledge.run_scope import prepare_knowledge_sources
+        from open_deep_research.knowledge.search_service import SearchScopeError
 
         if not document_schema_available():
             raise HTTPException(503, "document_research_unavailable")
         try:
-            documents = await validate_selection(
-                principal.user_id, request.source_selection
-            )
+            config.setdefault("metadata", {}).update(
+                await prepare_knowledge_sources(principal.user_id, request.source_selection))
         except KeyError as exc:
             raise HTTPException(404, "document_not_found") from exc
-        except DocumentConflictError as exc:
-            raise HTTPException(409, "document_not_ready") from exc
-        config.setdefault("metadata", {})["selected_source_snapshots"] = [
-            {
-                key: str(row[key])
-                for key in ("id", "filename", "sha256", "current_generation_id")
-            }
-            for row in documents
-        ]
+        except (DocumentConflictError, SearchScopeError) as exc:
+            raise HTTPException(409, str(exc)) from exc
     settings = RunKeySettings.from_env()
     # Freeze the proxy's default cap too, so pause/resume cannot reset its budget.
     config["configurable"]["max_run_cost_micro_usd"] = settings.resolve_budget(
@@ -294,7 +292,9 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
 
             def task_identity(task_id):
                 if worker_member_id:
-                    from open_deep_research.agentscope_runtime.teams_worker import member_task
+                    from open_deep_research.agentscope_runtime.teams_worker import (
+                        member_task,
+                    )
                     return member_task.get()
                 return worker_task_id or (
                     "supervisor" if task_id == "pipeline" else task_id
@@ -302,7 +302,9 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
 
             def model_for(role, task_id):
                 task_id = task_identity(task_id)
-                from open_deep_research.agentscope_runtime.recovery_events import _STAGES
+                from open_deep_research.agentscope_runtime.recovery_events import (
+                    _STAGES,
+                )
                 return models.build_sandbox(
                     role,
                     SandboxBinding(

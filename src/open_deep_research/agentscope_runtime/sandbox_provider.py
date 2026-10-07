@@ -12,8 +12,11 @@ from openai import APIConnectionError, APIStatusError
 from pydantic import SecretStr
 
 from open_deep_research.agentscope_runtime.gateway import LiteLLMChatModel
+from open_deep_research.models.errors import (
+    GATEWAY_TOKEN_LIMIT_MARKER,
+    is_token_limit_exceeded,
+)
 from open_deep_research.models.protocol_errors import ModelGatewayError
-from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER, is_token_limit_exceeded
 from open_deep_research.observability.trace_context import current_traceparent
 from open_deep_research.sandbox.wire import GatewayModelOutcomeV2
 
@@ -67,6 +70,17 @@ class _GatewayModel(LiteLLMChatModel):
             start_datetime, response, audio_format
         )
         usage = response.usage
+        raw_usage = usage.model_dump(exclude_none=True) if usage else {}
+        details = raw_usage.get("prompt_tokens_details") or {}
+        cache = {}
+        if "cached_tokens" in details:
+            cache["cached_input_tokens"] = details["cached_tokens"]
+        elif "prompt_cache_hit_tokens" in raw_usage:
+            cache["cached_input_tokens"] = raw_usage["prompt_cache_hit_tokens"]
+        for name in ("cache_creation_input_tokens", "cache_read_input_tokens"):
+            if name in raw_usage:
+                cache["cached_input_tokens" if name == "cache_read_input_tokens" else name] = raw_usage[name]
+        result.metadata["cache_usage"] = cache
         result.metadata["reasoning_tokens"] = int(
             getattr(
                 getattr(usage, "completion_tokens_details", None), "reasoning_tokens", 0
@@ -79,7 +93,7 @@ class _GatewayModel(LiteLLMChatModel):
 class NativeGatewayProvider:
     """Keep per-run credentials and HTTP headers outside business checkpoints."""
 
-    def __init__(self, *, api_key, base_url=None, transport=None):
+    def __init__(self, *, api_key, base_url=None, transport=None, anthropic_transport=None):
         self.base_url = base_url or os.environ["LITELLM_BASE_URL"]
         self.key = SecretStr(api_key)
         self.headers = ContextVar("gateway_response_headers", default=None)
@@ -87,6 +101,7 @@ class NativeGatewayProvider:
             transport=transport, event_hooks={"response": [self._headers]}, timeout=180
         )
         self.models = {}
+        self.anthropic_transport = anthropic_transport
 
     async def _headers(self, response):
         headers = self.headers.get()
@@ -94,6 +109,25 @@ class NativeGatewayProvider:
             headers.update(response.headers)
 
     async def complete(self, request):
+        if request.server_search is not None:
+            from anthropic import APIConnectionError as AnthropicConnectionError
+            from anthropic import APIStatusError as AnthropicStatusError
+
+            from open_deep_research.agentscope_runtime.search_providers import (
+                SearchProviderError,
+            )
+            try:
+                return await self._search(request)
+            except (APIConnectionError, AnthropicConnectionError) as exc:
+                raise ModelGatewayError("gateway_connection_failed") from exc
+            except (APIStatusError, AnthropicStatusError) as exc:
+                code = {400: "invalid_request", 401: "authentication", 403: "authentication",
+                        404: "model_unavailable", 408: "timeout", 429: "budget_or_rate_limit"}.get(exc.status_code, "gateway_error")
+                raise ModelGatewayError(code, status_code=exc.status_code) from exc
+            except SearchProviderError as exc:
+                error = ModelGatewayError("server_search_failed", status_code=422)
+                error.usage = getattr(exc, "usage", None)
+                raise error from exc
         model = self.models.get(request.model)
         if model is None:
             model = _GatewayModel(
@@ -185,7 +219,7 @@ class NativeGatewayProvider:
                 "total_tokens": usage.input_tokens + usage.output_tokens
                 if usage
                 else 0,
-                "cached_input_tokens": usage.cache_input_tokens if usage else 0,
+                **result.metadata.get("cache_usage", {}),
                 "reasoning_tokens": result.metadata.get("reasoning_tokens", 0),
             } if usage else {},
             response_cost_usd=float(cost) if cost is not None else None,
@@ -199,5 +233,54 @@ class NativeGatewayProvider:
             latency_ms=(time.monotonic() - started) * 1000,
         )
 
+    async def _search(self, request):
+        from open_deep_research.agentscope_runtime.search_models import (
+            ServerSearchModel,
+        )
+
+        spec = request.server_search
+        key = ("search", spec.provider, request.model)
+        model = self.models.get(key)
+        if model is None:
+            search_client = self.client
+            if spec.provider == "anthropic":
+                # Anthropic 1.x uses httpx2; its SDK-owned client must not receive
+                # the OpenAI/httpx transport. Both pools share the same run lifetime.
+                from anthropic import DefaultAsyncHttpxClient
+                search_client = DefaultAsyncHttpxClient(transport=self.anthropic_transport,
+                    event_hooks={"response": [self._headers]}, timeout=180)
+            model = ServerSearchModel(provider=spec.provider, model=request.model,
+                api_key=self.key.get_secret_value(), base_url=self.base_url,
+                http_client=search_client, max_tokens=request.max_output_tokens or 4096, proxy=True)
+            self.models[key] = model
+        # The gateway injects a request-scoped emitter; it carries the live fence.
+        from open_deep_research.agentscope_runtime.web_progress import (
+            model_search_progress,
+        )
+        started = time.monotonic()
+        headers = {}
+        token = self.headers.set(headers)
+        try:
+            result = await model.search_web(spec.query, allowed_domains=spec.allowed_domains,
+                blocked_domains=spec.blocked_domains, logical_operation_id=request.logical_operation_id,
+                progress=model_search_progress.get())
+        finally:
+            self.headers.reset(token)
+        raw = result.metadata.get("raw_usage", {})
+        cost = headers.get("x-litellm-response-cost")
+        return GatewayModelOutcomeV2(logical_operation_id=request.logical_operation_id,
+            status="completed", requested_model=request.model, served_model=result.metadata.get("served_model"),
+            message={"role": "assistant", "content": result.content["text"]}, search_result=result.content,
+            usage=raw, request_id=result.metadata.get("request_id"), provider=spec.provider,
+            finish_reason=result.metadata.get("provider_finish_reason"),
+            response_cost_usd=float(cost) if cost is not None else None,
+            latency_ms=(time.monotonic()-started)*1000)
+
     async def aclose(self):
+        from open_deep_research.agentscope_runtime.search_models import (
+            ServerSearchModel,
+        )
+        for model in self.models.values():
+            if isinstance(model, ServerSearchModel) and model.provider == "anthropic":
+                await model.client.close()
         await self.client.aclose()

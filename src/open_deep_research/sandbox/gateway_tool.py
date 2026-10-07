@@ -1,7 +1,6 @@
 """Worker-side Tool proxy for Gateway-owned implementations."""
 
 # Delegating properties intentionally mirror the structural Tool protocol.
-# ruff: noqa: D102
 
 from __future__ import annotations
 
@@ -11,7 +10,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, SecretStr
@@ -24,7 +23,11 @@ from open_deep_research.tools.base import (
     ToolExecutionZone,
     ToolResult,
 )
-from open_deep_research.tools.governance import ApprovalPendingError
+from open_deep_research.tools.governance import (
+    ApprovalPendingError,
+    ToolError,
+    ToolOutcomeError,
+)
 
 
 def _request_for(
@@ -32,6 +35,7 @@ def _request_for(
     input: BaseModel,
     context: ToolContext,
 ) -> GatewayToolRequestV1:
+    from open_deep_research.agentscope_runtime.runtime_limits import call_context
     metadata = context.config.get("metadata", {})
     arguments = input.model_dump(mode="json")
     stable = {
@@ -62,6 +66,7 @@ def _request_for(
         tool_name=tool.name,
         arguments=arguments,
         wave_id=str(metadata.get("research_wave_id") or ""),
+        deadline_at=call_context.get().get("deadline_at"),
     )
 
 
@@ -95,6 +100,8 @@ async def _call_gateway(
 @dataclass(frozen=True, slots=True)
 class GatewayToolProxy:
     """Preserve a tool's model contract while moving physical execution to Gateway."""
+
+    remote_execution = True
 
     delegate: Tool
     gateway_url: str | None = None
@@ -136,7 +143,7 @@ class GatewayToolProxy:
     def execution_zone(self) -> ToolExecutionZone:
         return ToolExecutionZone.GATEWAY
 
-    async def description(self, input: Optional[BaseModel] = None) -> str:
+    async def description(self, input: BaseModel | None = None) -> str:
         return await self.delegate.description(input)
 
     def prompt(self, config):
@@ -152,7 +159,7 @@ class GatewayToolProxy:
         self,
         input: BaseModel,
         context: ToolContext,
-        on_progress: Optional[ProgressCallback[Any]] = None,
+        on_progress: ProgressCallback[Any] | None = None,
     ) -> ToolResult[Any]:
         del on_progress
         outcome = await _call_gateway(
@@ -173,8 +180,12 @@ class GatewayToolProxy:
             )
         if outcome.status != "completed":
             message = (outcome.error or {}).get("message") or "sandbox_gateway_tool_failed"
-            raise RuntimeError(str(message))
-        return ToolResult(output=outcome.output)
+            raise ToolOutcomeError(ToolError(
+                error_type=(outcome.error or {}).get("error_type", "unknown"),
+                tool_name=self.name, message=str(message),
+                detail=(outcome.error or {}).get("detail") or {},
+            ))
+        return ToolResult(output=outcome.output, metadata=outcome.metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,7 +200,7 @@ class AuthorizedLocalToolProxy(GatewayToolProxy):
         self,
         input: BaseModel,
         context: ToolContext,
-        on_progress: Optional[ProgressCallback[Any]] = None,
+        on_progress: ProgressCallback[Any] | None = None,
     ) -> ToolResult[Any]:
         outcome = await _call_gateway(
             "/v1/tools/authorize-local",

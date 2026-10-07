@@ -71,6 +71,10 @@ def build_research_pipeline(
         context_chars=context_chars,
         recovery=recovery,
     )
+    if recovery and not hasattr(recovery, "research_cache"):
+        from open_deep_research.agentscope_runtime.efficiency import ResearchCache
+
+        recovery.research_cache = ResearchCache(recovery, checkpoint_path.parent.parent)
     if Configuration.from_runnable_config(config_provider()).enable_memory:
         from open_deep_research.agentscope_runtime.memory import ResearchMemory
 

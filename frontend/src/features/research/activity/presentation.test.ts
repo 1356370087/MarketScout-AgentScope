@@ -9,6 +9,16 @@ const event = (sequence: number, type: string, call = "a", overrides: Partial<Ta
 });
 
 describe("activity presentation", () => {
+  it("groups provider progress without iteration and removes reconnect duplicates", () => {
+    const progress = event(2, "tool.progress", "a", { iteration: null });
+    const groups = groupActivity([event(1, "tool.started"), progress, progress, event(3, "tool.completed")]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].events.map((item) => item.sequence)).toEqual([1, 2, 3]);
+  });
+  it("groups progress even when an old event stream has no tool start", () => {
+    const groups = groupActivity([event(1, "tool.progress"), event(2, "tool.progress"), event(3, "tool.completed")]);
+    expect(groups).toHaveLength(1);
+  });
   it("pairs interleaved calls by their real identities", () => {
     const groups = groupActivity([event(1, "tool.started", "a"), event(2, "tool.started", "b"), event(3, "tool.completed", "b"), event(4, "tool.completed", "a")]);
     expect(groups.map((group) => group.events.map((item) => item.sequence))).toEqual([[1, 4], [2, 3]]);

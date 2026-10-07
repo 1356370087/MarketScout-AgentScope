@@ -35,6 +35,118 @@ from open_deep_research.sandbox.wire import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_web_reservation_carries_host_source_contract(host):
+    gateway, ledger, _ = host
+    contract = {"requirements": [{"text": "仅使用 PostgreSQL 官方文档"}]}
+    ledger.recovery.snapshot.coverage_contract = contract
+    reserved = await _tool_reserve(
+        gateway, ledger, "official-search", tool_name="web_research", idempotent=True
+    )
+    assert reserved["coverage_contract"] == contract
+
+
+async def test_shadow_receipt_replays_diagnostics_and_fetch_usage_once(host):
+    gateway, ledger, _ = host
+    ledger.config = {"configurable": {"web_pipeline_mode": "shadow"}}
+    await _tool_reserve(gateway, ledger, "shadow-search", tool_name="web_search", idempotent=True)
+    diagnostics = {"shadow": {"status": "completed", "fetch_calls": 2, "evidence_count": 3}}
+    outcome = GatewayToolOutcomeV1(logical_operation_id="shadow-search", tool_call_id="call", status="completed", output="primary search summary")
+    settle = gateway.internal.signed(ToolBudgetSettleRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="shadow-search", outcome=outcome.model_dump(), fetch_calls=2, diagnostics=diagnostics)
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", settle)
+    replay = await _tool_reserve(gateway, ledger, "shadow-search", tool_name="web_search", idempotent=True)
+    assert replay["replayed"] is True
+    assert replay["result"]["web_diagnostics"] == diagnostics
+    assert replay["result"]["outcome"]["output"] == "primary search summary"
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"] == {"tool_calls": 1, "fetch_calls": 2}
+
+
+async def test_unsettled_search_is_unknown_even_when_the_tool_is_read_only(host):
+    gateway, ledger, client = host
+    await _tool_reserve(gateway, ledger, "unknown-search", tool_name="web_search", idempotent=True)
+    request = gateway.internal.signed(ToolBudgetReserveRequest, run_id="r", task_id="t",
+        fence_token=ledger.recovery.lease.fence, stage="researching", logical_operation_id="unknown-search",
+        tool_name="web_search", idempotent=True)
+    response = await client.post("/internal/sandbox/budgets/tool-reserve", json=request.model_dump(mode="json"))
+    assert response.status_code == 409
+    assert response.json()["detail"] == "tool_operation_unknown"
+
+
+async def test_sql_grants_only_remaining_fetches_and_allows_cached_reads(host):
+    gateway, ledger, _ = host
+    await ledger.recovery.store.save(ledger.recovery.lease, ledger.recovery.snapshot, limits={"fetch_calls": 1})
+    async def reserve(key, name, count):
+        request = gateway.internal.signed(ToolBudgetReserveRequest, run_id="r", task_id="t",
+            fence_token=ledger.recovery.lease.fence, stage="researching", logical_operation_id=key,
+            tool_name=name, idempotent=True, fetch_calls=count)
+        return await gateway.internal.post("/internal/sandbox/budgets/tool-reserve", request)
+    assert (await reserve("fetch-first", "web_research", 5))["fetch_grant"] == 1
+    settle = gateway.internal.signed(ToolBudgetSettleRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="fetch-first", fetch_calls=1, outcome={"status": "completed"})
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", settle)
+    assert (await reserve("cached-page", "fetch_url", 0))["fetch_grant"] == 0
+    ledger.config = {"configurable": {"web_pipeline_mode": "shadow"}}
+    assert (await reserve("shadow-no-budget", "web_search", 2))["fetch_grant"] == 0
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"]["fetch_calls"] == 1 and budget["reserved"]["fetch_calls"] == 0
+
+
+async def test_known_transport_failure_refund_matches_the_sql_receipt(host, monkeypatch):
+    from types import SimpleNamespace
+    from test_web_upgrade import Models, config, context
+    from open_deep_research.agentscope_runtime.web_tools import FetchUrlInput, WebFetchLedger, fetch_url_tool
+    from open_deep_research.web import pipeline
+    from open_deep_research.web.models import FetchResult
+
+    async def fail(source, settings, **kwargs):
+        return pipeline.RawFetch(FetchResult(candidate_id=source.candidate_id,
+            requested_url=source.canonical_url, failure_class="timeout"))
+    monkeypatch.setattr(pipeline, "fetch_local", fail)
+    gateway, ledger, _ = host
+    cfg = config(fetch_backend_order=["local"])
+    memory = WebFetchLedger()
+    tool = fetch_url_tool(lambda: cfg, Models(), memory)
+    result = await tool.call(FetchUrlInput(url="https://docs.example/failed"), context(cfg))
+    assert result.metadata["physical_fetches"] == 1
+    assert result.metadata["transport_failed_fetches"] == 1
+    charge = gateway._governed_fetch_calls(SimpleNamespace(result=result))
+    await _tool_reserve(gateway, ledger, "failed-fetch", tool_name="fetch_url", idempotent=True)
+    settle = gateway.internal.signed(ToolBudgetSettleRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="failed-fetch", fetch_calls=charge, outcome={"status": "completed"})
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", settle)
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"]["fetch_calls"] == memory._run_attempts["web-upgrade-test"] == 0
+
+
+async def test_native_server_search_receipt_keeps_citations_and_usage_on_replay(host):
+    from open_deep_research.agentscope_runtime.sandbox_provider import NativeGatewayProvider
+    from open_deep_research.sandbox.wire import ServerSearchRequest
+    from test_server_search_models import openai_events, sse
+
+    gateway, ledger, _ = host
+    calls = []
+    async def transport(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse(openai_events("fixture")))
+    provider = NativeGatewayProvider(api_key="fixture-run-key", base_url="https://proxy.example/v1", transport=httpx.MockTransport(transport))
+    gateway.model_gateways["r"] = provider
+    request = GatewayModelRequestV2(run_id="r", task_id="t", stage="researching", role="openai_search",
+        model="fixture", logical_operation_id="native-search", messages=[{"role": "user", "content": "q"}],
+        server_search=ServerSearchRequest(provider="openai", query="q"), max_output_tokens=100)
+    context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300, api_keys={"LITELLM_RUN_KEY": "fixture-run-key"})
+    try:
+        first = await gateway.invoke_model_operation_v2(request, context)
+        again = await gateway.invoke_model_operation_v2(request, context)
+        assert first.status == "completed" and first == again
+        assert first.search_result["sources"][0]["url"] == "https://docs.example/api"
+        assert len(calls) == 1
+        budget = await ledger.recovery.store.budget("r", "u")
+        assert budget["used"]["model_calls"] == 1
+        assert budget["used"]["input_tokens"] == 7
+    finally: await provider.aclose()
+
+
 @pytest_asyncio.fixture
 async def host(tmp_path):
     store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "ledger.db").as_posix())

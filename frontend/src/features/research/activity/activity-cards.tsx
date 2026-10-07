@@ -19,10 +19,24 @@ export function ActivityCard({ group, onSource }: { group: ActivityGroup; onSour
   </Disclosure>;
   if (group.type === "tool") return <article className="activity-rich-card" data-status={latest.status}>
     <EventHeader event={latest} icon={<Wrench size={17} />} />
+    {group.events.some((event) => event.type === "tool.progress") && <ol className="web-progress-list" aria-label="搜索与抓取进度">
+      {group.events.filter((event) => event.type === "tool.progress").map((event) => <li key={event.event_id} data-status={event.status}>
+        <strong>{typeof event.payload.provider === "string" ? `${event.payload.provider} · ` : ""}{event.title}</strong>
+        <span>{event.summary}</span>
+        {typeof event.payload.result_count === "number" && <small>{event.payload.result_count} 个候选来源</small>}
+        {typeof event.payload.backend === "string" && <small>读取方式：{event.payload.backend}</small>}
+        {event.payload.metrics != null && <Disclosure title="对照评估结果"><StructuredContent value={event.payload.metrics} /></Disclosure>}
+      </li>)}
+    </ol>}
     {typeof first.payload.args_summary === "string" && <div className="activity-query"><Search size={15} aria-hidden /><span>{first.payload.args_summary}</span></div>}
     <p>{latest.summary}</p><div className="activity-card-facts">
       {typeof latest.payload.tool_name === "string" && <span>{latest.payload.tool_name}</span>}
+      {typeof latest.payload.rerank_completed === "boolean" && <span>{latest.payload.rerank_completed ? "语义重排已完成" : "未完成重排"}</span>}
+      {typeof latest.payload.retrieval_profile === "string" && <span>配置 {latest.payload.retrieval_profile}</span>}
       {latest.duration_ms != null && <span><Clock3 size={12} />{(latest.duration_ms / 1000).toFixed(2)} 秒</span>}
+      {typeof latest.payload.execution_ms === "number" && <span>执行 {(latest.payload.execution_ms / 1000).toFixed(2)} 秒</span>}
+      {typeof latest.payload.queue_ms === "number" && <span>排队 {(latest.payload.queue_ms / 1000).toFixed(2)} 秒</span>}
+      {typeof latest.payload.approval_wait_ms === "number" && <span>审批等待 {(latest.payload.approval_wait_ms / 1000).toFixed(2)} 秒</span>}
       {typeof latest.payload.source_count === "number" && <span>{latest.payload.source_count} 个返回来源</span>}
       {typeof latest.payload.retry_count === "number" && latest.payload.retry_count > 0 && <span>重试 {latest.payload.retry_count} 次</span>}
       <time>{new Date(latest.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>

@@ -17,7 +17,11 @@ import portalocker
 from pydantic import BaseModel, Field
 
 from open_deep_research.configuration import Configuration
-from open_deep_research.events.public import canonical_public_source, utc_timestamp
+from open_deep_research.events.public import (
+    canonical_local_source,
+    canonical_public_source,
+    utc_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,10 +78,15 @@ _SECRET_TEXT_RE = re.compile(
     r"password|secret)\s*[:=]\s*([^\s,;]+)"
 )
 _PAYLOAD_KEYS: dict[str, set[str]] = {
-    "model.started": {"provider", "model", "attempt"},
+    "tool.progress": {
+        "tool_call_id", "tool_name", "web_phase", "provider", "query", "query_index",
+        "result_count", "error_code", "backend", "reason", "metrics", "urls",
+    },
+    "model.started": {"provider", "model", "attempt", "purpose", "parent_tool_call_id"},
     "model.completed": {
         "provider", "model", "input_tokens", "output_tokens", "reasoning_tokens",
         "tool_call_count", "retry_count",
+        "purpose", "parent_tool_call_id", "cache_status", "cached_input_tokens", "cache_creation_input_tokens",
     },
     "model.retrying": {
         "provider", "model", "attempt", "error_code", "error_class",
@@ -100,12 +109,13 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
     },
     "tool.completed": {
         "tool_call_id", "tool_name", "tool_category", "source_count", "result_chars",
-        "retry_count", "urls",
+        "retry_count", "urls", "knowledge_query_id", "rerank_completed", "retrieval_profile",
+        "execution_ms", "approval_wait_ms", "queue_ms", "cache_hits", "processed_chunks", "total_chunks",
     },
     "tool.failed": {
         "tool_call_id", "tool_name", "tool_category", "error_code", "retry_count",
     },
-    "source.discovered": {"source_id", "title", "domain", "url"},
+    "source.discovered": {"source_id", "title", "domain", "url", "source_type", "document_id", "chunk_id", "generation_id", "locator"},
     "quality.started": {"evaluation_type", "attempt"},
     "quality.completed": {
         "evaluation_type", "decision", "admission_status", "scores", "gap_count",
@@ -189,13 +199,16 @@ def sanitize_task_activity_payload(event_type: str, payload: dict[str, Any]) -> 
         if key in allowed and not _SECRET_KEY_RE.search(key)
     }
     if event_type == "source.discovered" and result.get("url"):
-        source = canonical_public_source(str(result["url"]), str(result.get("title", "")))
+        url, title = str(result["url"]), str(result.get("title", ""))
+        source = canonical_local_source(url, title, document_id=result.get("document_id"),
+            chunk_id=result.get("chunk_id"), generation_id=result.get("generation_id"),
+            locator=result.get("locator")) if url.startswith("/documents/") else canonical_public_source(url, title)
         return source or {}
     urls = result.get("urls")
     if isinstance(urls, list):
         safe_urls: list[str] = []
         for url in urls:
-            source = canonical_public_source(str(url))
+            source = canonical_local_source(str(url)) if str(url).startswith("/documents/") else canonical_public_source(str(url))
             if source and source["url"] not in safe_urls:
                 safe_urls.append(source["url"])
         result["urls"] = safe_urls[:20]

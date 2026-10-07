@@ -49,7 +49,10 @@ async def test_four_search_api_branches():
         tools = search_provider_tools(
             make(api), _StubFactory(), client_factories=_FAKE_CLIENTS
         )
-        assert [tool.name for tool in tools] == [expected]
+        assert [tool.name for tool in tools] == ["web_search"]
+        old = make(api)()
+        old["metadata"]["run_config_schema_version"] = 15
+        assert [tool.name for tool in search_provider_tools(lambda: old, _StubFactory())] == [expected]
     assert search_provider_tools(make(SearchAPI.NONE), _StubFactory()) == []
 
     # enforced 模式下传统搜索分支全部禁用（只有 web_research 管线）。
@@ -64,7 +67,7 @@ async def test_four_search_api_branches():
 
 
 async def test_offline_network_disables_search(monkeypatch):
-    import open_deep_research.agentscope_runtime.search as search_mod
+    import open_deep_research.tools.availability as search_mod
 
     monkeypatch.setattr(search_mod, "network_policy_mode", lambda configurable: "offline")
     cfg = _config(search_api=SearchAPI.TAVILY, web_pipeline_mode="legacy")

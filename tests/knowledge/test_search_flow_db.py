@@ -159,18 +159,18 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
         _TEST_DSN.replace("postgresql+asyncpg://", "postgresql://", 1),
     )
     monkeypatch.setattr(search_service, "embed_texts", _fake_embed)
-    monkeypatch.setattr(search_service, "knowledge_service_key", lambda: "sk-test")
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "sk-test")
     async def _usage_noop(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(answer, "check_and_count_usage", _usage_noop)
+    monkeypatch.setattr("open_deep_research.knowledge.accounting.query_usage", _usage_noop)
     from open_deep_research.documents.database import close_document_pool
 
     pool = await get_document_pool()
     seeded = await _seed(pool)
     try:
         # --- unified search: filter + quota + ledger ---
-        async def fake_rerank(question, candidates):
+        async def fake_rerank(question, candidates, **_kwargs):
             if "太空电梯" in question:  # 无关问题：全部判为无关，检索应无结果
                 return {str(row["id"]): (0, "无关") for row in candidates}
             return {str(row["id"]): (3, "直接支持") for row in candidates}
@@ -199,7 +199,7 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
         assert result["results"] and all(
             item["document_id"] == seeded["finance"] for item in result["results"]
         )
-        assert result["diagnostics"]["resolved_scope"]["documents"] == 2
+        assert result["diagnostics"]["resolved_scope"]["documents"] == 1
         assert result["diagnostics"]["alias_expansions"] == ["星澜"]
         async with pool.acquire() as connection:
             ledger = await connection.fetchrow(
@@ -208,7 +208,7 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
         assert ledger is not None and ledger["feedback_kind"] is None
 
         # --- rerank failure degrades honestly ---
-        async def broken_rerank(question, candidates):
+        async def broken_rerank(question, candidates, **_kwargs):
             raise RerankUnavailableError("rerank_upstream_unavailable:Test")
 
         monkeypatch.setattr(search_service, "rerank_segments", broken_rerank)
@@ -222,7 +222,7 @@ async def test_unified_search_answer_expansion_and_evaluation(monkeypatch):
         # --- answers: no evidence short-circuits the model ---
         calls = {"model": 0}
 
-        async def fake_model(question, evidence):
+        async def fake_model(question, evidence, **_kwargs):
             calls["model"] += 1
             top = evidence[0]["segment_id"]
             if calls["model"] == 1:

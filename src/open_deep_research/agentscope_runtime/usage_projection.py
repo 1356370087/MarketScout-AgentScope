@@ -32,6 +32,15 @@ def tool_success(row):
     )
 
 
+_PURPOSE_LABELS = {
+    "supervisor": "调度与规划", "researcher": "研究推理", "context_summary": "上下文摘要",
+    "handoff_compression": "研究交接压缩", "web_evidence": "证据提取", "web_rerank": "来源重排",
+    "researcher.evaluate_tool_results": "工具批次评估", "supervisor.evaluate_handoff": "交接评估",
+    "lead.report_review": "报告复核", "final_report": "报告生成", "approval_outline": "报告大纲",
+    "egress_classification": "出网分类", "message_summary": "用户消息摘要", "unknown": "未归属",
+}
+
+
 def breakdown(records, key):
     groups = {}
     for record in records:
@@ -53,7 +62,7 @@ def breakdown(records, key):
         output.append(
             {
                 "key": value,
-                "label": value,
+                "label": _PURPOSE_LABELS.get(value, value) if key == "purpose" else value,
                 **vectors,
                 "call_count": len(items),
                 "estimated_cost_micro_usd": sum(costs) if costs else None,
@@ -128,7 +137,7 @@ async def project_usage(store, run_id, owner, response):
                     select(store.outbox.c.payload).where(
                         store.outbox.c.run_id == run_id,
                         store.outbox.c.payload["type"].as_string().in_([
-                            "research.operation_started", "research.operation_committed"
+                            "research.operation_started", "research.operation_committed", "research.state", "research.cancelled"
                         ]),
                     )
                 )
@@ -165,12 +174,11 @@ async def project_usage(store, run_id, owner, response):
         correction = result.get("usage_correction")
         reported = bool(correction) or result.get("usage_status") == "reported"
         outcome = result.get("outcome") or {}
-        usage = (
-            (correction or {}).get("usage")
-            or outcome.get("usage")
-            or row["actual"]
-            or {}
-        )
+        # A later bill corrects billed quantities, not the provider's other
+        # observations. Preserve cache facts absent from that correction.
+        usage = dict(row["actual"] or {})
+        usage.update({k: v for k, v in (outcome.get("usage") or {}).items() if v is not None})
+        usage.update((correction or {}).get("usage") or {})
         meta = operation_context(row, starts, ends)
         task_id = meta.get("task_id") or "unknown"
         task_operations.setdefault(
@@ -231,6 +239,8 @@ async def project_usage(store, run_id, owner, response):
                 "retry_count": outcome.get("logical_retry_count", 0),
                 "rate_limited": outcome.get("error_code") == "rate_limit"
                 or result.get("status_code") == 429,
+                "cache_write_reported": usage.get("cache_creation_input_tokens") is not None or result.get("cache_creation_input_tokens") is not None,
+                "cache_reported": usage.get("cached_input_tokens") is not None or result.get("cached_input_tokens") is not None,
             }
         )
     for vector in (totals["reported"], totals["estimated"]):
@@ -293,6 +303,7 @@ async def project_usage(store, run_id, owner, response):
             ("by_agent_role", "agent_role"),
             ("by_model", "model"),
             ("by_task", "task_id"),
+            ("by_purpose", "purpose"),
         )
     }
     response["timeline"] = timeline(records)
@@ -313,5 +324,38 @@ async def project_usage(store, run_id, owner, response):
         if duration
         else 0,
     )
+    terminal_times = [event["timestamp"] for event in events
+                      if event["type"] == "research.cancelled" or
+                      (event["type"] == "research.state" and event.get("status") in {"completed", "failed", "cancelled"})]
+    started_at = state.application.get("created_at")
+    if started_at is not None:
+        import time
+
+        finished_at = max(terminal_times) if terminal_times else None
+        if finished_at is not None or state.status not in {"completed", "failed", "cancelled"}:
+            response["duration_ms"] = max(0, int(((finished_at or time.time()) - started_at) * 1000))
     response["updated_at"] = max(ends.values(), default=None)
+    cache_records = [item for item in records if item["cache_reported"]]
+    cached = sum(item["reported"]["cached_input_tokens"] for item in cache_records)
+    known_input = sum(item["reported"]["input_tokens"] for item in cache_records)
+    response["cache_reporting"] = {
+        "status": "reported" if records and len(cache_records) == len(records) else "partial" if cache_records else "not_reported",
+        "reported_calls": len(cache_records), "not_reported_calls": len(records) - len(cache_records),
+        "cached_input_tokens": cached,
+        "non_cached_input_tokens": known_input - cached if len(cache_records) == len(records) and records else None,
+        "cache_creation_input_tokens": totals["reported"]["cache_creation_input_tokens"] if any(item["cache_write_reported"] for item in records) else None,
+    }
+    response["operations"]["cache_hit_rate"] = sum(item["reported"]["cached_input_tokens"] > 0 for item in cache_records) / len(cache_records) if cache_records else None
+    response["operations"]["cache_input_ratio"] = cached / known_input if known_input else None
+    calls["logical_calls"] = len({item["logical_call_id"] for item in records}) if records and all(item.get("logical_call_id") for item in records) else None
+    calls["gateway_requests"] = sum(row["kind"] == "gateway:model" for row in rows)
+    calls["upstream_attempts"] = None
+    research = await store.research_progress_view(run_id, owner)
+    from open_deep_research.agentscope_runtime.efficiency import progress_summary
+
+    response["research_progress"] = progress_summary(research, state.coverage_contract)
+    response["efficiency"] = research.get("counters", {})
+    response["tool_durations"] = [{"tool_name": starts.get(row["key"], {}).get("tool_name", "unknown"),
+        "task_id": starts.get(row["key"], {}).get("task_id", "unknown"),
+        "duration_ms": operation_context(row, starts, ends)["duration_ms"]} for row in tool_rows]
     return response

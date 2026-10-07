@@ -1,12 +1,15 @@
 """原生模型角色与作用域凭据绑定（T019）；网关传输策略由 T020 接入。"""
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Literal
 from urllib.parse import urlsplit
-from pydantic import SecretStr
+
 from agentscope import credential as credentials
 from agentscope.agent import ModelConfig
+from pydantic import SecretStr
+
 from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.models.resolution import (
     build_model_config,
@@ -19,6 +22,8 @@ ROLES = {
     "memory": ("research_model", "research_model", "research_model_max_tokens"),
     "supervisor": ("supervisor_model", "research_model", "research_model_max_tokens"),
     "researcher": ("research_model", "research_model", "research_model_max_tokens"),
+    "openai_search": ("openai_search_model", "openai_search_model", "research_model_max_tokens"),
+    "anthropic_search": ("anthropic_search_model", "anthropic_search_model", "research_model_max_tokens"),
     "summarization": (
         "summarization_model",
         "summarization_model",
@@ -54,6 +59,8 @@ ROLES = {
         "final_report_model",
         "final_report_model_max_tokens",
     ),
+    "knowledge_rerank": ("knowledge_rerank_model", "summarization_model", "summarization_model_max_tokens"),
+    "knowledge_answer": ("knowledge_answer_model", "summarization_model", "summarization_model_max_tokens"),
     "web_rerank": (
         "web_rerank_model",
         "summarization_model",
@@ -70,6 +77,18 @@ ROLES = {
         "quality_evaluation_model_max_tokens",
     ),
 }
+
+
+def role_model(run, role):
+    """Keep server-search models provider-specific while allowing legacy inheritance."""
+    field, fallback, _ = ROLES[role]
+    model = run.get(field) or run.get(fallback)
+    if role in {"openai_search", "anthropic_search"} and not model:
+        provider = role.removesuffix("_search")
+        model = model or run.get("research_model")
+        if not model or not model.startswith(provider + ":"):
+            raise ValueError(f"{provider}_search_model_required")
+    return model
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +120,8 @@ def bind_role(
     source: dict | None = None,
 ) -> CredentialBinding:
     """直接提供商绑定沿用角色 key > provider key 及 GET_API_KEYS_FROM_CONFIG。"""
-    model_field, fallback, tokens_field = ROLES[role]
-    model = run.get(model_field) or run.get(fallback)
+    _, _, tokens_field = ROLES[role]
+    model = role_model(run, role)
     options = build_model_config(
         model,
         run.get(tokens_field),
@@ -147,8 +166,8 @@ class ModelFactory:
     def descriptor(self, role: str, candidate_spec: str | None = None) -> dict:
         if role not in ROLES:
             raise ValueError("unsupported model role")
-        model_field, fallback, tokens = ROLES[role]
-        spec = self.run.get(model_field) or self.run.get(fallback)
+        _, _, tokens = ROLES[role]
+        spec = role_model(self.run, role)
         if candidate_spec is not None:
             allowed = [spec, *self.run.get("model_fallbacks").get(role, [])]
             if candidate_spec not in allowed:
@@ -186,6 +205,17 @@ class ModelFactory:
         cache_key = (role, descriptor["model"])
         if cache_key in self._models:
             return self._models[cache_key]
+        if role in {"openai_search", "anthropic_search"}:
+            from open_deep_research.agentscope_runtime.search_models import (
+                ServerSearchModel,
+            )
+
+            instance = ServerSearchModel(provider=role.removesuffix("_search"), model=descriptor["model"],
+                api_key=binding.key.get_secret_value(), base_url=binding.base_url,
+                max_tokens=descriptor["max_output_tokens"], proxy=binding.gateway)
+            instance.retry_owner = "gateway" if binding.gateway else "application"
+            self._models[cache_key] = instance
+            return instance
         provider, model_name = parse_model_spec(descriptor["model"])
         if binding.gateway:
             provider, model_name = "openai", descriptor["model"]
@@ -218,8 +248,8 @@ class ModelFactory:
         else:
             from open_deep_research.agentscope_runtime.provider_models import (
                 GovernedAnthropicChatModel,
-                GovernedGeminiChatModel,
                 GovernedDeepSeekChatModel,
+                GovernedGeminiChatModel,
             )
 
             model_class = {
@@ -284,10 +314,10 @@ class ModelFactory:
             or binding.run_id != self.owner
         ):
             raise ValueError("sandbox model binding scope mismatch")
-        field, fallback, tokens = ROLES[role]
+        _, _, tokens = ROLES[role]
         key = f"sandbox:{role}:{binding.task_id}"
         if key not in self._models:
-            model = self.run.get(field) or self.run.get(fallback)
+            model = role_model(self.run, role)
             catalog = self.run.get("model_catalog_snapshot")
             self._models[key] = SandboxChatModel(
                 binding=binding,
@@ -298,8 +328,16 @@ class ModelFactory:
                 parameters=SandboxChatModel.Parameters(max_tokens=self.run.get(tokens)),
                 client=client,
                 structured_attempts=self.run.get("max_structured_output_retries"),
+                trace_enabled=self.run.compatibility_projection()["metadata"].get("run_config_schema_version", 17) >= 17,
+                request_timeout=self.run.get("model_call_timeout_seconds") + 75
+                if self.run.get("research_efficiency_mode") == "bounded" else 120,
             )
         return self._models[key]
+
+    async def search_web(self, provider, query, **options):
+        from open_deep_research.agentscope_runtime.search_models import invoke_search
+
+        return await invoke_search(self, provider, query, **options)
 
     def policy_middleware(self, role, candidates=None):
         from open_deep_research.agentscope_runtime.model_policy import (
@@ -338,6 +376,8 @@ class ModelFactory:
                 circuit_policy=policy,
                 circuit_enabled=self.run.get("model_circuit_breaker_enabled"),
                 probe_mode=self.run.get("model_first_packet_probe"),
+                total_timeout=self.run.get("model_call_timeout_seconds")
+                if self.run.get("research_efficiency_mode") == "bounded" else None,
             ),
             state_key=f"model_route:{role}",
         )
@@ -347,8 +387,9 @@ class ModelFactory:
 
     async def complete_with_recovery(self, role, messages, *, state, compact=None, candidates=None, prepare_messages=None):
         """写作/摘要完整响应路径；模型尝试仍通过统一策略，恢复状态可写入 AgentState。"""
-        from open_deep_research.agentscope_runtime.model_policy import recover_output
         from agentscope.model import ChatResponse
+
+        from open_deep_research.agentscope_runtime.model_policy import recover_output
 
         middleware = self.policy_middleware(role, candidates=candidates)
         descriptor = self.descriptor(role)

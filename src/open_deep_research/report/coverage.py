@@ -56,6 +56,16 @@ def source_directive_kind(text: str) -> str | None:
         return "process"
     if re.fullmatch(r"(?:请)?(?:仅|只)(?:依据|基于|使用|参考|读取)(?:所选|指定|所提供的?).{0,80}(?:页面|网页|资料|文档|来源)", value):
         return "process"
+    if re.fullmatch(r"(?:请)?(?:仅|只)(?:依据|基于|使用|参考|读取)[^，,。；;\n]{0,80}官方(?:文档|资料|来源|网站)", value):
+        return "process"
+    if re.fullmatch(r"(?:至少|最少)(?:引用|使用|提供)[一二两三四五六七八九十\d]+个[^。；;\n]{0,24}(?:来源|文档页面)(?:并给出可核验链接)?", value):
+        return "process"
+    if re.fullmatch(r"不需要(?:性能跑分|市场分析)(?:或(?:性能跑分|市场分析))?", value):
+        return "process"
+    if re.fullmatch(r"(?:报告|回答|输出)(?:使用|采用|用)(?:中文|英文)", value):
+        return "deliverable"
+    if re.fullmatch(r"控制在\s*\d+\s*(?:字|词|页)(?:左右|以内|内)?", value):
+        return "deliverable"
     if re.fullmatch(r"(?:请)?(?:分别)?(?:保留|提供|给出|附上)(?:(?:该|此|所选|指定|官方|可核验|可点击|相关|对应|原文|网页|页面|资料|文档|来源|的|与|和|以及)|[、，,\s])*(?:引用|链接)", value):
         return "deliverable"
     return None

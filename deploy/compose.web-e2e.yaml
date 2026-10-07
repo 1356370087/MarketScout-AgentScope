@@ -1,0 +1,62 @@
+# Web 与质量门禁实网验收；与根目录 docker-compose.yaml 合并使用。
+# 使用独立 Compose 项目和数据卷，同步研究不依赖远程 RocketMQ。
+# 模型、搜索凭据沿用本地 .env；本配置不关闭质量门禁或网络审批。
+services:
+  document-migrate:
+    image: ${COMPOSE_PROJECT_NAME}-api:latest
+  native-migrate:
+    image: ${COMPOSE_PROJECT_NAME}-api:latest
+    env_file: .env
+    environment:
+      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_STORAGE_AUTO_CREATE: "false"
+    command: ["python", "-c", "import asyncio; from open_deep_research.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+    networks: [document-internal]
+  api:
+    volumes:
+      - ${WEB_E2E_POLICY_PATH:-./.runs/web-docker-e2e-policy.toml}:/app/config/sandbox-policy.toml:ro
+    environment:
+      APP_ENV: development
+      RESEARCH_ENGINE: native
+      AS_NATIVE_RESOURCES: gateway
+      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_STORAGE_AUTO_CREATE: "false"
+      AS_ROCKETMQ_ENDPOINT: ""
+      ENABLE_ASYNC_RESEARCH: "false"
+      SANDBOX_ENABLED: "true"
+      ALLOW_CLARIFICATION: "false"
+      ENABLE_HUMAN_IN_LOOP: "true"
+      QUALITY_EVALUATION_ENABLED: "true"
+      QUALITY_EVALUATION_FAIL_OPEN: "false"
+      SEARCH_PROVIDERS: '["tavily","bing"]'
+      SEARCH_MAX_CONCURRENCY: "4"
+      # 可选：仅为渠道专项验收收窄工具列表；空值沿用完整研究工具集。
+      RESEARCHER_TOOL_WHITELIST: ${WEB_E2E_RESEARCHER_TOOL_WHITELIST:-}
+      FRONTEND_ALLOWED_ORIGINS: http://localhost:${WEB_E2E_PORT:-8087},http://127.0.0.1:${WEB_E2E_PORT:-8087}
+    depends_on:
+      native-migrate:
+        condition: service_completed_successfully
+      sandbox-controller:
+        condition: service_started
+  litellm-proxy:
+    ports: !override ["127.0.0.1:${WEB_E2E_LITELLM_PORT:-4107}:4000"]
+  proxy:
+    ports: !override ["127.0.0.1:${WEB_E2E_PORT:-8087}:80"]
+  sandbox-controller:
+    volumes:
+      - ${WEB_E2E_POLICY_PATH:-./.runs/web-docker-e2e-policy.toml}:/app/config/sandbox-policy.toml:ro
+    environment:
+      ENABLE_ASYNC_RESEARCH: "false"
+      SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME}-sandbox-gateway
+  sandbox-gateway:
+    volumes:
+      - ${WEB_E2E_POLICY_PATH:-./.runs/web-docker-e2e-policy.toml}:/app/config/sandbox-policy.toml:ro
+    container_name: ${COMPOSE_PROJECT_NAME}-sandbox-gateway
+    environment:
+      ENABLE_ASYNC_RESEARCH: "false"
+      APP_ENV: development
+      SANDBOX_GATEWAY_FAKE_PROVIDER: "false"

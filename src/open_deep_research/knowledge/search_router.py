@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -61,6 +61,7 @@ class KnowledgeSearchRequest(BaseModel):
     """Unified retrieval request; the owner always comes from auth context."""
 
     query: str = Field(min_length=1, max_length=2000)
+    queries: list[Annotated[str, Field(min_length=1, max_length=2000)]] = Field(default_factory=list, max_length=2)
     kb_ids: list[str] = Field(default_factory=list, max_length=20)
     collection_ids: list[str] = Field(default_factory=list, max_length=20)
     document_ids: list[str] = Field(default_factory=list, max_length=200)
@@ -78,6 +79,7 @@ def _to_search_request(body: KnowledgeSearchRequest, owner_id: str) -> SearchReq
     return SearchRequest(
         owner_id=owner_id,
         query=body.query,
+        queries=body.queries,
         kb_ids=body.kb_ids,
         collection_ids=body.collection_ids,
         document_ids=body.document_ids,
@@ -135,8 +137,10 @@ async def search_profiles(
                  FROM knowledge_search_profiles ORDER BY created_at DESC"""
         )
     from open_deep_research.documents.retrieval import locator_dict
+    from open_deep_research.documents.settings import get_document_settings
 
     return {
+        "index_profile": get_document_settings().index_profile,
         "items": [
             {
                 "version": row["version"],

@@ -13,8 +13,9 @@ import pytest
 from open_deep_research.configuration import Configuration
 from open_deep_research.quality.gate import deterministic_tool_checks
 from open_deep_research.security.network import validate_connected_peer
-from open_deep_research.tools.registry import get_all_tools
-from open_deep_research.tools.web_research import pipeline as utils
+from open_deep_research.agentscope_runtime.search import search_provider_tools
+from agentscope.model import StructuredResponse
+from open_deep_research.agentscope_runtime import web_tools as utils
 from open_deep_research.web.models import (
     CandidateSource,
     DocumentChunk,
@@ -158,6 +159,7 @@ async def test_disabled_sandbox_does_not_apply_domain_approval() -> None:
         [candidate("https://example.org/research")],
         1,
         config,
+        config["metadata"]["run_id"],
     )
 
     assert batch.pending_domains == []
@@ -178,6 +180,7 @@ async def test_gateway_physical_pipeline_uses_gateway_policy_boundary() -> None:
         [candidate("https://example.org/research")],
         1,
         config,
+        config["metadata"]["run_id"],
     )
 
     assert batch.pending_domains == []
@@ -428,35 +431,16 @@ async def test_pipeline_falls_back_when_model_evidence_extraction_times_out(
             urls=[item.canonical_url for item in items],
         )
 
-    class BlockingStructuredModel:
-        def with_structured_output(self, _schema, *, method):
-            assert method == "function_calling"
-            return self
+    async def timeout_model(*_args, **_kwargs):
+        raise TimeoutError("provider model timeout")
 
-    async def blocking_model_call(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    config = {
-        "configurable": {
-            "model_call_timeout_seconds": 0.01,
-            "research_tool_call_timeout_seconds": 0.1,
-        },
-        "metadata": {"run_id": "evidence-timeout-fallback"},
-    }
     monkeypatch.setattr("open_deep_research.web.pipeline.fetch_local", fake_fetch)
-    monkeypatch.setattr(utils, "init_chat_model", lambda **_kwargs: BlockingStructuredModel())
-    monkeypatch.setattr(
-        utils,
-        "invoke_model_with_retry_observability",
-        blocking_model_call,
-    )
+    monkeypatch.setattr(utils, "_structured", timeout_model)
     pipeline = WebResearchPipeline(
         search=search,
         settings=WebPipelineSettings(fetch_top_k=1),
         approve=approve,
-        evidence_extractor=lambda objective, documents, chunks: (
-            utils._extract_web_evidence(objective, documents, chunks, config)
-        ),
+        evidence_extractor=utils.NativeEvidenceExtractor(None),
     )
 
     result = await asyncio.wait_for(
@@ -829,12 +813,8 @@ async def test_model_evidence_requires_complete_soft_wrapped_excerpt(
         "line, followed by a more elaborate description."
     )
 
-    class FakeModel:
-        def with_structured_output(self, *_args, **_kwargs):
-            return self
-
     async def fake_invoke(*_args, **_kwargs):
-        return utils._ExtractedEvidenceItems(items=[
+        return StructuredResponse(content=utils._ExtractedEvidenceItems(items=[
             utils._ExtractedEvidenceItem(
                 chunk_id=chunk.chunk_id,
                 claim=complete,
@@ -845,26 +825,11 @@ async def test_model_evidence_requires_complete_soft_wrapped_excerpt(
                 claim=complete,
                 supporting_excerpt=complete,
             ),
-        ])
+        ]).model_dump())
 
-    monkeypatch.setattr(utils, "init_chat_model", lambda **_kwargs: FakeModel())
-    monkeypatch.setattr(
-        utils,
-        "invoke_model_with_retry_observability",
-        fake_invoke,
-    )
-
-    records = await utils._extract_web_evidence(
-        "summary line and blank line",
-        {document.document_id: document},
-        [chunk],
-        {
-            "configurable": {
-                "web_evidence_model": "openai:test-model",
-                "model_call_timeout_seconds": 30,
-                "research_tool_call_timeout_seconds": 60,
-            }
-        },
+    monkeypatch.setattr(utils, "_structured", fake_invoke)
+    records = await utils.NativeEvidenceExtractor(None)(
+        "summary line and blank line", {document.document_id: document}, [chunk],
     )
 
     assert [record.supporting_excerpt for record in records] == [complete]
@@ -872,16 +837,10 @@ async def test_model_evidence_requires_complete_soft_wrapped_excerpt(
 
 @pytest.mark.asyncio
 async def test_enforced_mode_exposes_pipeline_tools_not_provider_search() -> None:
-    tools = await get_all_tools(
-        {
-            "configurable": {
-                "web_pipeline_mode": "enforced",
-                "search_api": "tavily",
-                "browser_mcp_enabled": False,
-            },
-            "metadata": {"run_id": "test"},
-        }
-    )
+    config = {"configurable": {"web_pipeline_mode": "enforced", "search_api": "tavily",
+                                "browser_mcp_enabled": False}, "metadata": {"run_id": "test"}}
+    tools = [*utils.native_web_tools(lambda: config, None), *search_provider_tools(lambda: config, None)]
+    tools = [tool for tool in tools if tool.is_enabled(config)]
     names = {tool.name for tool in tools}
     assert {"web_research", "fetch_url"} <= names
     assert "tavily_search" not in names
@@ -912,8 +871,8 @@ async def test_fetch_local_retries_transient_failures(monkeypatch) -> None:
     async def no_sleep(_delay):
         return None
 
-    monkeypatch.setattr("open_deep_research.web.pipeline._fetch_local_once", fake_once)
-    monkeypatch.setattr("open_deep_research.web.pipeline.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("open_deep_research.web.fetching._fetch_local_once", fake_once)
+    monkeypatch.setattr("open_deep_research.web.fetching.asyncio.sleep", no_sleep)
 
     result = await fetch_local(candidate("https://retry.example/a"), WebPipelineSettings())
 

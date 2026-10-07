@@ -26,6 +26,8 @@ from open_deep_research.documents.database import get_document_pool
 from open_deep_research.documents.identity import document_owner_id
 from open_deep_research.documents.repository import DocumentConflictError
 
+from .network import PublicSyncTransport
+
 REFRESH_INTERVALS = {"manual": None, "daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 MAX_RETRIES = 3
 USER_AGENT = "InsightForge-KB/1.0 (+sync)"
@@ -118,9 +120,12 @@ class WebAdapter(SourceAdapter):
 
     async def _get(self, client, url, headers):
         if self.authorize_url is None:
-            return await client.get(url, headers=headers)
+            raise SyncError("sync_egress_authorization_required")
         for _ in range(6):
-            await self.authorize_url(url)
+            try:
+                await self.authorize_url(url)
+            except (PermissionError, ValueError) as exc:
+                raise SyncError("sync_egress_denied") from exc
             response = await client.get(url, headers=headers, follow_redirects=False)
             if not response.is_redirect:
                 return response
@@ -149,7 +154,7 @@ class WebAdapter(SourceAdapter):
         if source.last_modified:
             headers["If-Modified-Since"] = source.last_modified
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=PublicSyncTransport(), trust_env=False) as client:
                 response = await self._get(client, source.input_url, headers)
         except httpx.TimeoutException as exc:
             raise SyncError("sync_timeout") from exc
@@ -180,7 +185,7 @@ class WebAdapter(SourceAdapter):
     async def fetch_snapshot(self, source: SyncSourceRecord) -> SyncSnapshot:
         """Unconditional GET for the initial import."""
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=PublicSyncTransport(), trust_env=False) as client:
                 response = await self._get(client, source.input_url, {"User-Agent": USER_AGENT})
         except (httpx.HTTPError, OSError) as exc:
             raise SyncError("sync_unreachable") from exc
@@ -246,6 +251,19 @@ class WebAdapter(SourceAdapter):
                 )
 
 
+async def _require_sync_document(actor_id, knowledge_base_id, document_id):
+    from .authz import CAP_MANAGE, AuthorizationError, require_kb_capability
+
+    await require_kb_capability(actor_id, knowledge_base_id, CAP_MANAGE)
+    pool = await get_document_pool()
+    async with pool.acquire() as connection:
+        home = await connection.fetchval(
+            "SELECT home_knowledge_base_id FROM research_documents WHERE id=$1::uuid AND deleted_at IS NULL",
+            document_id)
+    if home is None or str(home) != knowledge_base_id:
+        raise AuthorizationError("sync_document_outside_knowledge_base")
+
+
 async def create_sync_source(
     actor_id: str,
     knowledge_base_id: str,
@@ -256,6 +274,7 @@ async def create_sync_source(
 ) -> dict[str, Any] | None:
     """Create one sync source binding a URL to a logical document."""
     actor_id = document_owner_id(actor_id)
+    await _require_sync_document(actor_id, knowledge_base_id, document_id)
     adapter = WebAdapter()
     config = await adapter.validate_config({"url": url})
     pool = await get_document_pool()
@@ -288,7 +307,7 @@ async def create_sync_source(
     return {"id": str(source_id), "normalized_url": config["normalized_url"]}
 
 
-async def run_sync(actor_id: str, source_id: str, *, authorize_url=None) -> dict[str, Any]:
+async def run_sync(actor_id: str, source_id: str, *, authorize_url=None, knowledge_base_id=None) -> dict[str, Any]:
     """Execute one sync: fetch, detect change, optionally create a version.
 
     Returns ``{"status": "unchanged"|"updated"|"error", ...}``. Body changes
@@ -304,6 +323,11 @@ async def run_sync(actor_id: str, source_id: str, *, authorize_url=None) -> dict
         )
     if not row:
         return {"status": "error", "code": "sync_source_not_found"}
+    if knowledge_base_id is not None and str(row["knowledge_base_id"]) != knowledge_base_id:
+        raise PermissionError("sync_source_outside_knowledge_base")
+    await _require_sync_document(actor_id, str(row["knowledge_base_id"]), str(row["document_id"]))
+    if authorize_url is None:
+        raise SyncError("sync_egress_authorization_required")
     source = SyncSourceRecord(
         id=str(row["id"]),
         document_id=str(row["document_id"]),

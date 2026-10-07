@@ -228,7 +228,7 @@ def build_native_mcp_client(connection: dict[str, Any], *, name: str = "server")
     client_type = _PublicMcpClient if connection.get("restricted_network") else MCPClient
     return client_type(
         name=name,
-        is_stateful=False,
+        is_stateful=bool(connection.get("stateful", False)),
         mcp_config=HttpMCPConfig(
             url=str(url),
             headers=dict(headers) if headers else None,
@@ -929,6 +929,7 @@ async def load_native_browser_mcp_tools(
     connection = _build_browser_connection(browser_config)
     if not connection:
         return []
+    connection["stateful"] = True
     allowed_names = _discovery_tool_names(config, allowed_names, browser_config.tool_effects, ToolOrigin.BROWSER, role)
     if not allowed_names:
         return []

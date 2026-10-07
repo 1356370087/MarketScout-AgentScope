@@ -7,6 +7,7 @@ import pytest
 
 from open_deep_research.documents import repository, retrieval, versioning
 from open_deep_research.documents.contracts import SourceSelection
+from open_deep_research.knowledge import search_service
 from security.rbac.principal import synthetic_dev_principal
 
 
@@ -91,7 +92,7 @@ async def test_all_document_owner_boundaries_accept_dev_identity(monkeypatch, op
 
     monkeypatch.setattr(repository, "get_document_pool", pool)
     monkeypatch.setattr(retrieval, "get_document_pool", pool)
-    monkeypatch.setattr(retrieval, "embed_texts", embed)
+    monkeypatch.setattr(search_service, "get_document_pool", pool)
     if operation == "bind_run_sources":
         await repository.bind_run_sources("test-run", owner, [
             {"id": doc_id, "filename": "test.txt", "sha256": "a" * 64,
@@ -102,9 +103,8 @@ async def test_all_document_owner_boundaries_accept_dev_identity(monkeypatch, op
         with pytest.raises(KeyError, match="document_not_found"):
             await repository.validate_selection(owner, selection)
     elif operation == "search_document_chunks":
-        assert await retrieval.search_document_chunks(
-            owner_id=owner, document_ids=[doc_id], query="test",
-        ) == []
+        assert await search_service.resolve_scope(search_service.SearchRequest(
+            owner_id=owner, document_ids=[doc_id], query="test")) == {"documents": []}
     elif operation == "get_chunk":
         assert await repository.get_chunk(owner, doc_id, doc_id) is None
     else:

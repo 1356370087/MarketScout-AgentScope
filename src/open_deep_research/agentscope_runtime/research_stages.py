@@ -9,7 +9,10 @@ from agentscope.message import AssistantMsg
 
 from open_deep_research.agentscope_runtime.research_pipeline import PendingDecision
 from open_deep_research.configuration import Configuration
-from open_deep_research.documents.contracts import SourceSelection, selection_from_config
+from open_deep_research.documents.contracts import (
+    SourceSelection,
+    selection_from_config,
+)
 from open_deep_research.prompts import (
     clarify_with_user_instructions,
     final_report_generation_prompt,
@@ -62,6 +65,7 @@ class NativeResearchStages:
             ])
             selection = SourceSelection.model_validate({
                 "mode": selection.mode,
+                "retrieval": selection.retrieval.model_dump(),
                 "sources": [item.model_dump() for item in selection.sources
                             if item.type in {"url", "domain"}]
                            + [{"type": "document", "id": value} for value in document_ids],
@@ -193,6 +197,18 @@ class NativeResearchStages:
             self.config_provider()
         ).enable_human_in_loop:
             return
+        if state.completion_outcome.get("action") == "complete_partial" and (
+            state.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
+            or not any(f.get("evidence_registry") for f in state.findings)
+        ):
+            state.outline = "部分研究说明：列出已有证据支持的结论、尚未证实的需求和受限的资料范围。"
+            return PendingDecision(stage="outline_approval", question=state.outline)
+        if state.completion_outcome.get("action") == "complete_partial" and (
+            state.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
+            or not any(f.get("evidence_registry") for f in state.findings)
+        ):
+            state.outline = "部分研究说明：列出已有证据支持的结论、尚未证实的需求和受限的资料范围。"
+            return PendingDecision(stage="outline_approval", question=state.outline)
         if self.report_writer is not None and hasattr(self.report_writer, "outline"):
             state.outline = await self.report_writer.outline(state, self.config_provider())
             return PendingDecision(stage="outline_approval", question=state.outline)

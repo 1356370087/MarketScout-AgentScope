@@ -22,6 +22,7 @@ from .database import get_document_pool
 from .embeddings import embed_texts, vector_literal
 from .identity import document_owner_id
 from .repository import DocumentConflictError
+from .retrieval import locator_dict
 from .settings import DocumentSettings, get_document_settings
 from .structuring import StructuredUnit, plan_table_segments
 
@@ -216,6 +217,8 @@ async def apply_corrections(
                 for text, digest in zip(texts, hashes, strict=True)
                 if digest not in known
             )
+    if embed_inputs and locator_dict(state["index_profile"]) != settings.index_profile:
+        raise DocumentConflictError("knowledge_index_profile_mismatch: full reindex required")
     vectors = await embed_texts(embed_inputs, settings, operation="ingest") if embed_inputs else []
     vector_by_hash = {
         hashlib.sha256(text.encode("utf-8")).hexdigest(): vector

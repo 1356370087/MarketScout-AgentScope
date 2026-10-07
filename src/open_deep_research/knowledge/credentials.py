@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import os
 
-from open_deep_research.documents.database import get_document_pool
-from open_deep_research.documents.identity import document_owner_id
 from open_deep_research.documents.settings import get_document_settings
 
 
@@ -40,32 +38,6 @@ def daily_model_call_budget() -> int:
         return 0
 
 
-async def check_and_count_usage(
-    owner_id: str, operation: str, calls: int = 1
-) -> None:
-    """Enforce the optional daily cap and record metered usage.
-
-    Usage is counted per user, request and operation category; research runs
-    never reach this path, so no research records are fabricated.
-    """
-    budget = daily_model_call_budget()
-    if budget <= 0:
-        return
-    owner_id = document_owner_id(owner_id)
-    pool = await get_document_pool()
-    async with pool.acquire() as connection:
-        used = await connection.fetchval(
-            """SELECT coalesce(sum((result_digest->'usage'->>$2)::int), 0)
-                 FROM knowledge_queries
-                WHERE owner_id=$1::uuid
-                  AND created_at >= date_trunc('day', now())""",
-            owner_id,
-            operation,
-        )
-    if int(used or 0) + calls > budget:
-        raise KnowledgeBudgetExceeded(
-            f"knowledge_budget_exceeded:{operation}:{int(used or 0)}/{budget}"
-        )
 
 
 def answer_model() -> str:

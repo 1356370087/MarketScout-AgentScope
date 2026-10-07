@@ -80,9 +80,11 @@ async def test_workspace_permission_matrix_and_revocation(monkeypatch):
 
 async def test_owner_transfer_and_revoked_owner_cannot_transfer_again(monkeypatch):
     from fastapi import HTTPException
+
     from open_deep_research.documents.database import initialize_document_schema
     from open_deep_research.knowledge.workspace_router import (
-        OwnershipTransferRequest, transfer_ownership,
+        OwnershipTransferRequest,
+        transfer_ownership,
     )
 
     monkeypatch.setenv("DOCUMENT_RESEARCH_ENABLED", "true")
@@ -114,6 +116,7 @@ async def test_owner_transfer_and_revoked_owner_cannot_transfer_again(monkeypatc
 
 async def test_runtime_installs_live_knowledge_space_projection(monkeypatch, tmp_path):
     from agentscope.app.access import ResourceKind
+
     from open_deep_research.agentscope_runtime.app import ASRuntime
     from open_deep_research.agentscope_runtime.settings import ASRuntimeSettings
 
@@ -244,7 +247,7 @@ async def _matrix_body(monkeypatch):
     from open_deep_research.knowledge import search_service
 
     monkeypatch.setattr(search_service, "embed_texts", fake_embed)
-    monkeypatch.setattr(search_service, "knowledge_service_key", lambda: "sk-test")
+    monkeypatch.setenv("LITELLM_SERVICE_KEY", "sk-test")
     scoped = await unified_search(
         SearchRequest(owner_id=BOB, query="team material", kb_ids=[base_id])
     )
