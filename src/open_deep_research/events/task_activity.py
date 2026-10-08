@@ -81,6 +81,8 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
     "tool.progress": {
         "tool_call_id", "tool_name", "web_phase", "provider", "query", "query_index",
         "result_count", "error_code", "backend", "reason", "metrics", "urls",
+        "raw_result_count", "parsed_result_count", "filtered_result_count", "unique_result_count",
+        "result_status", "provider_requests", "effective_query", "http_status", "final_endpoint", "redirect_count",
     },
     "model.started": {"provider", "model", "attempt", "purpose", "parent_tool_call_id"},
     "model.completed": {

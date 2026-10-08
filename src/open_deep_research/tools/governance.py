@@ -639,7 +639,7 @@ async def _call_with_limits(tool, input, context):
                 and not getattr(tool, "remote_execution", False)
                 and tool.execution_zone is not ToolExecutionZone.HOST_CONTROL):
             seconds = cfg.research_tool_call_timeout_seconds if tool.name in {
-                "web_research", "fetch_url", "web_search", "search_documents",
+                "web_research", "fetch_url", "web_search", "source_discovery", "search_documents",
             } else cfg.tool_call_timeout_seconds
             return await limited(callback, seconds,
                 deadline_at=context.config.get("metadata", {}).get("execution_deadline_at"))

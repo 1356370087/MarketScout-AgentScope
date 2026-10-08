@@ -1653,6 +1653,8 @@ class GatewayRuntime:
                 "sandbox_gateway_authorized_hosts": authorized_hosts,
                 **({"sql_fetch_grant": reservation["fetch_grant"]} if "fetch_grant" in reservation else {}),
                 **({"coverage_contract": reservation["coverage_contract"]} if "coverage_contract" in reservation else {}),
+                **({"source_selection": reservation["coverage_contract"]["source_selection"]}
+                   if reservation.get("coverage_contract", {}).get("source_selection") else {}),
                 **({"execution_deadline_at": min(v for v in (reservation.get("deadline_at"), request.deadline_at) if v is not None)}
                    if reservation.get("deadline_at") is not None or request.deadline_at is not None else {}),
             },

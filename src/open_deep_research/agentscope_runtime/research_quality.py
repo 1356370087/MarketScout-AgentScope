@@ -63,8 +63,11 @@ class NativeResearchQuality:
         protocol_validator=None,
     ):
         cfg = Configuration.from_runnable_config(config)
-        messages = [SystemMsg("quality_rules", system_prompt),
-                    UserMsg("research_evidence", "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=cfg.research_efficiency_mode == "bounded"))]
+        from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
+        modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        messages = [SystemMsg("quality_rules", system_prompt + ("\n" + CONTEXT_RULES if modern else "")),
+                    UserMsg("research_evidence", research_context_xml(payload.get("coverage_contract"), payload=payload)
+                            if modern else "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=cfg.research_efficiency_mode == "bounded"))]
         errors = []
         for attempt in range(max(1, cfg.max_structured_output_retries)):
             from open_deep_research.agentscope_runtime.recovery import (

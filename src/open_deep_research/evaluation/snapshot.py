@@ -161,6 +161,7 @@ def _project_evidence(state: Mapping[str, Any]) -> list[EvaluationEvidence]:
     registry = _unwrap_override(state.get("evidence_registry", []))
     if not isinstance(registry, list):
         return []
+    from open_deep_research.quality.planning import unique_evidence
     return [
         EvaluationEvidence.model_validate(
             {
@@ -169,7 +170,7 @@ def _project_evidence(state: Mapping[str, Any]) -> list[EvaluationEvidence]:
                 if _has_projectable_value(record.get(key))
             }
         )
-        for record in eligible_evidence_records(registry)
+        for record in eligible_evidence_records(unique_evidence(registry))
     ]
 
 

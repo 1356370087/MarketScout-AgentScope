@@ -13,6 +13,8 @@ from open_deep_research.agentscope_runtime.report import _ReportRun
 from open_deep_research.agentscope_runtime.research_models import ResearchModels
 from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.configuration import Configuration
+from open_deep_research.quality.context import context_payload
+from open_deep_research.quality.planning import unique_evidence
 from open_deep_research.report.models import ReportDraft, ReportReview
 from open_deep_research.report.reviewer import _invoke_reviewer, _invoke_reviser, _revision_prompt
 from open_deep_research.report.runtime import native_report
@@ -46,12 +48,14 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
     async def serve(request):
         body = json.loads(request.content)
         requests.append(body)
-        fields = json.loads(body["messages"][1]["content"][0]["text"])
+        fields = context_payload(body["messages"][1]["content"][0]["text"])
         evidence = json.loads(body["messages"][2]["content"][0]["text"])
         assert fields["draft_markdown"] == payload["draft_markdown"]
-        assert sorted(evidence["records"], key=lambda row: row["evidence_id"]) == sorted(
-            payload["evidence_registry"], key=lambda row: row["evidence_id"]
-        )
+        expected = payload["evidence_registry"] if role == "report_review" else unique_evidence(payload["evidence_registry"])
+        factual_fields = ("evidence_id", "claim", "supporting_excerpt", "source_url", "locator")
+        def facts(rows):
+            return sorted([{k: row.get(k) for k in factual_fields} for row in rows], key=lambda row: row["evidence_id"])
+        assert facts(evidence["records"]) == facts(expected)
         assert evidence["omitted_record_count"] == 0
         if role == "report_revisor":
             assert fields["review"]["issues"][0]["description"].endswith("ISSUE-END")
@@ -59,7 +63,7 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
             "protocol_version": 2, "logical_operation_id": body["logical_operation_id"],
             "requested_model": spec, "status": "completed",
             "message": {"role": "assistant", "content": payload["draft_markdown"]},
-            "structured": {"decision": "revise"} if role == "report_review" else None,
+            "structured": {"decision": "revise", "dimensions": {name: .9 for name in ("coverage", "citation_correctness", "contradictions", "unsupported_claims", "redundancy", "executive_readability")}} if role == "report_review" else None,
             "finish_reason": "stop",
             "usage": {"input_tokens": 10000, "output_tokens": 10},
         })

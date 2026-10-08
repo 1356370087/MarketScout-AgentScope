@@ -140,6 +140,26 @@ def visible_text(value):
             yield from visible_text(child)
 
 
+def native_validation_results(value, task_id=""):
+    """Recover explicit SDK validation refusals before governed dispatch."""
+    if isinstance(value, dict):
+        if value.get("type") == "tool_result":
+            output = value.get("output")
+            if value.get("state") == "error" and isinstance(output, str) and output.startswith("Input validation failed for tool "):
+                yield project_request({"id": value["id"], "task_id": task_id,
+                    "name": value["name"], "state": "rejected",
+                    "error": {"error_type": "input_validation_failed"},
+                    "receipt_source": "agentscope_validation",
+                    "content_preview": output[:2000], "content_truncated": len(output) > 2000})
+            return
+        for key, child in value.items():
+            if key not in {"thinking", "reasoning_content"}:
+                yield from native_validation_results(child, task_id)
+    elif isinstance(value, list):
+        for child in value:
+            yield from native_validation_results(child, task_id)
+
+
 async def collect_native_snapshot(store, snapshot, owner):
     """Export completion, waiting and failed runs without modifying the source run."""
     events = await store.events(snapshot.run_id, owner)
@@ -161,10 +181,13 @@ async def collect_native_snapshot(store, snapshot, owner):
     calls = {}
     operations = []
     transcript = []
+    validation_results = {}
     for row in rows:
         meta = starts.get(row["key"], {})
         result = row["result"] or {}
         if row["kind"].startswith("model:"):
+            for reply in native_validation_results(result.get("agent_state", {}), meta.get("task_id", "")):
+                validation_results[(reply["task_id"], reply["id"])] = {**reply, "receipt_model_operation_key": row["key"]}
             text = "\n".join(visible_text(result.get("response", {})))
             if text:
                 transcript.append(
@@ -207,6 +230,8 @@ async def collect_native_snapshot(store, snapshot, owner):
             }
         )
     for task, state in snapshot.agent_states.items():
+        for reply in native_validation_results(state, task):
+            validation_results.setdefault((task, reply["id"]), reply)
         for call in native_calls(state, task):
             # Prefer role/task dimensions recorded at invocation over a final-state fallback.
             if not any(c["id"] == call["id"] for c in calls.values()):
@@ -248,6 +273,9 @@ async def collect_native_snapshot(store, snapshot, owner):
             "content_truncated": done.get("content_truncated", False),
             "child_task_id": done.get("child_task_id"),
         }
+    for key, reply in validation_results.items():
+        if key in calls and not calls[key].get("state"):
+            calls[key].update(reply)
     supervisor_names = {
         "ConductResearch",
         "StartResearchTask",
@@ -282,7 +310,7 @@ async def collect_native_snapshot(store, snapshot, owner):
     missing = [
         c["id"]
         for c in calls.values()
-        if "operation_key" not in c
+        if ("operation_key" not in c and c.get("receipt_source") != "agentscope_validation")
         or c.get("state") not in {"committed", "not_executed", "rejected"}
     ]
     losses = sorted(
@@ -297,9 +325,10 @@ async def collect_native_snapshot(store, snapshot, owner):
         else "missing"
     )
     product = snapshot.report_product
-    evidence = [
+    from open_deep_research.quality.planning import unique_evidence
+    evidence = unique_evidence([
         r for task in snapshot.findings for r in task.get("evidence_registry", [])
-    ]
+    ])
     view = build_evaluation_snapshot(
         {
             "research_brief": snapshot.research_brief,
@@ -351,6 +380,7 @@ async def collect_native_snapshot(store, snapshot, owner):
             "run_id": snapshot.run_id,
             "projection_losses": losses,
         },
+        coverage_contract=snapshot.coverage_contract,
     )
     view["tool_trace"].update(
         supervisor_tool_calls=supervisor,

@@ -58,6 +58,8 @@ class NativeResearchStages:
         if "source_selection" not in config.get("metadata", {}):
             return
         selection = selection_from_config(config)
+        if state.application.get("approved_source_selection"):
+            selection = SourceSelection.model_validate(state.application["approved_source_selection"])
         if selection.knowledge_base_ids or selection.collection_ids:
             document_ids = dict.fromkeys([
                 *selection.document_ids,
@@ -145,6 +147,9 @@ class NativeResearchStages:
             + "\n"
             + state.memory_context
         )
+        modern = self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        if modern:
+            prompt += "\nReturn requirements quoted verbatim from the ORIGINAL user messages, not the brief. Split factual questions from recommendations, format, source counts, research dates and no-fabrication constraints. Include every core question. Classify recommendations/format as deliverable and source/execution rules as process. Quote mixed clauses as separate exact spans. Identify entities named by the user; propose their official entry URLs without certifying ownership."
         result = await self.models.structured(
             "supervisor",
             prompt,
@@ -157,26 +162,52 @@ class NativeResearchStages:
             [{"role": m.role, "content": m.get_text_content()} for m in state.messages],
             advisory_dimensions=[result.research_brief],
         )
+        if modern:
+            from open_deep_research.quality.planning import compile_planned_requirements
+            contract = compile_planned_requirements(state.messages, result.requirements, brief=result.research_brief)
+        else:
+            contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())
         state.research_brief = result.research_brief
         state.coverage_contract = contract.model_dump(mode="json")
         self._bind_source_selection(state)
+        if modern and getattr(self, "source_planner", None) is not None:
+            plan = await self.source_planner.prepare(state, result)
+            if plan is not None:
+                state.application["source_plan"] = plan
+                state.coverage_contract["source_plan"] = plan
         state.research_risk_profile = classify_research_risk(
             history,
             mode=cfg.quality_risk_mode,
             skills=cfg.skills or (),
         ).model_dump(mode="json")
+        if modern and self.config_provider().get("_event_publisher") is not None:
+            await self.config_provider()["_event_publisher"].publish("research.progress.updated", stage="planning",
+                payload={"progress": {"source_plan": state.application.get("source_plan"),
+                    "requirements": state.coverage_contract.get("requirements", [])}},
+                dedupe_key=f"source-plan:{state.revision_count}:{state.application.get('source_plan', {}).get('version', 0)}")
 
     async def plan_approval(self, state):
-        if Configuration.from_runnable_config(
-            self.config_provider()
-        ).enable_human_in_loop:
-            return PendingDecision(stage="plan_approval", question=state.research_brief)
+        plan = state.application.get("source_plan")
+        manual = Configuration.from_runnable_config(self.config_provider()).enable_human_in_loop
+        if plan and plan.get("status") == "verified" and not manual:
+            plan["status"] = "automatic"
+            state.coverage_contract["source_plan"] = plan
+            if self.config_provider().get("_event_publisher") is not None:
+                await self.config_provider()["_event_publisher"].publish("research.progress.updated", stage="planning",
+                    payload={"progress": {"source_plan": plan}}, dedupe_key=f"source-plan-automatic:{plan['version']}")
+        if (plan and plan.get("status") == "needs_confirmation") or manual:
+            requirements = state.coverage_contract.get("requirements", [])
+            return PendingDecision(stage="plan_approval", question=state.research_brief,
+                payload={"source_plan": plan, "version": (plan or {}).get("version", 1),
+                         "requirements": requirements})
 
     async def research_supervisor(self, state):
         # Older checkpoints predate structured source selection in the contract.
         self._bind_source_selection(state)
         cfg = Configuration.from_runnable_config(self.config_provider())
+        self.supervisor.initial_findings = state.findings
+        self.supervisor.initial_coverage_ledger = state.coverage_ledger
         feedback = list(state.feedback)
         if cfg.enable_async_research and cfg.async_research_mode == "teams":
             feedback.extend("用户原始协作要求：" + message.get_text_content()
@@ -191,6 +222,16 @@ class NativeResearchStages:
         state.coverage_ledger = agent_state.get("middle_context", {}).get(
             "coverage_ledger", {}
         )
+        proposals = agent_state.get("middle_context", {}).get("source_proposals", [])
+        if proposals:
+            prior = state.application.get("source_plan") or {"version": 0, "intent": "official_only", "entries": [],
+                "selection": state.coverage_contract.get("source_selection", {"mode": "web", "sources": []})}
+            plan = {**prior, "version": prior["version"] + 1, "status": "needs_confirmation",
+                "entries": [*prior.get("entries", []), *proposals], "source_expansion": True, "explicit": False}
+            state.application["source_plan"] = plan
+            return PendingDecision(stage="plan_approval", question="研究发现需要新增来源。请核对候选官网及扩展理由；批准前不会访问或采用该来源。",
+                payload={"source_plan": plan, "version": plan["version"], "requirements": state.coverage_contract.get("requirements", []),
+                         "resume_stage": "research_supervisor"})
 
     async def outline_approval(self, state):
         if not Configuration.from_runnable_config(

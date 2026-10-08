@@ -31,7 +31,7 @@ from open_deep_research.sandbox.internal_api import (
 
 # 这些工具的物理抓取进入 fetch_calls 维度；其余工具只计 tool_calls。
 GATEWAY_FETCH_TOOLS = frozenset({"fetch_url", "fetch_webpage", "web_research"})
-GATEWAY_SEARCH_TOOLS = frozenset({"web_search", "tavily_search", "openai_web_search", "anthropic_web_search", "web_research"})
+GATEWAY_SEARCH_TOOLS = frozenset({"web_search", "tavily_search", "openai_web_search", "anthropic_web_search", "web_research", "source_discovery"})
 GATEWAY_WEB_TOOLS = GATEWAY_FETCH_TOOLS | GATEWAY_SEARCH_TOOLS
 
 
@@ -145,6 +145,9 @@ class SQLGatewayLedger:
             # The host's live recovery snapshot is authoritative; never accept
             # a caller-supplied contract to widen the source boundary.
             result["coverage_contract"] = session.snapshot.coverage_contract
+            preparation = session.snapshot.application.get("source_preparation", {})
+            if preparation.get("active") and request.task_id == preparation.get("task_id"):
+                result["coverage_contract"] = preparation["contract"]
         if getattr(self, "research_cache", None) is not None:
             progress = await self.research_cache.progress()
             budget = await session.store.budget(session.lease.run_id, session.lease.user_id)

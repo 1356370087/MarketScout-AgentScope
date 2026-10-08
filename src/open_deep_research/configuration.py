@@ -16,7 +16,7 @@ from open_deep_research.quality.policy import (
     rigor_from_legacy_min_score,
 )
 
-RUN_CONFIG_SCHEMA_VERSION = 17
+RUN_CONFIG_SCHEMA_VERSION = 18
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
@@ -211,7 +211,8 @@ _V17_ONWARD_FROZEN_FIELDS = {
     "research_context_target_tokens", "handoff_context_target_tokens",
 }
 RUN_CONFIG_FROZEN_FIELDS_V16 = RUN_CONFIG_FROZEN_FIELDS
-RUN_CONFIG_FROZEN_FIELDS = (*RUN_CONFIG_FROZEN_FIELDS, *sorted(_V17_ONWARD_FROZEN_FIELDS))
+RUN_CONFIG_FROZEN_FIELDS_V17 = (*RUN_CONFIG_FROZEN_FIELDS, *sorted(_V17_ONWARD_FROZEN_FIELDS))
+RUN_CONFIG_FROZEN_FIELDS = (*RUN_CONFIG_FROZEN_FIELDS_V17, "report_time_reserve_ratio")
 RUN_CONFIG_FROZEN_FIELDS_V15 = tuple(
     name for name in RUN_CONFIG_FROZEN_FIELDS_V16 if name not in _V16_ONWARD_FROZEN_FIELDS
 )
@@ -549,6 +550,8 @@ class Configuration(BaseModel):
         ),
     )
     model_call_timeout_seconds: float = Field(default=180, gt=0)
+    report_time_reserve_ratio: float = Field(default=0.3, gt=0, le=1,
+        description="报告阶段预留时间占运行总时限的比例；默认 0.3，上限仍受模型调用时间上界约束。")
     tool_call_timeout_seconds: float = Field(default=120, gt=0)
     research_tool_call_timeout_seconds: float = Field(
         default=300,
@@ -2372,6 +2375,8 @@ class Configuration(BaseModel):
                           max_no_progress_rounds=2, research_context_target_tokens=24_000,
                           handoff_context_target_tokens=8_000)
         rigor, _warning = _resolve_quality_rigor(config or {})
+        if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 18:
+            values["report_time_reserve_ratio"] = 1.0
         values["quality_evaluation_rigor"] = rigor
         # Explicit env-var overrides for fields with non-standard env names
         if os.environ.get("MEM0_PROVIDER") and "memory_provider" not in (configurable or {}):
@@ -2425,6 +2430,8 @@ def frozen_run_config_values(config: RuntimeConfig) -> dict[str, Any]:
         if schema_version == 15
         else RUN_CONFIG_FROZEN_FIELDS_V16
         if schema_version == 16
+        else RUN_CONFIG_FROZEN_FIELDS_V17
+        if schema_version == 17
         else RUN_CONFIG_FROZEN_FIELDS
     )
     return {
@@ -2501,6 +2508,8 @@ def freeze_run_config(
             if schema_version == 15
             else RUN_CONFIG_FROZEN_FIELDS_V16
             if schema_version == 16
+            else RUN_CONFIG_FROZEN_FIELDS_V17
+            if schema_version == 17
             else RUN_CONFIG_FROZEN_FIELDS
         )
         missing = [

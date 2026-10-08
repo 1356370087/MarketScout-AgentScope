@@ -44,6 +44,7 @@ class PendingDecision(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     stage: str
     question: str
+    payload: dict = Field(default_factory=dict)
 
 
 class ResearchSnapshot(BaseModel):
@@ -148,15 +149,15 @@ class ResearchPipeline:
         await self.save(state.model_copy(deep=True))
         self.state = state
 
-    async def decide(self, decision_id: str, action: str, feedback: str = "") -> None:
+    async def decide(self, decision_id: str, action: str, feedback: str = "", **options) -> None:
         """Consume an exact pending decision; repeated identical decisions are no-ops."""
         async with self._lock:
-            await self._decide(decision_id, action, feedback)
+            await self._decide(decision_id, action, feedback, **options)
 
-    async def _decide(self, decision_id: str, action: str, feedback: str = "") -> None:
+    async def _decide(self, decision_id: str, action: str, feedback: str = "", *, source_selection=None, expected_version=None) -> None:
         if action not in {"approve", "revise", "cancel", "answer"}:
             raise ValueError("unsupported research decision")
-        receipt = f"{action}:{feedback}"
+        receipt = f"{action}:{feedback}" if source_selection is None and expected_version is None else json.dumps([action, feedback, source_selection, expected_version], sort_keys=True)
         if decision_id in self.state.decisions:
             if self.state.decisions[decision_id] != receipt:
                 raise ValueError("conflicting research decision")
@@ -192,6 +193,35 @@ class ResearchPipeline:
         state = self.state.model_copy(deep=True)
         state.decisions[decision_id] = receipt
         state.pending = None
+        if pending.stage == "plan_approval":
+            if expected_version is not None and pending.payload.get("version") != expected_version:
+                raise ValueError("source_plan_version_changed")
+            plan = state.application.get("source_plan")
+            if source_selection is not None:
+                from open_deep_research.documents.contracts import SourceSelection
+                selection = SourceSelection.model_validate(source_selection).model_dump(mode="json")
+                state.application["approved_source_selection"] = selection
+                state.coverage_contract["source_selection"] = selection
+                if plan:
+                    plan.update(explicit=True, selection=selection)
+            if plan and action == "approve":
+                if not plan.get("explicit") and (not plan.get("entries") or any(not e.get("website") for e in plan["entries"])):
+                    raise ValueError("official_source_confirmation_required")
+                plan["status"] = "confirmed"
+                for entry in plan.get("entries", []):
+                    entry["status"] = "confirmed"
+                state.coverage_contract["source_plan"] = plan
+                if plan.get("source_expansion") and source_selection is None:
+                    from urllib.parse import urlsplit
+                    from open_deep_research.documents.contracts import SourceSelection
+                    base = plan.get("selection") or {"mode": "web", "sources": []}
+                    sources = list(base.get("sources", []))
+                    sources += [{"type": "domain", "domain": urlsplit(e["website"]).hostname}
+                                for e in plan["entries"] if e.get("website")]
+                    sources = list({json.dumps(s, sort_keys=True): s for s in sources}.values())
+                    selection = SourceSelection.model_validate({"mode": "specific", "sources": sources}).model_dump(mode="json")
+                    state.application["approved_source_selection"] = selection
+                    state.coverage_contract["source_selection"] = selection
         if feedback:
             state.feedback.append(feedback)
             state.messages.append(UserMsg("user", feedback))
@@ -207,7 +237,10 @@ class ResearchPipeline:
             state.completed = list(STAGES[: STAGES.index(target)])
             state.status = "ready"
         else:
-            state.completed.append(pending.stage)
+            if pending.payload.get("resume_stage"):
+                state.revision_count += 1
+            else:
+                state.completed.append(pending.stage)
             state.status = "ready"
         await self._commit(state)
 

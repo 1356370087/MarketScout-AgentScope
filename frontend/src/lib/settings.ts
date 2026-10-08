@@ -33,7 +33,7 @@ export function applyPublicationThemePreset(theme: PublicationTheme, preset: Pub
 }
 
 export const settingGroups: Array<{ id: string; label: string; keys: string[] }> = [
-  { id: "basic", label: "研究流程", keys: ["allow_clarification", "enable_async_research", "async_research_mode", "team_execution_mode"] },
+  { id: "basic", label: "研究流程", keys: ["allow_clarification", "enable_async_research", "async_research_mode", "team_execution_mode", "report_time_reserve_ratio"] },
   { id: "efficiency", label: "研究效率与运行预算", keys: ["research_efficiency_mode", "max_supplement_rounds", "max_no_progress_rounds", "research_context_target_tokens", "handoff_context_target_tokens", "run_deadline_seconds", "max_run_model_calls", "max_run_tool_calls", "max_run_input_tokens", "max_run_output_tokens", "max_run_cost_micro_usd", "model_call_timeout_seconds", "tool_call_timeout_seconds", "research_tool_call_timeout_seconds", "task_timeout_seconds"] },
   { id: "models", label: "模型与 Token 预算", keys: ["summarization_model", "summarization_model_max_tokens", "research_model", "research_model_max_tokens", "compression_model", "compression_model_max_tokens", "final_report_model", "final_report_model_max_tokens"] },
   { id: "evidence", label: "来源与证据", keys: ["search_providers", "search_max_concurrency", "openai_search_model", "anthropic_search_model", "knowledge_rerank_model", "web_pipeline_mode", "web_pipeline_shadow_sample_rate", "web_shadow_fetch_top_k", "web_shadow_timeout_seconds", "web_min_source_authority", "search_candidate_limit", "max_fetches_per_researcher"] },

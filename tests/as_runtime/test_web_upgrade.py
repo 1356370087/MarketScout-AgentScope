@@ -184,7 +184,7 @@ def test_v16_freezes_web_settings_without_credentials(monkeypatch):
     assert restored.get("search_providers") == ["bing", "brave"]
     assert restored.get("web_shadow_fetch_top_k") == 1
     assert "fixture-secret" not in json.dumps(run.snapshot())
-    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == 17
+    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == 18
 
 
 def test_blank_optional_environment_values_do_not_hide_saved_ui_choices(monkeypatch):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict, deque
 from string import Formatter
+from urllib.parse import urlsplit
 from typing import Any
 
 from .runtime import (
@@ -53,20 +54,31 @@ class ReportInputBudgetExceeded(RuntimeError):
     """A complete report protocol cannot fit; never certify a partial draft."""
 
 
-def project_evidence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def project_evidence(records: list[dict[str, Any]], *, deduplicate=True) -> list[dict[str, Any]]:
     """Keep factual provenance intact; budget selection drops whole records."""
     fields = (
         "evidence_id", "claim", "supporting_excerpt", "source_title",
         "locator", "source_kind", "source_authority", "confidence",
         "requirement_ids", "source_type", "source_scope_status",
     )
+    from open_deep_research.quality.planning import unique_evidence
     return [
         {
             **{key: record[key] for key in fields if key in record},
             "source_url": record.get("source_uri") or record.get("source_url") or "",
         }
-        for record in records
+        for record in (unique_evidence(records) if deduplicate else records)
     ]
+
+
+def evidence_bindings(records, ledger):
+    """Collect authoritative requirement bindings for all report stages."""
+    result = {k: list(v.get("evidence_ids", [])) for k, v in (ledger or {}).items() if isinstance(v, dict)}
+    for row in records:
+        for rid in row.get("requirement_ids", []):
+            if row.get("evidence_id") not in result.setdefault(rid, []):
+                result[rid].append(row["evidence_id"])
+    return result
 
 
 def writing_messages(
@@ -82,9 +94,13 @@ def writing_messages(
         for _, name, _, _ in Formatter().parse(template)
         if name is not None
     }
+    from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
+    payload = dict(payload)
+    version = payload.pop("_run_schema_version", 18)
     return [
-        SystemMessage(content=WRITING_RULES + "\n" + template.format(**placeholders) + "\n" + guidance),
-        HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        SystemMessage(content=WRITING_RULES + ("\n" + CONTEXT_RULES if version >= 18 else "") + "\n" + template.format(**placeholders) + "\n" + guidance),
+        HumanMessage(content=research_context_xml(payload.get("coverage_contract"), payload=payload)
+                     if version >= 18 else json.dumps(payload, ensure_ascii=False, default=str)),
         HumanMessage(
             content=json.dumps({"records": records}, ensure_ascii=False, default=str),
             name=EVIDENCE_MESSAGE,
@@ -95,18 +111,27 @@ def writing_messages(
 def order_evidence(
     records: list[dict[str, Any]],
     requirement_to_evidence: dict[str, list[str]],
+    *, deduplicate=True,
 ) -> list[dict[str, Any]]:
     """Cover requirements first, then round-robin across distinct sources."""
+    from open_deep_research.quality.planning import unique_evidence
+    records = unique_evidence(records) if deduplicate else records
     by_id = {str(r.get("evidence_id")): r for r in records if r.get("evidence_id")}
     selected: list[dict[str, Any]] = []
     seen: set[int] = set()
     for ids in requirement_to_evidence.values():
+        covered_sources = set()
         for evidence_id in ids:
             record = by_id.get(evidence_id)
-            if record is not None and id(record) not in seen:
-                selected.append(record)
-                seen.add(id(record))
-                break
+            if record is not None:
+                owner = urlsplit(str(record.get("source_url", ""))).hostname or record.get("source_type", "unknown")
+                if owner not in covered_sources:
+                    covered_sources.add(owner)
+                    if id(record) not in seen:
+                        selected.append(record)
+                        seen.add(id(record))
+                    if not deduplicate:
+                        break
     buckets: dict[str, deque] = defaultdict(deque)
     for record in records:
         if id(record) not in seen:
@@ -153,6 +178,12 @@ def fit_writing_messages(
             used += cost
     if records and not selected:
         raise ReportInputBudgetExceeded("report_evidence_context_exceeds_budget")
+    from open_deep_research.quality.context import context_payload
+    for message in fixed:
+        if message.type == "human" and str(message.content).startswith("<research_context"):
+            required = set(context_payload(str(message.content)).get("required_evidence_ids", []))
+            if required - {row.get("evidence_id") for row in selected}:
+                raise ReportInputBudgetExceeded("report_revision_issue_evidence_exceeds_budget")
     if not any(m.name == EVIDENCE_MESSAGE for m in messages):
         return messages, 0
     envelope = HumanMessage(

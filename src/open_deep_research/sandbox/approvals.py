@@ -231,6 +231,23 @@ class SecurityApprovalStore:
 
         return self._locked(read)
 
+    def expire_task(self, task_id: str, *, fence_token: int) -> list[SecurityApproval]:
+        """Retire requests when a known preparation task has finished execution."""
+        def expire(data):
+            changed = []
+            for approval_id, raw in list(data["approvals"].items()):
+                item = SecurityApproval.model_validate(raw)
+                if item.task_id == task_id and item.fence_token == fence_token and item.status == "pending":
+                    item.status, item.decision = "expired", "deny"
+                    item.reason, item.resolved_at = "operation_finished", time.time()
+                    item.version += 1
+                    data["approvals"][approval_id] = item.model_dump(mode="json")
+                    changed.append(item)
+            if changed:
+                data["version"] = int(data.get("version", 0)) + 1
+            return changed
+        return self._locked(expire)
+
     def resolve(
         self,
         approval_id: str,

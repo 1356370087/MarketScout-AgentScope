@@ -6,9 +6,10 @@ import asyncio
 import base64
 import inspect
 import json
+import re
 from collections.abc import Callable
 from itertools import zip_longest
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
@@ -284,7 +285,7 @@ def parse_bing_results(html: str) -> list[dict[str, str]]:
                 "content": snippet.get_text(" ", strip=True) if snippet else "",
             }
         )
-    if not results and not soup.select_one(".b_no, #b_results .b_msg"):
+    if not results and not soup.select_one(".b_no"):
         raise SearchProviderError("search_page_unrecognized")
     return results
 
@@ -313,19 +314,33 @@ class SearchResources:
                 )
         return self.clients[provider]
 
-    async def get(self, provider: str, config: dict, **kwargs) -> str:
+    async def get(self, provider: str, config: dict, *, return_info=False, **kwargs):
         """Read a fixed provider endpoint with a bounded response body."""
         client = self.client(provider, config)
-        async with client.stream("GET", PROVIDER_URLS[provider], **kwargs) as response:
-            response.raise_for_status()
-            if response.is_redirect:
-                raise SearchProviderError("provider_redirect_refused")
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                body.extend(chunk)
-                if len(body) > 2 * 1024 * 1024:
-                    raise SearchProviderError("provider_response_too_large")
-            return body.decode("utf-8", errors="replace")
+        url = PROVIDER_URLS[provider]
+        modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        for hop in range(3):
+            async with client.stream("GET", url, **kwargs) as response:
+                if response.is_redirect:
+                    target = urljoin(str(response.url), response.headers.get("location", ""))
+                    parsed = urlsplit(target)
+                    if not modern or provider != "bing" or hop == 2 or parsed.scheme != "https" or parsed.hostname not in {"www.bing.com", "cn.bing.com"} or parsed.path != "/search":
+                        raise SearchProviderError("provider_redirect_refused")
+                    if egress_authorizer.get() is not None and await authorize_url(target, "search.provider", consume=True) != "allow":
+                        raise SearchProviderError("provider_redirect_not_allowed")
+                    url = target
+                    kwargs.pop("params", None)
+                    continue
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 2 * 1024 * 1024:
+                        raise SearchProviderError("provider_response_too_large")
+                text = body.decode("utf-8", errors="replace")
+                info = {"http_status": response.status_code, "final_endpoint": str(response.url).split("?")[0], "redirect_count": hop}
+                return (text, info) if return_info else text
+
 
     async def aclose(self):
         for client in self.clients.values():
@@ -335,6 +350,17 @@ class SearchResources:
                 if inspect.isawaitable(result):
                     await result
         self.clients.clear()
+
+
+def bing_query(query, domains, *, simplified=False):
+    """Keep the product name instead of an unsupported site-only query."""
+    sites = re.findall(r"site:([^\s]+)", query, re.IGNORECASE)
+    text = re.sub(r"site:[^\s]+", "", query, flags=re.IGNORECASE).strip()
+    entity = (sites[0] if sites else "").removeprefix("www.").split(".")[0]
+    if entity and entity.casefold() not in text.casefold():
+        text = entity + " " + text
+    words = text.split()
+    return " ".join(words[:3] + ["documentation"]) if simplified else " ".join(words[:8])
 
 
 class SearchService:
@@ -373,9 +399,10 @@ class SearchService:
         return response.get("results", []), ""
 
     async def _bing(self, query: str, request: SearchRequest):
-        html = await self.resources.get(
+        value = await self.resources.get(
             "bing",
             self.config,
+            return_info=True,
             params={"q": query, "setmkt": request.locale or "en-US"},
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
@@ -383,7 +410,8 @@ class SearchService:
                 "Accept-Language": request.locale or "en-US,en;q=0.9",
             },
         )
-        return parse_bing_results(html), ""
+        html, info = value if isinstance(value, tuple) else (value, {})
+        return parse_bing_results(html), "", info
 
     async def _brave(self, query: str, request: SearchRequest):
         key = resolve_named_api_key("BRAVE_API_KEY", self.config)
@@ -479,7 +507,10 @@ class SearchService:
                 candidates=exact, errors=[] if exact else ["search_api_none"]
             )
         errors = []
-        if selection.mode is SourceMode.SPECIFIC and selection.domains:
+        modern = self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        if selection.mode is SourceMode.SPECIFIC and selection.domains and modern:
+            request = request.model_copy(update={"allowed_domains": list(selection.domains)})
+        elif selection.mode is SourceMode.SPECIFIC and selection.domains:
             queries, overflow, total = bounded_specific_queries(
                 list(selection.domains), request.queries
             )
@@ -510,37 +541,62 @@ class SearchService:
                         != "allow"
                     ):
                         raise SearchProviderError("provider_egress_not_allowed")
-                    rows, synthesis = await (
-                        strategies[provider](query, request)
+                    effective_query = bing_query(query, request.allowed_domains) if modern and provider == "bing" else query
+                    result = await (
+                        strategies[provider](effective_query, request)
                         if provider in strategies
                         else self._model_search(provider, query, request)
                     )
-                    items = []
-                    for rank, row in enumerate(
-                        rows[: min(10, request.candidate_limit)], 1
-                    ):
-                        item = candidate(
-                            provider,
-                            str(row.get("url", "")),
-                            str(row.get("title", "")),
-                            str(row.get("content", "")),
-                            rank,
-                            query,
-                            row.get("raw_content"),
-                        )
-                        if item and source_allowed(
-                            item.canonical_url, self.config, request
-                        ):
-                            items.append(item)
-                    await self._progress(
-                        "query_completed",
+                    rows, synthesis, *details = result
+                    parsed_count = 0
+                    filter_reasons = {}
+                    def project(rows):
+                        nonlocal parsed_count
+                        items = []
+                        limit = min(10, request.candidate_limit)
+                        if len(rows) > limit:
+                            filter_reasons["candidate_limit"] = filter_reasons.get("candidate_limit", 0) + len(rows) - limit
+                        for rank, row in enumerate(rows[:min(10, request.candidate_limit)], 1):
+                            item = candidate(provider, str(row.get("url", "")), str(row.get("title", "")),
+                                str(row.get("content", "")), rank, query, row.get("raw_content"))
+                            if item is None:
+                                filter_reasons["invalid_url"] = filter_reasons.get("invalid_url", 0) + 1
+                                continue
+                            parsed_count += 1
+                            if source_allowed(item.canonical_url, self.config, request):
+                                items.append(item)
+                            else:
+                                filter_reasons["source_scope"] = filter_reasons.get("source_scope", 0) + 1
+                        return items
+                    items = project(rows)
+                    raw_count = len(rows)
+                    info = details[0] if details else {}
+                    attempts = 1 + info.get("redirect_count", 0)
+                    if modern and provider == "bing" and rows and not items:
+                        retry_query = bing_query(query, request.allowed_domains, simplified=True)
+                        if retry_query != effective_query:
+                            if egress_authorizer.get() is not None and await authorize_url(PROVIDER_URLS[provider], "search.provider", consume=True) != "allow":
+                                raise SearchProviderError("provider_egress_not_allowed")
+                            rows, synthesis, *details = await self._bing(retry_query, request)
+                            items = project(rows)
+                            raw_count += len(rows)
+                            info = details[0] if details else info
+                            attempts += 1 + info.get("redirect_count", 0)
+                    outcome = dict(
                         provider=provider,
                         query=query,
                         query_index=index,
                         result_count=len(items),
+                        raw_result_count=raw_count, parsed_result_count=parsed_count,
+                        filtered_result_count=raw_count-len(items),
+                        filter_reasons=filter_reasons,
+                        unique_result_count=len({i.canonical_url for i in items}),
+                        result_status="usable" if items else "all_filtered" if raw_count else "empty",
+                        provider_requests=attempts, effective_query=effective_query, **info,
                     )
-                    return provider, items, synthesis, None
-                except Exception as exc:  # noqa: BLE001 - normalize external failures after preserving runtime control
+                    await self._progress("query_completed", **outcome)
+                    return provider, items, synthesis, None, raw_count, attempts, outcome
+                except Exception as exc:  # noqa: BLE001 - preserve control errors before normalizing provider failures
                     preserve_control_error(exc)
                     code = error_code(exc)
                     await self._progress(
@@ -549,7 +605,7 @@ class SearchService:
                         query_index=index,
                         error_code=code,
                     )
-                    return provider, [], "", code
+                    return provider, [], "", code, 0, 1, {"query": query, "error_code": code, "result_status": "failed"}
 
         tasks = [
             asyncio.create_task(run(provider, index, query))
@@ -566,7 +622,7 @@ class SearchService:
         by_provider = {provider: [] for provider in providers}
         failures = {provider: [] for provider in providers}
         syntheses = []
-        for provider, items, text, error in outcomes:
+        for provider, items, text, error, raw_count, attempts, outcome in outcomes:
             by_provider[provider].extend(items)
             if error:
                 failures[provider].append(error)
@@ -589,6 +645,15 @@ class SearchService:
             SearchProviderResult(
                 provider=p,
                 query_count=len(request.queries),
+                raw_result_count=sum(o[4] for o in outcomes if o[0] == p),
+                provider_requests=sum(o[5] for o in outcomes if o[0] == p),
+                unique_result_count=len({item.canonical_url for item in by_provider[p]}),
+                exclusive_result_count=len({item.canonical_url for item in by_provider[p]} - {item.canonical_url for other in providers if other != p for item in by_provider[other]}),
+                shared_result_count=len({item.canonical_url for item in by_provider[p]} & {item.canonical_url for other in providers if other != p for item in by_provider[other]}),
+                duplicate_result_count=len(by_provider[p]) - len({item.canonical_url for item in by_provider[p]}),
+                parsed_result_count=sum(o[6].get("parsed_result_count", 0) for o in outcomes if o[0] == p),
+                filtered_result_count=sum(o[6].get("filtered_result_count", 0) for o in outcomes if o[0] == p),
+                query_outcomes=[o[6] for o in outcomes if o[0] == p],
                 result_count=len(by_provider[p]),
                 status="failed"
                 if len(failures[p]) == len(request.queries)
@@ -604,6 +669,6 @@ class SearchService:
             syntheses=syntheses,
             errors=errors,
             provider_results=statuses,
-            search_calls=len(outcomes),
-            raw_candidate_count=len(exact) + len(merged),
+            search_calls=sum(o[5] for o in outcomes),
+            raw_candidate_count=len(exact) + sum(o[4] for o in outcomes),
         )

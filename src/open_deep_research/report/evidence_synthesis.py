@@ -123,9 +123,9 @@ def _validate_rendered_urls(report: str, allowed_urls: set[str]) -> None:
         raise ValueError("evidence_synthesis_rendered_url_not_allowlisted")
 
 
-def _project_evidence(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _project_evidence(records: list[dict[str, Any]], *, deduplicate=True) -> list[dict[str, Any]]:
     """Project evidence to the only fields the restricted writer may read."""
-    return project_evidence(records)
+    return project_evidence(records, deduplicate=deduplicate)
 
 
 def _source_bucket(record: dict[str, Any]) -> str:
@@ -152,8 +152,23 @@ def _select_evidence_for_budget(
     *,
     token_budget: int,
     max_records: int = 56,
+    requirement_to_evidence: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Select a bounded, source-diverse evidence projection."""
+    from .writing import order_evidence
+    ordered = order_evidence(records, requirement_to_evidence or {})
+    selected = []
+    used = 0
+    for record in ordered:
+        cost = count_tokens_approximately([HumanMessage(content=json.dumps(record, ensure_ascii=False))])
+        if used + cost <= token_budget and len(selected) < max_records:
+            selected.append(record)
+            used += cost
+    return selected
+
+
+def _legacy_select_evidence_for_budget(records, *, token_budget, max_records=56):
+    """Historical source-diverse projection retained for frozen runs."""
     buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
     bucket_order: list[str] = []
     for record in records:
@@ -409,9 +424,14 @@ async def build_evidence_limited_report(
         )
         if available_evidence_tokens < 256:
             return fallback()
-        projected_evidence = _select_evidence_for_budget(
-            _project_evidence(eligible),
+        from .writing import evidence_bindings
+        bindings = evidence_bindings(eligible, coverage_ledger)
+        modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        selector = _select_evidence_for_budget if modern else _legacy_select_evidence_for_budget
+        projected_evidence = selector(
+            _project_evidence(eligible, deduplicate=modern),
             token_budget=max(256, int(available_evidence_tokens * 0.7)),
+            **({"requirement_to_evidence": bindings} if modern else {}),
         )
         evidence_by_id = {
             str(record.get("evidence_id", "")): record

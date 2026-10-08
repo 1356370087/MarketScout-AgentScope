@@ -175,7 +175,7 @@ class NativeRuns:
                 config,
                 messages=messages,
                 application={
-                    "evaluation_capture": prepared.get("evaluation_capture") is True,
+                    "evaluation_capture": prepared.get("evaluation_capture") is True or config.compatibility_projection()["metadata"]["run_config_schema_version"] >= 18,
                     "knowledge_manifest": prepared.get("metadata", {}).get("knowledge_manifest"),
                     "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
@@ -333,15 +333,20 @@ class NativeRuns:
             await recovery.close()
 
     async def decide(
-        self, run_id, owner, action_id, action, message="", command_id=None
+        self, run_id, owner, action_id, action, message="", command_id=None, *, source_selection=None, expected_version=None
     ):
-        command_id = command_id or digest([action_id, action, message])
+        payload = {"action": action, "feedback": message}
+        if source_selection is not None:
+            payload["source_selection"] = source_selection
+        if expected_version is not None:
+            payload["expected_version"] = expected_version
+        command_id = command_id or digest([action_id, payload])
         result = await self.store.submit_decision(
             run_id,
             owner,
             command_id,
             action_id,
-            {"action": action, "feedback": message},
+            payload,
         )
         # The database commit is the acknowledgement; resume always consumes
         # queued commands again after a crash between commit and scheduling.
@@ -411,7 +416,9 @@ class NativeRuns:
             "revision": revision,
             "pending_human_action": projection.pending_human_action,
             "pending_security_approvals": projection.pending_security_approvals,
-            "progress": {**projection.model_dump(mode="json"), "status": status, **({"efficiency": efficiency} if research else {})},
+            "progress": {**projection.model_dump(mode="json"), "status": status,
+                "source_plan": state.application.get("source_plan"),
+                **({"efficiency": efficiency} if research else {})},
             "output": {
                 **_stable_output(
                     state.report_product,

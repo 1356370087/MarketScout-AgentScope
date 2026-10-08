@@ -36,6 +36,7 @@ def evaluation_state(snapshot):
             if product.get("quality_gate", {}).get("status") in {"failed", "degraded"}
             else "success"
         }
+    from open_deep_research.quality.planning import unique_evidence
     return {
         "engine": "agentscope",
         "runtime_status": snapshot.status,
@@ -46,7 +47,7 @@ def evaluation_state(snapshot):
         "coverage_ledger": snapshot.coverage_ledger,
         "completed_task_outputs": snapshot.findings,
         "supervisor_messages": snapshot.agent_states.get("supervisor", {}).get("context", []),
-        "evidence_registry": [record for task in snapshot.findings for record in task.get("evidence_registry", [])],
+        "evidence_registry": unique_evidence([record for task in snapshot.findings for record in task.get("evidence_registry", [])]),
         "evaluation_snapshot": product.get("evaluation_snapshot"),
         "coverage_checklist": product.get("coverage_checklist", []),
         "quality_gate": product.get("quality_gate"),

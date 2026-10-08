@@ -31,6 +31,10 @@ class EvaluationInterrupted(BaseException):
         super().__init__(type(error).__name__)
 
 
+class EvaluationInputBudgetExceeded(ValueError):
+    """An intact archived input cannot fit the frozen Judge context."""
+
+
 def complete_metric_categories(metrics):
     """Represent non-applicable legacy empty lists without fabricating scores."""
     result = list(metrics)
@@ -54,7 +58,8 @@ def complete_metric_categories(metrics):
 
 
 async def evaluate_output(
-    models, *, case_id, sample_id, inputs, outputs, reference_outputs=None
+    models, *, case_id, sample_id, inputs, outputs, reference_outputs=None,
+    max_input_tokens=None,
 ):
     """Evaluate an archived output without rerunning or resuming its research.
 
@@ -81,6 +86,11 @@ async def evaluate_output(
             from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
 
             task_id = f"evaluation:{case_id}:{sample_id}:{metric}"
+            if max_input_tokens is not None:
+                # The report runtime uses the same conservative UTF-8 bound.
+                size = sum(len(m["content"].encode("utf8")) + 16 for m in messages)
+                if size > max_input_tokens:
+                    raise EvaluationInputBudgetExceeded("judge_input_exceeds_frozen_context")
             native = []
             for message in messages:
                 if message["role"] not in {"system", "user"}:

@@ -24,6 +24,9 @@ export function ActivityCard({ group, onSource }: { group: ActivityGroup; onSour
         <strong>{typeof event.payload.provider === "string" ? `${event.payload.provider} · ` : ""}{event.title}</strong>
         <span>{event.summary}</span>
         {typeof event.payload.result_count === "number" && <small>{event.payload.result_count} 个候选来源</small>}
+        {typeof event.payload.raw_result_count === "number" && <small>返回 {event.payload.raw_result_count} 条 · 范围过滤 {String(event.payload.filtered_result_count ?? 0)} 条 · 去重后 {String(event.payload.unique_result_count ?? event.payload.result_count ?? 0)} 条</small>}
+        {event.payload.result_status === "all_filtered" && <small>本渠道返回结果均不在允许的来源范围内</small>}
+        {typeof event.payload.provider_requests === "number" && event.payload.provider_requests > 1 && <small>含一次简化查询，共 {event.payload.provider_requests} 次请求</small>}
         {typeof event.payload.backend === "string" && <small>读取方式：{event.payload.backend}</small>}
         {event.payload.metrics != null && <Disclosure title="对照评估结果"><StructuredContent value={event.payload.metrics} /></Disclosure>}
       </li>)}

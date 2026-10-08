@@ -98,8 +98,9 @@ def judge_run_config(judge, catalog, *, cost_limit=None):
 
 
 class NativeJudgeSession:
-    def __init__(self, models, recovery, manifest):
+    def __init__(self, models, recovery, manifest, *, max_input_tokens=None):
         self.models, self.recovery, self.manifest = models, recovery, manifest
+        self.max_input_tokens = max_input_tokens
 
     async def score(
         self, *, case_id, sample_id, inputs, outputs, reference_outputs=None
@@ -125,6 +126,7 @@ class NativeJudgeSession:
                         inputs=inputs,
                         outputs=outputs,
                         reference_outputs=reference_outputs,
+                        max_input_tokens=session.max_input_tokens,
                     )
                 finally:
                     evaluation_date.reset(date_token)
@@ -219,7 +221,10 @@ async def native_judge_session(directory, *, judge=None, cost_limit=None, as_of=
             run, scope="service", owner=owner, bindings={"quality_evaluation": binding}
         )
         session = NativeJudgeSession(
-            ResearchModels(factory, recovery=recovery), recovery, manifest
+            ResearchModels(factory, recovery=recovery), recovery, manifest,
+            max_input_tokens=run.get("model_catalog_snapshot")[judge.model]["context_window"]
+                - run.get("quality_evaluation_model_max_tokens")
+                - max(256, int(run.get("model_catalog_snapshot")[judge.model]["context_window"] * .05)),
         )
         yield session
     finally:

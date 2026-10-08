@@ -10,6 +10,7 @@ from agentscope.model import StructuredResponse
 from open_deep_research.agentscope_runtime.report import _ReportRun
 from open_deep_research.agentscope_runtime.research_models import ResearchModels
 from open_deep_research.configuration import Configuration
+from open_deep_research.quality.context import context_payload
 from open_deep_research.report.models import ReportDraft, ReportReview
 from open_deep_research.report.reviewer import (
     _invoke_reviewer,
@@ -72,14 +73,14 @@ async def test_review_preserves_draft_tail_and_full_evidence(native_port):
     assert payload["evidence_registry"][0]["supporting_excerpt"] == evidence[0]["supporting_excerpt"]
 
     async def review(messages, schema):
-        fields = json.loads(messages[1].get_text_content())
+        fields = context_payload(messages[1].get_text_content())
         selected = json.loads(messages[2].get_text_content())
         assert fields["draft_markdown"] == draft.markdown
         assert 0 < len(selected["records"]) < len(evidence)
         assert len(selected["records"]) + selected["omitted_record_count"] == len(evidence)
         assert all(item["supporting_excerpt"].endswith("TAIL-" + item["evidence_id"].split("-")[1])
                    for item in selected["records"])
-        return StructuredResponse(content={"decision": "revise"})
+        return StructuredResponse(content={"decision": "revise", "dimensions": {name: .9 for name in ("coverage", "citation_correctness", "contradictions", "unsupported_claims", "redundancy", "executive_readability")}})
 
     native_port.models.factory.generate_structured_output = review
     result = await _invoke_reviewer(payload, {}, cfg, attempt=1)
@@ -92,7 +93,7 @@ def test_revision_keeps_full_draft_and_issue_tail(native_port):
     review = ReportReview(issues=[{"description": "修订依据" * 400 + "ISSUE-END"}])
     messages = _revision_prompt(draft, review, {"evidence_registry": records()},
                                 {"configurable": {"report_review_max_input_chars": 1000}})
-    payload = json.loads(messages[1].content)
+    payload = context_payload(messages[1].content)
     assert payload["draft_markdown"] == draft.markdown
     assert payload["review"]["issues"][0]["description"].endswith("ISSUE-END")
     assert len(json.loads(messages[2].content)["records"]) == 20
@@ -139,7 +140,7 @@ async def test_candidate_window_rebudgets_structured_review(native_port):
         assert sum(len(m.get_text_content().encode("utf8")) + 16 for m in messages) <= 14000 - 1024 - 700
         data = json.loads(messages[-1].get_text_content())
         assert len(data["records"]) + data["omitted_record_count"] == len(evidence)
-        return StructuredResponse(content={"decision": "revise"})
+        return StructuredResponse(content={"decision": "revise", "dimensions": {name: .9 for name in ("coverage", "citation_correctness", "contradictions", "unsupported_claims", "redundancy", "executive_readability")}})
 
     factory.generate_structured_output = review
     await _invoke_reviewer(payload, {}, Configuration(), attempt=1)

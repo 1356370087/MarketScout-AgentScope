@@ -138,6 +138,7 @@ def public_event(event):
                 "approval_type": pending["stage"].removesuffix("_approval"),
                 "status": "pending",
                 "content_markdown": pending["question"],
+                **pending.get("payload", {}),
                 "allowed_actions": ["approve", "revise", "cancel"],
             },
         )

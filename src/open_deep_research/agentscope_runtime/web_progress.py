@@ -85,6 +85,8 @@ class WebProgress:
             else "running",
             title=title,
             summary=summary[:500],
+            iteration=None,
+            duration_ms=None,
             payload={
                 "tool_call_id": self.tool_call_id,
                 "tool_name": self.tool_name,

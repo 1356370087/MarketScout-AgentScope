@@ -110,4 +110,5 @@ def _stable_output(
         "stop_reason": outcome.get("stop_reason"),
         "uncovered_requirements": outcome.get("uncovered_requirements", []),
         "research_gaps": outcome.get("research_gaps", []),
+        "provider_contribution": outcome.get("provider_contribution", {}),
     }

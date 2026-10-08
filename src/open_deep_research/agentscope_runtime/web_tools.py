@@ -515,6 +515,14 @@ async def project_web_result(result, config, factory, metadata):
     if not enabled(config) or cache is None:
         return compact_web_result(result, config)
     records = [record.model_dump(mode="json", exclude_none=True) for record in result.evidence]
+    discoveries = {}
+    for item in result.candidates:
+        providers = {d.provider for d in item.discoveries if d.provider in {"tavily", "bing", "brave", "openai", "anthropic"}}
+        if providers:
+            discoveries[item.canonical_url.rstrip("/")] = {"providers": sorted(providers)}
+    state = await cache.progress({"discoveries": discoveries}) if discoveries else await cache.progress()
+    for record in records:
+        record["discovery_providers"] = state.get("discoveries", {}).get(record["source_url"].rstrip("/"), {}).get("providers", [])
     key = "evidence:" + fingerprint(records)
     async with cache.locks.setdefault(key, asyncio.Lock()):
         if await cache.get(key) is None:
@@ -944,7 +952,32 @@ def native_web_tools(
             resources=resources,
             browser_tools=browser_tools,
         ),
+        source_discovery_tool(run_config_getter, factory, resources=resources),
     ]
+
+
+def source_discovery_tool(run_config_getter, factory, *, resources=None):
+    """Discover ownership hints without fetching/admitting research evidence."""
+    from open_deep_research.agentscope_runtime.search import SearchQueries
+
+    async def call(input, context, progress=None):
+        clients = resources or SearchResources()
+        emitter = progress or WebProgress(execution_config(context), task_id="source-planning",
+            tool_call_id=context.tool_call_id, operation_id=context.operation_id, tool_name="source_discovery")
+        try:
+            batch = await SearchService(execution_config(context), factory, clients, progress=emitter).discover(
+                SearchRequest(objective="官网归属准备", queries=input.queries[:3], candidate_limit=12))
+            return ToolResult(output=json.dumps({"candidates": [c.model_dump(mode="json") for c in batch.candidates],
+                "provider_results": [p.model_dump(mode="json") for p in batch.provider_results],
+                "provider_requests": batch.search_calls,
+                "errors": batch.errors, "admission": "discovery_only"}, ensure_ascii=False))
+        finally:
+            if resources is None:
+                await clients.aclose()
+    return build_tool(name="source_discovery", input_schema=SearchQueries, call=call,
+        description="Discover official website candidates during source planning; these are hints, never report evidence.",
+        origin=ToolOrigin.SEARCH, concurrency_safe=True, retryable=False,
+        is_enabled=lambda config: run_config_getter().get("metadata", {}).get("task_id") == "source-planning")
 
 
 __all__ = [

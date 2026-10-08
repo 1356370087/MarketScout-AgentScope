@@ -8,8 +8,10 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
+from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
 from datetime import UTC, datetime
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from agentscope.agent import Agent, ModelConfig, ReActConfig
 from agentscope.event import (
@@ -108,6 +110,12 @@ class ResearchTerminated(ValueError):
 
 class _Empty(BaseModel):
     pass
+
+
+class _SourceProposal(BaseModel):
+    entity: str
+    website: str
+    reason: str
 
 
 class _Topic(BaseModel):
@@ -548,14 +556,13 @@ class Researcher:
         )
         protected = UserMsg(
             "user",
-            json.dumps(
+            (lambda payload: research_context_xml(contract, payload=payload) if contract.get("schema_version", 2) >= 3 else json.dumps(payload, ensure_ascii=False))(
                 {
                     "topic": assignment.research_topic,
                     "requirement_ids": assignment.requirement_ids,
                     "coverage_contract": contract,
                     "feedback": list(feedback),
                 },
-                ensure_ascii=False,
             ),
             metadata={"research_protected": True},
         )
@@ -689,12 +696,18 @@ class Supervisor:
         assignments: dict[str, ResearchAssignment] = {}
         tasks: dict[str, asyncio.Task] = {}
         results: dict[str, ResearchHandoff] = {}
+        if contract.get("schema_version", 2) >= 3:
+            for prior in getattr(self, "initial_findings", []):
+                outcome = ResearchHandoff.model_validate(prior)
+                results[outcome.task_id] = outcome
+                assignments[outcome.task_id] = ResearchAssignment(task_id=outcome.task_id,
+                    research_topic=outcome.research_topic, requirement_ids=outcome.requirement_ids)
         semaphore = asyncio.Semaphore(cfg.max_concurrent_research_units)
         # Both asynchronous modes spend turns dispatching, joining and reviewing
         # workers; the leaf Researcher limit must not cut off that coordination.
         coordination_limit = max(60, cfg.max_researcher_iterations) if cfg.enable_async_research else cfg.max_researcher_iterations
         completion = _Completion(coordination_limit)
-        ledger = {}
+        ledger = dict(getattr(self, "initial_coverage_ledger", {})) if contract.get("schema_version", 2) >= 3 else {}
         assessments = {}
 
         def completion_facts():
@@ -712,11 +725,13 @@ class Supervisor:
                 if cfg.quality_evaluation_enabled
                 else ()
             )
+            from open_deep_research.agentscope_runtime.efficiency import remaining_research_stop
+            per_requirement_stop = remaining_research_stop(efficiency_state, available_ids, ledger, self.config_provider()) if bounded else None
             return CompletionPolicyContext(
                 evidence_count=len(evidence),
                 independent_source_count=count_traceable_sources(evidence.values()),
                 active_task_count=sum(not task.done() for task in tasks.values()),
-                research_stop_reason=budget_stop or (stop_reason(efficiency_state, available_ids, self.config_provider()) if bounded else None),
+                research_stop_reason=budget_stop or per_requirement_stop,
                 uncovered_requirements=uncovered,
                 has_remaining_budget=self.budget_available(),
                 exhausted_reason="budget_exhausted"
@@ -876,7 +891,14 @@ class Supervisor:
             except asyncio.CancelledError:
                 # 用户取消会撤销 fence；终态由 run.cancelled 投影。
                 raise
-            except Exception:
+            except Exception as exc:
+                from open_deep_research.tools.governance import _is_runtime_control_error
+                if bounded and not _is_runtime_control_error(exc) and not (recovery and recovery.problem):
+                    state = await cache.progress()
+                    before = progress_signature(state, assignment.requirement_ids)
+                    await cache.progress({"requirements": finish_requirements(state, assignment.requirement_ids,
+                        {"accepted": False}, before, assignment.task_id),
+                        "tasks": {assignment.task_id: {"status": "failed", "admission_status": "rejected"}}})
                 await publish_task(assignment, "failed")
                 raise
             await publish_task(assignment, "completed")
@@ -893,6 +915,16 @@ class Supervisor:
 
                 budget_stop = await research_budget_reason(self.models, self.config_provider())
                 efficiency_state = await cache.progress()
+                if contract.get("schema_version", 2) >= 3:
+                    active_ids = [rid for rid in assignment.requirement_ids
+                                  if ledger.get(rid, {}).get("status") != "supported"
+                                  and stop_reason(efficiency_state, [rid], self.config_provider()) is None]
+                    if not active_ids:
+                        assignments.pop(assignment.task_id, None)
+                        return ToolResult(output={"status": "research_stopped", "reason": "requirements_covered_or_exhausted",
+                            "requirement_ids": assignment.requirement_ids,
+                            "instruction": "These IDs are already covered or have exhausted supplements. Continue only other uncovered IDs; otherwise ResearchComplete."})
+                    assignment.requirement_ids = active_ids
                 reason = budget_stop or stop_reason(efficiency_state, assignment.requirement_ids, self.config_provider())
                 if reason:
                     assignments.pop(assignment.task_id, None)
@@ -1009,9 +1041,9 @@ class Supervisor:
                 raise ValueError(
                     "ResearchComplete requires all research tasks to finish"
                 )
-            if not results:
+            if not results and not source_proposals:
                 raise ValueError("ResearchComplete requires a research handoff")
-            if self.completion_policy:
+            if self.completion_policy and not source_proposals:
                 decision = completion.evaluate(explicit=True)
                 if decision.action is CompletionDecision.CONTINUE_WITH_GAPS:
                     raise ValueError("research gaps: " + "; ".join(decision.gaps))
@@ -1026,6 +1058,19 @@ class Supervisor:
         async def think(input, context, progress):
             return ToolResult(output=input.reflection)
 
+        source_proposals = []
+        async def propose_source(input, context, progress):
+            from open_deep_research.documents.contracts import normalize_source_url
+            website = normalize_source_url(input.website)
+            text = " ".join(r["text"] for r in contract.get("requirements", []))
+            if input.entity.casefold() not in text.casefold():
+                raise ValueError("source_proposal_entity_outside_user_scope")
+            source_proposals.append({"entity": input.entity, "website": website,
+                "domain": urlsplit(website).hostname, "documentation_urls": [],
+                "status": "needs_confirmation", "reason": input.reason})
+            return ToolResult(output={"status": "source_scope_review_required",
+                "instruction": "The proposed URL is not authorized. Finish current tasks and ResearchComplete to request user review; do not fetch it."})
+
         from open_deep_research.agentscope_runtime.teams_tools import TaskCreateInput
         from open_deep_research.quality.contract import coverage_bound_input_schema
         tools = [
@@ -1038,6 +1083,8 @@ class Supervisor:
             _control_tool("ResearchComplete", _Empty, complete, safe=False, idempotent=teams_mode),
             _control_tool("think_tool", _Thought, think),
         ]
+        if contract.get("schema_version", 2) >= 3:
+            tools.append(_control_tool("ProposeOfficialSource", _SourceProposal, propose_source))
         if cfg.enable_async_research:
             tools += [
                 _control_tool("TaskGet", _TaskId, task_get, idempotent=teams_mode),
@@ -1093,6 +1140,8 @@ class Supervisor:
         from open_deep_research.agentscope_runtime.efficiency import research_guidance
 
         prompt += research_guidance(self.config_provider(), supervisor=True)
+        if contract.get("schema_version", 2) >= 3:
+            prompt += "\n" + CONTEXT_RULES
         model = self.models.agent_model("supervisor", "supervisor")
         team_middlewares = []
         if self.team_workers is not None:
@@ -1124,7 +1173,7 @@ class Supervisor:
                 [
                     UserMsg(
                         "user",
-                        json.dumps(
+                        (lambda payload: research_context_xml(contract, payload=payload) if contract.get("schema_version", 2) >= 3 else json.dumps(payload, ensure_ascii=False))(
                             {
                                 "brief": brief,
                                 "coverage_contract": contract,
@@ -1135,7 +1184,6 @@ class Supervisor:
                                 ]} if teams_mode else {}),
                                 "feedback": list(feedback),
                             },
-                            ensure_ascii=False,
                         ),
                         metadata={"research_protected": True},
                     )
@@ -1154,7 +1202,10 @@ class Supervisor:
             agent.state.middle_context["research_tasks"] = [
                 snapshot(key) for key in tasks
             ]
-            if self.completion_policy:
+            if source_proposals:
+                agent.state.middle_context["source_proposals"] = source_proposals
+                agent.state.middle_context["business_completion"] = {"action": "complete_partial", "reason": "source_scope_review_required", "gaps": []}
+            if self.completion_policy and not source_proposals:
                 decision = completion.evaluate(
                     explicit=completion.finished, exhausted=True
                 )

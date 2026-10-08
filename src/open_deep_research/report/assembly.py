@@ -113,17 +113,21 @@ class ReportContext:
 
     def stage_messages(self, template, payload, records=None):
         """Build a stage from trusted template instructions and separate data."""
+        modern = self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
         payload = {
             **payload,
             "approved_outline": self.state.get("report_outline", ""),
             "completion_outcome": self.state.get("completion_outcome", {}),
             "coverage": render_state_coverage_checklist(self.state),
             "requirement_to_evidence": self.requirement_to_evidence,
+            "_run_schema_version": self.config.get("metadata", {}).get("run_config_schema_version", 18),
             "evidence_mode": "accepted_records" if self.strict_evidence else "historical_notes_compatibility",
         }
+        if modern:
+            payload["coverage_contract"] = self.state.get("coverage_contract", {})
         if records is None:
             records = (
-                order_evidence(self.evidence_records, self.requirement_to_evidence)
+                order_evidence(self.evidence_records, self.requirement_to_evidence, deduplicate=modern)
                 if self.strict_evidence or self.evidence_records
                 else [{"historical_note": note} for note in self.findings.split("\n\n") if note]
             )
@@ -184,7 +188,7 @@ class ReportContext:
                     ),
                 )
             )
-        projected = project_evidence(scoped_evidence)
+        projected = project_evidence(scoped_evidence, deduplicate=config.get("metadata", {}).get("run_config_schema_version", 18) >= 18)
         accepted_ids = {record.get("evidence_id") for record in projected}
         ledger = state.get("coverage_ledger") or {}
         if ledger.get("type") == "override":
@@ -242,6 +246,18 @@ class OneShotStrategy:
             "memory_context": ctx.state.get("memory_context", ""),
             "date": get_today_str(),
         })
+        if ctx.config.get("metadata", {}).get("run_config_schema_version", 18) >= 18:
+            import json
+            from .writing import fit_writing_messages
+            fitted, _ = fit_writing_messages(messages, ctx.configurable.final_report_model,
+                ctx.configurable, output_tokens=ctx.configurable.final_report_model_max_tokens)
+            selected = {r.get("evidence_id") for m in fitted if m.name == "report_evidence"
+                        for r in json.loads(str(m.content)).get("records", [])}
+            missing = [rid for rid, ids in ctx.requirement_to_evidence.items() if ids and not selected.intersection(ids)]
+            if missing:
+                # Existing sectioned assembly fits each question independently;
+                # budget omission must not become a claim that evidence is absent.
+                return await SectionedStrategy().build(ctx)
         final_report = await ctx.invoke_writer_with_output_recovery(
             messages, span_name="lead.final_report",
         )

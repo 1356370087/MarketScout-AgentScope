@@ -252,6 +252,8 @@ def reconcile_judge_metrics(metrics: list[dict[str, Any]]) -> list[dict[str, Any
 
 def aggregate_score(metrics: list[dict[str, Any]]) -> float | None:
     """Average scored dimensions without double-counting factual_accuracy."""
+    if any(m.get("status") == "run_failed" for m in metrics):
+        return None
     scores = [
         float(metric["score"])
         for metric in primary_metrics(metrics)
@@ -262,6 +264,7 @@ def aggregate_score(metrics: list[dict[str, Any]]) -> float | None:
             "execution_compliance_score",
             "factual_accuracy_score",
             "source_authority_score",
+            "judge_consistency_score",
         }
     ]
     return statistics.fmean(scores) if scores else None
@@ -561,10 +564,22 @@ async def rescore_existing(
     *,
     output_path: Path | None = None,
     quality_rigor: QualityEvaluationRigor | str | None = None,
+    diagnostic_draft: Path | None = None,
 ) -> Path:
     """Write a derived Judge artifact without mutating the completed research run."""
     source_bytes = path.read_bytes()
     result = json.loads(source_bytes)
+    if diagnostic_draft is not None:
+        manifest = json.loads(diagnostic_draft.with_suffix(".json").read_text(encoding="utf8"))
+        draft_bytes = diagnostic_draft.read_bytes()
+        if hashlib.sha256(draft_bytes).hexdigest() != manifest["sha256"]:
+            raise ValueError("diagnostic_draft_hash_mismatch")
+        result["final_report"] = draft_bytes.decode("utf8")
+        result["source_runtime_status"] = result["status"]
+        result["run_result"] = {"status": "diagnostic_draft"}
+        result["evaluation_scope"] = "review_draft"
+        result["draft_sha256"] = manifest["sha256"]
+        result["delivered"] = False
     if run_id:
         recovered = recover_persisted_evidence(run_id)
         for key, value in recovered.items():
@@ -591,6 +606,7 @@ async def rescore_existing(
         ),
         "evidence_registry": result.get("evidence_registry", []),
         "evaluation_snapshot": snapshot,
+        "coverage_contract": result.get("coverage_contract", {}),
     }
     inputs = {"messages": [{"role": "user", "content": result["question"]}]}
     started = time.perf_counter()
@@ -761,6 +777,13 @@ def _render_summary(results: list[dict[str, Any]], metadata: dict[str, Any]) -> 
     return "\n".join(lines)
 
 
+async def preflight_evaluation(directory):
+    """Validate the restricted Judge credential/catalog before research starts."""
+    from open_deep_research.evaluation.session import native_judge_session
+    async with native_judge_session(directory):
+        pass
+
+
 async def run_question(
     question: dict[str, str],
     output_dir: Path,
@@ -770,6 +793,7 @@ async def run_question(
 ) -> dict[str, Any]:
     """Run one complete research-and-evaluate cycle and checkpoint it."""
     inputs = {"messages": [{"role": "user", "content": question["question"]}]}
+    await preflight_evaluation(output_dir / "preflight" / f"{index:02d}")
     print(f"[{index}/{total}] Research started: {question['title']}", flush=True)
     research_started = time.perf_counter()
     with evaluation_runtime_environment():
@@ -828,6 +852,7 @@ async def run_question(
         "run_result": run_result,
         "run_id": run_id,
         "engine": "agentscope",
+        "evaluation_scope": "delivered_report" if status == "success" else "failed_run",
         "evaluation_provenance": state.get("evaluation_provenance"),
         "completed_task_outputs": state.get("completed_task_outputs", []),
         "supervisor_messages": state.get("supervisor_messages", []),
@@ -902,6 +927,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run-id", help="Persisted run ID used to recover evidence while rescoring"
     )
+    parser.add_argument("--diagnostic-draft", type=Path,
+        help="重评已归档的真实送审 Markdown 草稿；相邻 JSON 清单必须包含一致 SHA256，仅标为诊断结果")
     parser.add_argument(
         "--quality-rigor",
         choices=[item.value for item in QualityEvaluationRigor],
@@ -933,6 +960,7 @@ async def main() -> Path:
             args.run_id,
             output_path=args.rescore_output,
             quality_rigor=args.quality_rigor,
+            diagnostic_draft=args.diagnostic_draft,
         )
         print(f"Rescored local result: {output_path}", flush=True)
         return output_path.parent

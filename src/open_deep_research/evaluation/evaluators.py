@@ -886,6 +886,11 @@ def eval_completeness(inputs: dict, outputs: dict) -> dict[str, Any]:
         {"requirement_id": f"COV-{index:02d}", "requirement": requirement}
         for index, requirement in enumerate(coverage_checklist, 1)
     ]
+    contract = (snapshot or {}).get("coverage_contract") or outputs.get("coverage_contract") or {}
+    if contract.get("schema_version", 2) >= 3:
+        indexed_requirements = [{"requirement_id": r["requirement_id"], "requirement": r["text"], "kind": r["kind"]}
+                                for r in contract.get("requirements", []) if r["kind"] != "process"]
+        coverage_checklist = [r["requirement"] for r in indexed_requirements]
     rubric = COMPLETENESS_PROMPT.format(
         user_question="[provided in the untrusted payload]",
         research_brief="[provided in the untrusted payload]",
@@ -899,6 +904,7 @@ def eval_completeness(inputs: dict, outputs: dict) -> dict[str, Any]:
             "research_brief": brief,
             "coverage_checklist": indexed_requirements,
             "report": outputs["final_report"],
+            "source_scope_note": "Allowed domains are permission boundaries, not required citations. Only explicitly required source counts/entities are obligations.",
         },
         ensure_ascii=False,
     )
@@ -1111,6 +1117,20 @@ def eval_tool_efficiency(inputs: dict, outputs: dict) -> dict[str, Any]:
             "tool_efficiency_score",
             "researcher tool trace is unavailable for delegated research",
         )
+    # Efficiency needs requests, outcomes and counters; source bodies are scored
+    # separately. Keep the full trace in SQL and bound repeated text previews.
+    trace = dict(trace)
+    for field in ("supervisor_tool_calls", "supervisor_tool_results", "researcher_tool_calls", "researcher_tool_results"):
+        projected = []
+        for row in trace.get(field, []):
+            item = dict(row)
+            preview = str(item.get("content_preview", ""))
+            if len(preview) > 400:
+                item["content_preview"] = preview[:200] + "…" + preview[-199:]
+                item["content_truncated"] = True
+            projected.append(item)
+        trace[field] = projected
+    trace["scope_note"] = "Complete observable requests and receipt states; output previews bounded to 400 characters. Full output bodies remain in the source SQL receipts."
     rubric = TOOL_EFFICIENCY_PROMPT.format(
         user_question="[provided in the untrusted payload]",
         tool_trace="[provided in the untrusted payload]",
@@ -1147,10 +1167,14 @@ def eval_execution_compliance(
         if snapshot is not None
         else outputs.get("evidence_registry", [])
     )
+    from .execution import frozen_execution_constraints
+    contract = (snapshot or {}).get("coverage_contract") or outputs.get("coverage_contract") or {}
+    constraints = frozen_execution_constraints(contract) if contract.get("schema_version", 2) >= 3 else None
     result = evaluate_execution_compliance(
         _format_input_query(inputs),
         trace,
         evidence_registry if isinstance(evidence_registry, list) else [],
+        constraints=constraints,
     )
     if not result.applicable:
         return langsmith_metric(

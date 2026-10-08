@@ -1,6 +1,7 @@
 """M5 source contracts, native Judge gates and finite completion tests."""
 
 import json
+from open_deep_research.quality.context import context_payload
 
 import pytest
 from agentscope.message import TextBlock
@@ -77,11 +78,8 @@ class Judge:
                 corroboration=self.score,
                 **fields,
             )
-        payload = json.loads(
-            prompt.split("Evaluate this JSON research payload:\n", 1)[1].split(
-                "\nCorrect these", 1
-            )[0]
-        )
+        body = prompt if prompt.startswith("<research_context") else prompt.split("Evaluate this JSON research payload:\n", 1)[1]
+        payload = context_payload(body.split("\nCorrect these", 1)[0])
         ids = payload.get("owned_requirement_ids", [])
         return schema(
             accepted=True,

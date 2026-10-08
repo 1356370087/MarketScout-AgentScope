@@ -338,6 +338,18 @@ class GovernedToolkit(Toolkit):
                 sections.append(prompt.strip())
         return "\n\n".join(sections)
 
+    async def call_domain_tool(self, name, arguments, call_id):
+        """Run a host-planned preparation call through the same governed boundary."""
+        tool = await self.get_tool(name)
+        if tool is None:
+            raise ValueError("planned_tool_missing:" + name)
+        identity = _CallIdentity(name, call_id, f"{self.run_id}:{self.task_id}:{call_id}")
+        token = self.identity.set(identity)
+        try:
+            return await tool.call(**arguments)
+        finally:
+            self.identity.reset(token)
+
     async def call_tool(self, tool_call, state):
         identity = _CallIdentity(
             name=tool_call.name,

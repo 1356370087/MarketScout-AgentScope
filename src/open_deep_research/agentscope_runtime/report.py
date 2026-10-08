@@ -119,6 +119,20 @@ class NativeReportWriter:
                 for key, value in update.items()
                 if key not in {"messages", "notes", "completed_task_outputs"}
             }
+            from open_deep_research.quality.planning import unique_evidence
+            from open_deep_research.report.references import parse_sources_from_text
+            cited = {source.url.rstrip("/") for source in parse_sources_from_text(update.get("final_report", ""))}
+            contribution = {}
+            for record in unique_evidence(state["evidence_registry"]):
+                for provider in record.get("discovery_providers", []):
+                    row = contribution.setdefault(provider, {"evidence_ids": [], "source_urls": [], "cited_source_urls": []})
+                    row["evidence_ids"].append(record["evidence_id"])
+                    url = record["source_url"].rstrip("/")
+                    if url not in row["source_urls"]:
+                        row["source_urls"].append(url)
+                    if url in cited and url not in row["cited_source_urls"]:
+                        row["cited_source_urls"].append(url)
+            snapshot.report_product["provider_contribution"] = contribution
             return update["final_report"]
         finally:
             native_report.reset(token)
@@ -137,6 +151,34 @@ class _ReportRun:
 
     def record_retry(self, **kwargs):
         self.snapshot.agent_states.setdefault("report_retries", []).append(kwargs)
+
+    async def archive_review(self, draft, review, *, attempt, revision_count):
+        """Persist exactly the submitted draft; failure never erases its audit."""
+        import hashlib
+        import json
+
+        from open_deep_research.agentscope_runtime.storage import runtime_data_dir
+        from open_deep_research.quality.planning import unique_evidence
+
+        recovery = self.models.recovery
+        if recovery is None:
+            return
+        sha = hashlib.sha256(draft.markdown.encode("utf8", errors="replace")).hexdigest()
+        directory = runtime_data_dir() / self.snapshot.run_id / "report-reviews"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / (sha + ".md")).write_bytes(draft.markdown.encode("utf8", errors="replace"))
+        records = unique_evidence([r for task in self.snapshot.findings for r in task.get("evidence_registry", [])])
+        prior = self.snapshot.application.get("report_review_artifacts", {}).get(sha, {})
+        manifest = {"sha256": sha, "attempt": attempt, "revision_count": revision_count,
+            "coverage_contract": self.snapshot.coverage_contract,
+            "evidence_ids": [r["evidence_id"] for r in records],
+            "evidence_selections": self.snapshot.application.get("report_evidence_selections", {}),
+            "review": review.model_dump(mode="json") if review else prior.get("review"),
+            "scope": "review_draft", "delivered": False}
+        self.review_submission = (draft, attempt, revision_count)
+        (directory / (sha + ".json")).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf8")
+        self.snapshot.application.setdefault("report_review_artifacts", {})[sha] = manifest
+        await recovery.save(self.snapshot)
 
     async def invoke(self, role, messages, cfg, *, span_name, schema=None):
         from open_deep_research.models.errors import is_token_limit_exceeded
@@ -161,6 +203,10 @@ class _ReportRun:
                 fraction=0.75**attempt,
             )
             self.score(span_name + ".selected_evidence_count", selected)
+            import json
+            ids = [r.get("evidence_id") for m in fitted if m.name == "report_evidence"
+                   for r in json.loads(str(m.content)).get("records", [])]
+            self.snapshot.application.setdefault("report_evidence_selections", {})[task_id] = ids
             return [
                 (SystemMsg if m.type == "system" else UserMsg)(
                     m.name or m.type, m.content
@@ -185,6 +231,9 @@ class _ReportRun:
         async def call():
             for attempt in range(3):
                 native = initial if attempt == 0 else fit(attempt)
+                if span_name == "lead.report_review" and hasattr(self, "review_submission"):
+                    draft, review_attempt, revision_count = self.review_submission
+                    await self.archive_review(draft, None, attempt=review_attempt, revision_count=revision_count)
                 try:
                     if schema is not None:
                         policy = factory.policy_middleware(role, candidates=candidates)

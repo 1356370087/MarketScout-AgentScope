@@ -20,7 +20,7 @@ from open_deep_research.report.coverage import (
     source_directive_kind,
 )
 
-COVERAGE_CONTRACT_SCHEMA_VERSION = 2
+COVERAGE_CONTRACT_SCHEMA_VERSION = 3
 QUALITY_RISK_POLICY_VERSION = "quality-risk-v1"
 MAX_REQUIREMENTS_PER_RESEARCH_TASK = 3
 
@@ -192,7 +192,7 @@ _COMPARISON_AXIS_INTRO_RE = re.compile(
 _SUBITEM_MARKER_RE = re.compile(r"[\(（]\d{1,2}[\)）]\s*")
 
 
-def classify_requirement_kind(text: str) -> RequirementKind:
+def classify_requirement_kind(text: str, *, schema_version: int = 3) -> RequirementKind:
     """Classify one requirement text as factual, process, or deliverable.
 
     Factual requirements need external evidence; process requirements are
@@ -200,6 +200,15 @@ def classify_requirement_kind(text: str) -> RequirementKind:
     requirements are output-format obligations owned by the final report.
     """
     value = str(text or "")
+    # These clauses specify the output/runtime, not facts about the subject.
+    if schema_version >= 3 and re.match(r"^(?:输出要求[：:]\s*)?(?:中文|英文|约\s*\d+\s*字|报告使用|报告用|研究日期(?:为|是))", value.strip()):
+        return "deliverable"
+    if schema_version >= 3 and re.match(r"^(?:不得|不要|禁止)(?:虚构|编造|杜撰)|^(?:至少|两方合计至少).{0,12}引用.{0,20}(?:页面|文档)|^(?:研究|检索)日期(?:为|是)", value.strip()):
+        return "process"
+    # A factual question followed by a recommendation must be split upstream;
+    # the recommendation pattern cannot swallow the question itself.
+    if schema_version >= 3 and re.match(r"^(?:[（(]?\d+[）).、]\s*)?(?:两者|双方|分别|如何|哪些|什么|比较|说明|核实)", value.strip()) and "？" in value:
+        return "factual"
     directive = source_directive_kind(value)
     if directive is not None:
         return cast(RequirementKind, directive)
@@ -218,6 +227,7 @@ def classify_requirement_kind(text: str) -> RequirementKind:
 
 def is_delegable_requirement(
     requirement: CoverageRequirement | Mapping[str, Any],
+    *, schema_version: int = 2,
 ) -> bool:
     """Return whether a research subtask can own this requirement.
 
@@ -242,7 +252,9 @@ def is_delegable_requirement(
         text = str(requirement.get("text", ""))
     if kind is not None and kind != "factual":
         return False
-    return classify_requirement_kind(text) == "factual"
+    if schema_version >= 3 and kind == "factual":
+        return True
+    return classify_requirement_kind(text, schema_version=schema_version) == "factual"
 
 
 class AdmissionStatus(str, Enum):
@@ -303,6 +315,7 @@ class ResearchCoverageContract(BaseModel):
     advisory_dimensions: tuple[str, ...] = ()
     single_research_task: bool = False
     source_selection: SourceSelection | None = None
+    source_plan: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
 
     def requirement_ids(self) -> tuple[str, ...]:
         """Return stable requirement identifiers in source order."""
@@ -313,7 +326,7 @@ class ResearchCoverageContract(BaseModel):
         return tuple(
             item.requirement_id
             for item in self.requirements
-            if is_delegable_requirement(item)
+            if is_delegable_requirement(item, schema_version=self.schema_version)
         )
 
     def dimension_for_requirement(

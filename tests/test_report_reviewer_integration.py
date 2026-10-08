@@ -1359,6 +1359,6 @@ def test_v11_freezes_reviewer_configuration_but_v10_does_not() -> None:
         "report_review_max_revisions",
         "report_review_fail_open",
     }
-    assert RUN_CONFIG_SCHEMA_VERSION == 14
+    assert RUN_CONFIG_SCHEMA_VERSION == 18
     assert reviewer_fields <= set(RUN_CONFIG_FROZEN_FIELDS)
     assert reviewer_fields.isdisjoint(set(RUN_CONFIG_FROZEN_FIELDS_V10))

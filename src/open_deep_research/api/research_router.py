@@ -113,7 +113,31 @@ def build_research_router(service):
                 action_id,
                 request.action,
                 request.message or "",
+                **({"source_selection": request.source_selection.model_dump(mode="json")} if request.source_selection else {}),
+                **({"expected_version": request.expected_version} if request.expected_version is not None else {}),
             )
+
+    @router.get("/runs/{run_id}/review-drafts")
+    async def review_drafts(run_id: str, principal=read):
+        with http_errors():
+            state, _ = await service.store.load(run_id, principal.user_id)
+            return {"items": [{"sha256": sha, "attempt": row["attempt"], "review": row.get("review"),
+                               "scope": "review_draft", "delivered": False}
+                              for sha, row in state.application.get("report_review_artifacts", {}).items()]}
+
+    @router.get("/runs/{run_id}/review-drafts/{sha256}")
+    async def review_draft(run_id: str, sha256: str, principal=read):
+        import hashlib
+        from open_deep_research.agentscope_runtime.storage import runtime_data_dir
+        with http_errors():
+            state, _ = await service.store.load(run_id, principal.user_id)
+            artifact = state.application.get("report_review_artifacts", {}).get(sha256)
+            if artifact is None:
+                raise KeyError("draft not found")
+            markdown = (runtime_data_dir() / run_id / "report-reviews" / (sha256 + ".md")).read_text(encoding="utf8")
+            if hashlib.sha256(markdown.encode("utf8", errors="replace")).hexdigest() != sha256:
+                raise RecoveryConflict("report_draft_hash_changed")
+            return {**artifact, "markdown": markdown, "scope": "review_draft"}
 
     @router.post("/runs/{run_id}/cancel")
     async def cancel_run(run_id: str, principal=control):

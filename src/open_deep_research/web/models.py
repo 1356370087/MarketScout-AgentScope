@@ -66,6 +66,15 @@ class SearchProviderResult(BaseModel):
     result_count: int = 0
     query_count: int = 0
     error_codes: list[str] = Field(default_factory=list)
+    raw_result_count: int = 0
+    provider_requests: int = 0
+    unique_result_count: int = 0
+    exclusive_result_count: int = 0
+    shared_result_count: int = 0
+    duplicate_result_count: int = 0
+    parsed_result_count: int = 0
+    filtered_result_count: int = 0
+    query_outcomes: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SearchBatch(BaseModel):

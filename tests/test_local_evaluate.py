@@ -601,6 +601,9 @@ async def test_run_question_does_not_promote_runtime_error_with_report(
         return []
 
     monkeypatch.setattr(run_local_evaluate, "run_native_question", failed_native_run)
+    async def no_preflight(_directory):
+        pass
+    monkeypatch.setattr(run_local_evaluate, "preflight_evaluation", no_preflight)
     monkeypatch.setattr(run_local_evaluate, "evaluate_state", no_metrics)
     monkeypatch.setattr(
         run_local_evaluate,

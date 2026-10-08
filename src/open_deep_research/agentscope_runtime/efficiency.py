@@ -66,6 +66,7 @@ def merge_progress(state, patch):
         "assessments",
         "tasks",
         "requirements",
+        "discoveries",
     ):
         for key, value in patch.get(name, {}).items():
             prior = state.setdefault(name, {}).get(key, {})
@@ -112,6 +113,8 @@ def merge_progress(state, patch):
                         | set(value.get("requirement_ids", []))
                     ),
                 }
+            if name == "discoveries":
+                value = {"providers": sorted(set(prior.get("providers", [])) | set(value.get("providers", [])))}
             if name == "requirements":
                 task_id = value.get("completed_task")
                 completed = list(prior.get("completed_tasks", []))
@@ -190,6 +193,7 @@ def progress_summary(state, contract=None):
         "candidate_count": len(state.get("candidates", {})),
         "admitted_count": len(state.get("admitted", {})),
         "counters": state.get("counters", {}),
+        "discoveries": state.get("discoveries", {}),
         "requirements": {
             key: {
                 "text": names.get(key, key),
@@ -236,9 +240,10 @@ def stop_reason(state, requirement_ids, config):
         for url in urls
     ):
         return "selected_sources_exhausted"
-    if all(row.get("stagnant", 0) >= cfg.max_no_progress_rounds for row in pending):
+    exhausted = any if config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else all
+    if exhausted(row.get("stagnant", 0) >= cfg.max_no_progress_rounds for row in pending):
         return "research_no_progress"
-    if all(row.get("rounds", 0) >= 1 + cfg.max_supplement_rounds for row in pending):
+    if exhausted(row.get("rounds", 0) >= 1 + cfg.max_supplement_rounds for row in pending):
         return "supplement_round_limit"
     return None
 
@@ -275,6 +280,13 @@ def finish_requirements(state, ids, assessment, before, task_id):
             ],
         }
     return result
+
+
+def remaining_research_stop(state, ids, ledger, config):
+    """An exhausted question cannot stop unrelated, still-researchable questions."""
+    pending = [rid for rid in ids if ledger.get(rid, {}).get("status") != "supported"]
+    reasons = [stop_reason(state, [rid], config) for rid in pending]
+    return next((reason for reason in reasons if reason), None) if reasons and all(reasons) else None
 
 
 async def research_budget_reason(models, config):
@@ -339,7 +351,8 @@ async def research_budget_reason(models, config):
             return "report_budget_reserved"
     if (
         budget.get("deadline")
-        and budget["deadline"] - time.time() <= calls * cfg.model_call_timeout_seconds
+        and budget["deadline"] - time.time() <= min(calls * cfg.model_call_timeout_seconds,
+            (cfg.run_deadline_seconds or calls * cfg.model_call_timeout_seconds) * cfg.report_time_reserve_ratio)
     ):
         return "report_time_reserved"
     return None
@@ -374,10 +387,19 @@ def evidence_read_tools(cache, config):
         )
 
         if not input.reference.startswith(("evidence:", "diagnostics:")):
-            raise ValueError("expected this run's evidence reference")
+            state = await cache.progress()
+            refs = list(dict.fromkeys(row.get("evidence_ref") for row in state.get("tasks", {}).values() if row.get("evidence_ref")))
+            if hasattr(cache, "references"):
+                refs = list(dict.fromkeys([*refs, *await cache.references()]))
+            from open_deep_research.tools.governance import ToolOutcomeError, ToolError, ToolErrorType
+            raise ToolOutcomeError(ToolError(error_type=ToolErrorType.validation_error, tool_name="ReadResearchEvidence",
+                message="invalid_evidence_reference: use an exact evidence_ref; evidence_register is not a reference.",
+                detail={"available_references": refs}))
         records = await cache.get(input.reference)
         if records is None:
-            raise ValueError("evidence reference not found")
+            from open_deep_research.tools.governance import ToolOutcomeError, ToolError, ToolErrorType
+            raise ToolOutcomeError(ToolError(error_type=ToolErrorType.validation_error, tool_name="ReadResearchEvidence",
+                message="evidence_reference_not_found", detail={"available_references": await cache.references()}))
         if input.reference.startswith("evidence:"):
             records = [
                 r for r in records if source_allowed(r["source_url"], context.config)
@@ -556,6 +578,15 @@ class ResearchCache:
         return json.loads(
             (self.directory / (fingerprint(key) + ".json")).read_text(encoding="utf-8")
         )
+
+    async def references(self):
+        """List only committed evidence artifacts owned by this run."""
+        from sqlalchemy import select
+        store, lease = self.recovery.store, self.recovery.lease
+        async with store.transaction(lease) as (conn, _):
+            keys = await conn.scalars(select(store.ops.c.key).where(store.ops.c.run_id == lease.run_id,
+                store.ops.c.state == "committed", store.ops.c.key.like("cache:evidence:%")))
+            return [key.removeprefix("cache:") for key in keys]
 
     async def begin(self, key):
         return await self.recovery.store.begin_operation(

@@ -267,6 +267,9 @@ def compile_source_scope(coverage_contract: object) -> SourceScope:
     explicit_url_only = bool(
         _EXCLUSIVE_EXPLICIT_URL_RE.search(requirement_text)
     ) and bool(allowed_urls)
+    plan = coverage_contract.get("source_plan") if isinstance(coverage_contract, dict) else getattr(coverage_contract, "source_plan", None)
+    if plan and plan.get("status") == "confirmed" and (plan.get("source_expansion") or plan.get("explicit")):
+        explicit_url_only = False  # The user's versioned decision supersedes the original inclusion list; deny rules remain.
     selection = (
         coverage_contract.get("source_selection")
         if isinstance(coverage_contract, dict)
@@ -436,6 +439,27 @@ def classify_evidence_source(
         if scope.denied_urls or selection is not None
         else SourceScopeStatus.NOT_CONSTRAINED
     )
+    plan = coverage_contract.get("source_plan") if isinstance(coverage_contract, dict) else getattr(coverage_contract, "source_plan", None)
+    if plan and plan.get("status") in {"confirmed", "automatic", "user_specified"}:
+        if plan.get("explicit") and selection is not None and selection.mode is SourceMode.SPECIFIC:
+            return SourceScopeDecision(source_kind=SourceKind.EXPLICIT_URL,
+                source_scope_status=SourceScopeStatus.IN_SCOPE, reason="user_confirmed_source_selection")
+        if _is_community_github_url(url):
+            return SourceScopeDecision(source_kind=SourceKind.COMMUNITY_ISSUE,
+                source_scope_status=SourceScopeStatus.OUT_OF_SCOPE if scope.official_only else permitted_status,
+                reason="community_github_surface")
+        for entry in plan.get("entries", []):
+            if entry.get("status") not in {"verified", "confirmed"}:
+                continue
+            for root in [entry.get("website", ""), *entry.get("documentation_urls", [])]:
+                base = urlsplit(root)
+                prefix = base.path.rstrip("/")
+                if host == (base.hostname or "").casefold() and (not prefix or path == prefix.casefold() or path.startswith(prefix.casefold() + "/")):
+                    return SourceScopeDecision(source_kind=SourceKind.FIRST_PARTY_DOCS,
+                        source_scope_status=SourceScopeStatus.IN_SCOPE, reason="matched_confirmed_source_plan")
+        if plan.get("intent") == "official_only":
+            return SourceScopeDecision(source_kind=SourceKind.OUT_OF_SCOPE,
+                source_scope_status=SourceScopeStatus.OUT_OF_SCOPE, reason="outside_confirmed_official_sources")
 
     if _is_community_github_url(url):
         return SourceScopeDecision(

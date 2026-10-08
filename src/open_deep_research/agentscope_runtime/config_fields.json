@@ -1,4 +1,9 @@
 {
+  "report_time_reserve_ratio": {
+    "group": "budgets",
+    "target": "RunConfig.budgets.report_time_reserve_ratio",
+    "handling": "业务保留并接入"
+  },
   "max_structured_output_retries": {
     "group": "models",
     "target": "StructuredOutputPolicy.max_retries",

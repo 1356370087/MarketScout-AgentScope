@@ -15,7 +15,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 from open_deep_research import prompts as _prompts
 from open_deep_research.configuration import (
@@ -47,8 +47,13 @@ from .models import (
     ReportReview,
     ReportReviewIssue,
 )
-from .references import numbered_source_urls
-from .runtime import RunnableConfig, native_report, require_report_runtime, NativeReportRuntimeMissing
+from .references import numbered_source_urls, parse_sources_from_text
+from .runtime import (
+    NativeReportRuntimeMissing,
+    RunnableConfig,
+    native_report,
+    require_report_runtime,
+)
 
 _URL_RE = re.compile(r"https?://[^\s)\]}>]+", re.IGNORECASE)
 _LOCAL_DOCUMENT_RE = re.compile(
@@ -448,9 +453,13 @@ def build_reviewer_payload(
     # Keep the draft and evidence intact; the native port budgets whole records.
     return {
         "research_brief": str(normalized_state.get("research_brief") or ""),
+        "_run_schema_version": (config or {}).get("metadata", {}).get("run_config_schema_version", 18),
         "coverage_contract": {"requirements": requirements, "dimension_coverage": dimension_coverage},
         "evidence_registry": _review_evidence(records, normalized_draft),
         "draft_markdown": normalized_draft.markdown,
+        "citation_targets": sorted({s.url for s in parse_sources_from_text(normalized_draft.markdown)}
+            | {"[" + n + "]" for n in re.findall(r"\[(\d+)\]", normalized_draft.markdown)}
+            | {"[" + eid + "]" for eid in re.findall(r"\[(ev_[A-Za-z0-9_-]+)\]", normalized_draft.markdown)}),
         "sources": [{"title": source.title, "url": source.url,
                      "source_type": source.source_type, "locator": source.locator}
                     for source in filtered_sources],
@@ -931,6 +940,8 @@ def _normalize_candidate(
 ) -> ReportReview:
     """Apply deterministic validation and compute the effective gate decision."""
     candidate = _candidate_payload(raw)
+    if config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 and isinstance(candidate, ReportReview):
+        candidate = candidate.model_dump(mode="json", exclude_unset=True)
     candidate_protocol_invalid = not isinstance(candidate, Mapping | ReportReview) or (
         isinstance(candidate, Mapping) and not candidate
     )
@@ -1245,13 +1256,31 @@ async def _invoke_reviewer(
     from .writing import writing_messages
 
     fields = {key: value for key, value in payload.items() if key != "evidence_registry"}
+    fields["_run_schema_version"] = config.get("metadata", {}).get("run_config_schema_version", 18)
+    if fields["_run_schema_version"] < 18:
+        fields.pop("citation_targets", None)
     messages = writing_messages(
         getattr(_prompts, "report_review_prompt", "{payload}"),
         {**fields, "review_attempt": attempt}, list(payload.get("evidence_registry", [])),
         guidance=_REVIEW_SECURITY_SYSTEM_PROMPT + "\nUse report_evidence.records as evidence_registry. "
         "Omitted evidence is unavailable; never certify unsupported claims as verified.",
     )
-    return await require_report_runtime().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=ReportReview)
+    schema = ReportReview
+    if fields["_run_schema_version"] >= 18:
+        scores = create_model("ReportDimensionScores", **{
+            name: (float, Field(..., ge=0, le=1)) for name in _DIMENSIONS
+        })
+        schema = create_model("ReportReview", __base__=ReportReview,
+            decision=(ReportReview.model_fields["decision"].annotation, Field(...)),
+            dimensions=(scores, Field(...)))
+    if config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 and payload.get("citation_targets"):
+        targets = list(payload["citation_targets"])
+        ids = sorted({r["evidence_id"] for r in payload.get("evidence_registry", []) if r.get("evidence_id")})
+        audit = create_model("ReportCitationReview", __base__=ReportCitationReview,
+            citation_target=(str, Field(default="", description="Copy a citation target from the actual draft inventory, never a link inside an excerpt.", json_schema_extra={"enum": targets})),
+            evidence_ids=(list[str], Field(default_factory=list, json_schema_extra={"items": {"type": "string", "enum": ids}})))
+        schema = create_model("ReportReview", __base__=schema, citation_audit=(list[audit], Field(default_factory=list)))
+    return await require_report_runtime().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=schema)
 
 
 async def review_report(
@@ -1269,13 +1298,19 @@ async def review_report(
     payload = build_reviewer_payload(normalized_draft, normalized_state, runnable_config)
     resolved_attempt = int(attempt if attempt is not None else normalized_draft.attempt or 1)
     model_name = _model_name(cfg)
+    from open_deep_research.agentscope_runtime.runtime_limits import (
+        structured_attempt_budget,
+    )
+    shared_budget = structured_attempt_budget.set([2]) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else None
     try:
         protocol_codes = {
             "unknown_requirement_id", "unknown_evidence_id", "review_protocol_invalid",
             "review_dimensions_missing", "coverage_contract_rows_missing_or_invalid",
             "citation_audit_missing",
         }
-        for repair in range(max(1, cfg.max_structured_output_retries)):
+        attempts = min(2, max(1, cfg.max_structured_output_retries)) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else max(1, cfg.max_structured_output_retries)
+        previous_errors = None
+        for repair in range(attempts):
             raw = await _invoke_reviewer(payload, runnable_config, cfg, attempt=resolved_attempt)
             result = _normalize_candidate(
                 raw, draft=normalized_draft, state=normalized_state,
@@ -1283,22 +1318,29 @@ async def review_report(
                 attempt=resolved_attempt,
             )
             errors = [code for code in result.deterministic_failures if code in protocol_codes]
-            if not errors or repair + 1 >= cfg.max_structured_output_retries:
+            remaining = structured_attempt_budget.get()
+            if not errors or repair + 1 >= attempts or errors == previous_errors or (remaining is not None and remaining[0] <= 0):
                 return result
+            previous_errors = errors
             payload = {**payload, "review_protocol_feedback": {
                 "errors": errors,
                 "instruction": "Correct the review metadata, not the draft. Use the exact supplied "
                 "requirement and evidence IDs, cover every requirement, and include all score "
                 "dimensions and citation audits. Do not invent IDs or omit mandatory rows.",
             }}
-    except Exception as exc:  # noqa: BLE001 - fail-open policy is explicit
+    except Exception as exc:
         if isinstance(exc, NativeReportRuntimeMissing):
             raise
         port = native_report.get()
         if port is not None:
             from open_deep_research.agentscope_runtime.recovery import ApprovalPending
-            from open_deep_research.agentscope_runtime.recovery_store import FenceLost, RecoveryConflict, UnknownOperation
+            from open_deep_research.agentscope_runtime.recovery_store import (
+                FenceLost,
+                RecoveryConflict,
+                UnknownOperation,
+            )
             from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
+
             from .writing import ReportInputBudgetExceeded
 
             recovery = port.models.recovery
@@ -1346,6 +1388,9 @@ async def review_report(
                 fallback.skipped = True
                 fallback.degraded = True
         return fallback
+    finally:
+        if shared_budget is not None:
+            structured_attempt_budget.reset(shared_budget)
 
 
 def _revision_prompt(
@@ -1356,17 +1401,37 @@ def _revision_prompt(
 ) -> str | list[Any]:
     """Build a constrained Revisor prompt with no raw handoff/tool content."""
     requirements = _requirements(state)
-    from .writing import writing_messages
+    from .writing import order_evidence, writing_messages
+    modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+    extra = {"coverage_contract": state.get("coverage_contract", {}),
+             "requirement_to_evidence": {k: v.get("evidence_ids", []) for k, v in state.get("coverage_ledger", {}).items()}} if modern else {}
+    records = _state_evidence(state)
+    if modern:
+        issue_ids = list(dict.fromkeys([
+            *(eid for issue in review.issues for eid in issue.evidence_ids),
+            *(eid for citation in review.citation_audit if not citation.supported for eid in citation.evidence_ids),
+        ]))
+        by_id = {row["evidence_id"]: row for row in records}
+        preferred = [by_id[eid] for eid in issue_ids if eid in by_id]
+        extra["required_evidence_ids"] = [row["evidence_id"] for row in preferred]
+        ordered = order_evidence(records, extra["requirement_to_evidence"])
+        records = preferred + [row for row in ordered if row["evidence_id"] not in issue_ids]
+    else:
+        records = _review_evidence(records, draft)
 
     return writing_messages(
         getattr(_prompts, "report_revision_prompt", "{payload}"),
         {"research_brief": str(state.get("research_brief") or ""),
+         **extra,
+         "_run_schema_version": config.get("metadata", {}).get("run_config_schema_version", 18),
          "requirements": requirements, "draft_markdown": draft.markdown,
          "review": review.model_dump(mode="json"), "report_type": draft.report_type,
          "output_format": draft.output_format, "reference_style": draft.reference_style},
-        _review_evidence(_state_evidence(state), draft),
+        records,
         guidance="Use report_evidence.records as accepted_evidence. Preserve the complete draft; "
-        "state evidence gaps explicitly rather than inventing missing support.",
+        "state evidence gaps explicitly rather than inventing missing support."
+        + (" Review suggestions are fallible: check all issue evidence, including explicit restrictions, "
+           "before applying a suggested factual correction." if modern else ""),
     )
 
 

@@ -88,7 +88,14 @@ export interface ResearchSource {
 export interface PendingHumanAction {
   action_id: string;
   type: "clarification" | "plan_approval" | "outline_approval" | "fetch_budget_approval";
-  payload: { question?: string; content_markdown?: string; research_plan?: string; report_outline?: string };
+  payload: { question?: string; content_markdown?: string; research_plan?: string; report_outline?: string;
+    version?: number;
+    requirements?: Array<{ requirement_id: string; text: string; kind: "factual" | "process" | "deliverable" }>;
+    source_plan?: { version: number; intent: string; status: string; explicit?: boolean;
+      selection?: SourceSelection;
+      entries: Array<{ entity: string; website: string; domain?: string; documentation_urls: string[];
+        status: string; discovery_basis?: string; verification_basis?: { entity_quote?: string; ownership_quote?: string; reason?: string }; reason?: string }> } | null;
+  };
   allowed_actions?: Array<"approve" | "revise" | "answer" | "deny" | "cancel">;
 }
 
@@ -120,6 +127,7 @@ export interface CapabilitiesResponse {
 }
 
 export interface ResearchRunState {
+  sourcePlan?: PendingHumanAction["payload"]["source_plan"];
   efficiency?: ResearchEfficiency;
   completionStatus?: "success" | "partial";
   researchGaps?: string[];
@@ -170,6 +178,7 @@ export interface RunSnapshot {
   pending_human_action?: PendingHumanAction | null;
   pending_security_approvals?: SecurityApproval[];
   progress?: {
+    source_plan?: PendingHumanAction["payload"]["source_plan"];
     efficiency?: ResearchEfficiency;
     status?: RunStatus;
     stage_index?: number;
@@ -224,3 +233,4 @@ export interface ResearchEfficiency {
   tasks: Record<string, { status?: string; admission_status?: string }>;
 }
 
+import type { SourceSelection } from "./documents";

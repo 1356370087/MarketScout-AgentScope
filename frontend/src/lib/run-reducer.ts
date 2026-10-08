@@ -251,6 +251,7 @@ export function hydrateSnapshot(state: ResearchRunState, snapshot: RunSnapshot):
     pendingSecurityApprovals: (snapshot.pending_security_approvals ?? progress.pending_security_approvals ?? []).filter((item) => !isSecurityApprovalResolved(item.approval_id)),
     report: snapshot.output?.markdown ?? "",
     efficiency: snapshot.progress?.efficiency,
+    sourcePlan: snapshot.progress?.source_plan,
     completionStatus: snapshot.output?.completion_status ?? undefined,
     stopReason: snapshot.output?.stop_reason ?? undefined,
     researchGaps: snapshot.output?.research_gaps ?? [],
@@ -295,7 +296,9 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
     const id = String(payload.wave_id ?? "");
     if (id) next.wavesById = { ...state.wavesById, [id]: { ...state.wavesById[id], ...payload, wave_id: id, status: event.type.endsWith("completed") ? "completed" : "running", task_ids: (payload.task_ids as string[]) ?? state.wavesById[id]?.task_ids ?? [] } };
   } else if (event.type === "research.progress.updated") {
-    next.efficiency = payload.progress as unknown as ResearchEfficiency;
+    const progress = payload.progress as Record<string, unknown>;
+    if ("source_plan" in progress) next.sourcePlan = progress.source_plan as ResearchRunState["sourcePlan"];
+    if ("document_count" in progress || "processed_chunks" in progress || "admitted_count" in progress) next.efficiency = progress as unknown as ResearchEfficiency;
   } else if (event.type === "run.usage.updated") {
     // Usage refresh is handled by the stream hook, not an unknown event.
   } else if (event.type === "research.source.discovered") {
@@ -327,7 +330,7 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
   } else if (event.type === "approval.required") {
     const kind = `${String(payload.approval_type)}_approval` as "plan_approval" | "outline_approval" | "fetch_budget_approval";
     next.status = `awaiting_${String(payload.approval_type)}_approval` as RunStatus;
-    next.pendingHumanAction = { action_id: String(payload.action_id), type: kind, payload: { content_markdown: String(payload.content_markdown ?? "") }, allowed_actions: payload.allowed_actions as never };
+    next.pendingHumanAction = { action_id: String(payload.action_id), type: kind, payload: { content_markdown: String(payload.content_markdown ?? ""), source_plan: payload.source_plan as never, version: payload.version as number | undefined, requirements: payload.requirements as never }, allowed_actions: payload.allowed_actions as never };
   } else if (event.type === "clarification.required") {
     next.status = "awaiting_clarification";
     next.pendingHumanAction = { action_id: String(payload.action_id), type: "clarification", payload: { question: String(payload.question ?? "") }, allowed_actions: payload.allowed_actions as never };

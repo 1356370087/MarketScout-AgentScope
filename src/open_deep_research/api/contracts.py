@@ -31,6 +31,8 @@ class HumanActionRequest(BaseModel):
 
     action: Literal["approve", "revise", "answer", "deny", "cancel"]
     message: str | None = None
+    source_selection: SourceSelection | None = None
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class SecurityApprovalDecisionRequest(BaseModel):

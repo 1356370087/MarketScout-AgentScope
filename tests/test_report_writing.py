@@ -10,6 +10,7 @@ from agentscope.message import TextBlock
 from agentscope.model import ChatResponse
 from tests.as_runtime.test_report_context_budget import native_port  # noqa: F401
 from open_deep_research.report.runtime import AIMessage, HumanMessage
+from open_deep_research.quality.context import context_payload
 
 from open_deep_research.configuration import (
     Configuration,
@@ -121,7 +122,7 @@ async def test_actual_fallback_candidate_rebudgets_records(native_port):
     counts = []
 
     async def complete(role, messages, **kwargs):
-        for window in (18000, 6000):
+        for window in (18000, 8000):
             fitted = kwargs["prepare_messages"](SimpleNamespace(context_size=window), messages, 1024)
             counts.append(len(json.loads(fitted[-1].get_text_content())["records"]))
         return ChatResponse(content=[TextBlock(text="complete")], is_last=True)
@@ -140,7 +141,7 @@ def test_fixed_context_is_never_silently_truncated():
 
 @pytest.mark.asyncio
 async def test_outline_covers_missing_requirements_at_section_limit(monkeypatch):
-    ctx = context(coverage_contract={"requirements": [{"requirement_id": "COV-1"}, {"requirement_id": "COV-2"}]})
+    ctx = context(coverage_contract={"requirements": [{"requirement_id": "COV-1", "text": "First question"}, {"requirement_id": "COV-2", "text": "Second question"}]})
 
     async def outline(*args, **kwargs):
         return ReportOutline(title="T", sections=[SectionSpec(name=str(i), requirement_ids=["INVALID", "COV-1"]) for i in range(6)])
@@ -161,7 +162,7 @@ async def test_sections_get_assigned_evidence_and_preserve_order(monkeypatch):
 
     async def write(messages, **kwargs):
         nonlocal active, peak
-        payload = json.loads(messages[1].content)
+        payload = context_payload(messages[1].content)
         selected = json.loads(messages[-1].content)["records"]
         assert [r["evidence_id"] for r in selected] == ["EV-" + payload["section_name"]]
         active += 1
@@ -238,7 +239,7 @@ def test_shared_citation_validation(body, valid):
 def test_concurrency_freezing_and_v12_resume():
     frozen = freeze_run_config({"configurable": {"report_section_concurrency": 3}})
     assert frozen["configurable"]["report_section_concurrency"] == 3
-    assert frozen["metadata"]["run_config_schema_version"] == 14
+    assert frozen["metadata"]["run_config_schema_version"] == 18
     values = Configuration().model_dump()
     values.pop("report_section_concurrency")
     historical = {"configurable": values, "metadata": {"runtime_config_frozen": True, "run_config_schema_version": 12}}

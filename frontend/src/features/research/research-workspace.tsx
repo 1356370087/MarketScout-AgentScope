@@ -7,7 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, StatusBadge, SurfaceDialog, Tabs } from "@/components/ui/workspace";
-import { ApprovalCenter } from "@/features/research/approval-center";
+import { ApprovalCenter, ApprovalTrigger } from "@/features/research/approval-center";
 import { ReportPublications } from "@/features/research/report-publications";
 import { RunQualityStatus } from "@/components/run-quality-status";
 import { ResearchTeamPanel } from "@/features/research/research-team-panel";
@@ -132,7 +132,7 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
     if (!destination) return;
     event.preventDefault(); inspectorDestination.current = null;
     if (destination.type === "citation") requestAnimationFrame(() => locateCitation(destination.key));
-  }} inspectorOpen={inspectorOpen} onInspectorOpenChange={setInspectorOpen} inspector={<RunInspector report={view === "report"} source={selectedSource} taskId={selectedTaskId} onSource={selectSource} onTask={selectTask} onFindCitation={findCitation} onClearSource={clearSource} />}><div className="research-heading"><div><span className="eyebrow">深度研究</span><h1>{state.title || "研究任务"}</h1><div className="research-meta"><StatusBadge status={state.status} /><span>{tasks.length} 个任务 · {Object.keys(state.sourcesById).length} 个来源</span><span className={`connection ${state.connectionState}`}><i />{connectionNames[state.connectionState]}</span></div></div><button data-approval-trigger data-task-focus-fallback className="secondary approval-trigger" onClick={() => setApprovalsOpen(true)} aria-haspopup="dialog" aria-expanded={approvalsOpen}><ShieldCheck size={16} /> 审批中心 <span>{pendingCount}</span></button></div>
+  }} inspectorOpen={inspectorOpen} onInspectorOpenChange={setInspectorOpen} inspector={<RunInspector report={view === "report"} source={selectedSource} taskId={selectedTaskId} onSource={selectSource} onTask={selectTask} onFindCitation={findCitation} onClearSource={clearSource} />}><div className="research-heading"><div><span className="eyebrow">深度研究</span><h1>{state.title || "研究任务"}</h1><div className="research-meta"><StatusBadge status={state.status} /><span>{tasks.length} 个任务 · {Object.keys(state.sourcesById).length} 个来源</span><span className={`connection ${state.connectionState}`}><i />{connectionNames[state.connectionState]}</span></div></div><ApprovalTrigger open={approvalsOpen} onClick={() => setApprovalsOpen(true)} /></div>
     {(state.connectionState === "reconnecting" || state.connectionState === "error") && <p className="research-connection-notice" role="status">连接中断，保留最后已知状态，正在尝试恢复实时更新。</p>}
     <Tabs label="研究视图" value={view} onChange={setView} items={[{ value: "process", label: "研究进展" }, { value: "team", label: "研究团队" }, { value: "evidence", label: "来源证据" }, { value: "report", label: "报告", disabled: !state.report }, { value: "usage", label: "用量" }]}><div className="research-content">
       <RunQualityStatus state={state} />

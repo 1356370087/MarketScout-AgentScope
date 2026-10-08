@@ -156,6 +156,9 @@ def build_research_pipeline(
         memory_write=memory_write,
         report_writer=report_writer,
     )
+    from open_deep_research.agentscope_runtime.source_planning import SourcePlanner
+    stages.source_planner = SourcePlanner(models, config_provider, tools_for,
+        dispatcher=dispatcher, local_zones=local_zones, run_id=run_id)
     if recovery:
         from open_deep_research.agentscope_runtime.recovery import RecoveryStages
 

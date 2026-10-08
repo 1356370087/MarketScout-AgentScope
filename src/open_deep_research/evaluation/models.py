@@ -134,5 +134,6 @@ class NativeEvaluationSnapshot(BaseModel):
     events: list[dict[str, Any]]
     outcome: dict[str, Any]
     provenance: dict[str, Any]
+    coverage_contract: dict[str, Any] = Field(default_factory=dict)
     transcript: list[dict[str, Any]] = Field(default_factory=list)
     handoffs: list[dict[str, Any]] = Field(default_factory=list)

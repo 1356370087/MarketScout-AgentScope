@@ -1071,7 +1071,7 @@ def _review_has_recoverable_content_failure(review: ReportReview) -> bool:
         "citation_audit_missing",
     }
     deterministic = set(review.deterministic_failures)
-    if deterministic and deterministic <= protocol_failures:
+    if deterministic.intersection(protocol_failures):
         return False
     content_codes = {
         code
@@ -1227,6 +1227,10 @@ async def _publish_report_progress(
     review: ReportReview | None = None,
 ) -> None:
     """Publish content-free progress through the bound native event ledger."""
+    from .runtime import native_report
+    port = native_report.get()
+    if port is not None and hasattr(port, "archive_review"):
+        await port.archive_review(draft, review, attempt=attempt, revision_count=revision_count)
     publisher = config.get("_event_publisher")
     if publisher is None:
         return

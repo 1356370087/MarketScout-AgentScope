@@ -631,7 +631,9 @@ class RecoverySession:
                             command["action_id"], approval["payload"]
                         )
                 await (pipeline._decide if locked else pipeline.decide)(
-                    command["action_id"], payload["action"], payload.get("feedback", "")
+                    command["action_id"], payload["action"], payload.get("feedback", ""),
+                    **({"source_selection": payload["source_selection"]} if "source_selection" in payload else {}),
+                    **({"expected_version": payload["expected_version"]} if "expected_version" in payload else {}),
                 )
             finally:
                 self.current_command = None
@@ -670,17 +672,23 @@ class RecoveryStages:
     async def execute(self, stage, state):
         current = asyncio.current_task()
         failure = []
+        stopping = asyncio.Event()
 
         async def renew():
             try:
                 while True:
-                    await asyncio.sleep(self.session.ttl / 3)
+                    try:
+                        await asyncio.wait_for(stopping.wait(), self.session.ttl / 3)
+                        return
+                    except TimeoutError:
+                        pass
                     await self.session.store.renew(self.session.lease, self.session.ttl)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - fence loss cancels the current executor
                 failure.append(exc)
-                current.cancel()
+                if not stopping.is_set():
+                    current.cancel()
 
         heartbeat = asyncio.create_task(renew())
         try:
@@ -716,11 +724,14 @@ class RecoveryStages:
                     result = await self.inner.execute(stage, state)
                 if self.session.problem:
                     raise self.session.problem
-                return result
         except asyncio.CancelledError:
             if failure:
                 raise failure[0]
             raise
         finally:
-            heartbeat.cancel()
+            # Let an in-flight SQL renewal commit before the next stage writes.
+            stopping.set()
             await asyncio.gather(heartbeat, return_exceptions=True)
+        if failure:
+            raise failure[0]
+        return result

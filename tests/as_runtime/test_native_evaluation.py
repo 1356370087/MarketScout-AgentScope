@@ -16,7 +16,7 @@ from open_deep_research.evaluation.session import NativeJudgeSession
 
 
 class Factory:
-    run = SimpleNamespace(get=lambda name: {})
+    run = SimpleNamespace(get=lambda name: {}, compatibility_projection=lambda: {"metadata": {"run_config_schema_version": 18}})
 
     def __init__(self):
         self.calls = []

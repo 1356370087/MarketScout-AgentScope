@@ -102,7 +102,8 @@ async def test_approval_outline_bounds_whole_evidence_and_preserves_feedback(tmp
     async def complete(role, messages, **kwargs):
         assert messages[0].role == "system"
         assert sum(len(message.get_text_content().encode("utf-8")) + 16 for message in messages) <= 16000 - 1024 - 800
-        payload = json.loads(messages[1].get_text_content())
+        from open_deep_research.quality.context import context_payload
+        payload = context_payload(messages[1].get_text_content())
         evidence = json.loads(messages[2].get_text_content())
         assert payload["feedback"] == snapshot.feedback
         assert 0 < len(evidence["records"]) < len(records)

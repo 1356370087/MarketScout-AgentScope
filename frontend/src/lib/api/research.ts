@@ -12,7 +12,7 @@ export const researchApi = {
     method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify({ title, messages: [{ role: "user", content: query }], configurable, source_selection: sourceSelection, ...(publicationTheme ? { publication_theme: publicationTheme } : {}) }),
   }),
-  humanAction: (runId: string, actionId: string, action: string, message = "") => apiFetch(`/runs/${runId}/human-actions/${actionId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, message }) }),
+  humanAction: (runId: string, actionId: string, action: string, message = "", options: { source_selection?: SourceSelection; expected_version?: number } = {}) => apiFetch(`/runs/${runId}/human-actions/${actionId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, message, ...options }) }),
   feedback: (runId: string, payload: Record<string, unknown>) => apiFetch(`/runs/${runId}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
   cancel: (runId: string) => apiFetch(`/runs/${runId}/cancel`, { method: "POST" }),
   resume: (runId: string) => apiFetch(`/runs/${runId}/resume`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),

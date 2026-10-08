@@ -855,6 +855,21 @@ class RecoveryStore:
                     raise RecoveryConflict("feedback targets a foreign task")
             elif action_id != (pending or {}).get("id") and action_id not in approvals:
                 raise RecoveryConflict("stale or foreign approval")
+            if "expected_version" in payload and payload["expected_version"] != (pending or {}).get("payload", {}).get("version"):
+                raise RecoveryConflict("source_plan_version_changed")
+            if "source_selection" in payload and (pending or {}).get("stage") != "plan_approval":
+                raise RecoveryConflict("source_selection_requires_plan_approval")
+            if "source_selection" in payload:
+                from open_deep_research.documents.contracts import SourceSelection, SourceMode
+                selection = SourceSelection.model_validate(payload["source_selection"])
+                if selection.mode is not SourceMode.SPECIFIC or not selection.sources or any(s.type not in {"url", "domain"} for s in selection.sources):
+                    raise ValueError("source_plan_correction_requires_explicit_web_sources")
+            if (pending or {}).get("stage") == "plan_approval" and payload.get("action") == "approve":
+                plan = (pending or {}).get("payload", {}).get("source_plan")
+                if plan and not plan.get("explicit") and "source_selection" not in payload and (
+                    not plan.get("entries") or any(not e.get("website") for e in plan["entries"])
+                ):
+                    raise RecoveryConflict("official_source_confirmation_required")
             if payload.get("action") not in {
                 "approve",
                 "revise",

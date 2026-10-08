@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ChoiceGroup, SurfaceDialog, StatusBadge } from "@/components/ui/workspace";
 import { UploadQueue, useDocumentUploads } from "@/features/documents/document-upload";
 import { MaterialScopePicker } from "@/features/knowledge/material-scope-picker";
@@ -105,7 +105,9 @@ export function ResearchComposer() {
   const selectedBases = materialScope.kb_ids, selectedCollections = materialScope.collection_ids;
   const retrieval = { version_mode: materialScope.version_mode, as_of_published: materialScope.as_of_published, as_of_valid: materialScope.as_of_valid, filters: materialScope.filters, profile_version: materialScope.profile_version };
   const selection: SourceSelection = { mode, sources: refs, ...(mode !== "web" ? { retrieval } : {}) };
-  const activeSettings = loadSettings(capabilities.data?.defaults);
+  const [storedSettings, setStoredSettings] = useState<Record<string, unknown>>({});
+  useEffect(() => { setStoredSettings(loadSettings()); }, []);
+  const activeSettings = { ...capabilities.data?.defaults, ...storedSettings };
   const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
   const selectedTeamMode = teamMode ?? String(activeSettings.team_execution_mode ?? "direct");
   const sourceLabel = modes.find((item) => item.value === mode)?.label ?? mode;

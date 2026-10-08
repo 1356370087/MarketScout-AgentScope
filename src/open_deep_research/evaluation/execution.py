@@ -233,6 +233,20 @@ def is_execution_requirement(requirement: str) -> bool:
     )
 
 
+def frozen_execution_constraints(contract: dict[str, Any]) -> ExecutionConstraints:
+    """Use typed process clauses, excluding source and delivery obligations."""
+    workflow = re.compile(
+        r"工具|\btool\b|任务|\btask\b|研究员|researcher|调用|\bcall\b|"
+        r"执行|execute|预算|budget|并发|concurren|超时|timeout|截止时间|deadline|"
+        r"ConductResearch|fetch_url|web_research|ReadResearchEvidence|"
+        r"(?:不得|禁止|不要|不可).{0,12}(?:搜索|search)|(?:no|never|do not)\s+(?:web\s+)?search",
+        re.IGNORECASE,
+    )
+    clauses = [row["text"] for row in contract.get("requirements", [])
+               if row.get("kind") == "process" and workflow.search(row["text"])]
+    return extract_execution_constraints("\n".join(clauses))
+
+
 def content_coverage_requirements(requirements: list[str]) -> list[str]:
     """Remove execution-only constraints from a report completeness checklist."""
     return [item for item in requirements if not is_execution_requirement(item)]
@@ -258,9 +272,11 @@ def evaluate_execution_compliance(
     question: str,
     tool_trace: dict[str, Any] | None,
     evidence_registry: list[dict[str, Any]] | None = None,
+    *,
+    constraints: ExecutionConstraints | None = None,
 ) -> ExecutionComplianceResult:
     """Evaluate recognized process constraints without calling an LLM."""
-    constraints = extract_execution_constraints(question)
+    constraints = constraints if constraints is not None else extract_execution_constraints(question)
     if not constraints.applicable:
         return ExecutionComplianceResult(
             applicable=False,
