@@ -34,6 +34,10 @@ class PlannedRequirement(BaseModel):
     source_text: str
     source_message_index: int = Field(default=0, ge=0)
     kind: Literal["factual", "process", "deliverable"]
+    facets: list[str] = Field(default_factory=list, description=(
+        "For a compound factual requirement, quote its independently answerable aspects as exact "
+        "substrings of source_text, preserving qualifiers. Include every aspect. Leave empty for "
+        "a single indivisible question or for process/deliverable requirements."))
 
 
 class ResearchEntity(BaseModel):

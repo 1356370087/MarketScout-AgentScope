@@ -120,11 +120,15 @@ class SandboxChatModel(ChatModelBase):
         trace_metadata = kwargs.pop("trace_metadata", {})
         from open_deep_research.agentscope_runtime.runtime_limits import (
             call_context,
+            current_deadline_at,
             consume_structured_attempt,
         )
 
 
         trace_metadata = {**call_context.get(), **trace_metadata} if self.trace_enabled else trace_metadata
+        if self.trace_enabled and (execution_deadline := current_deadline_at()) is not None:
+            supplied = trace_metadata.get("deadline_at")
+            trace_metadata["deadline_at"] = min(execution_deadline, supplied) if supplied is not None else execution_deadline
         if structured_schema is not None:
             consume_structured_attempt()
         scope = _operation_scope.get()

@@ -14,6 +14,7 @@ export interface SecurityApproval {
   reason?: string;
   requested_at: number;
   resolved_at?: number | null;
+  inherited_from?: string | null;
   expires_at: number;
 }
 

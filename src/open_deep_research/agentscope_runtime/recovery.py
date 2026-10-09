@@ -362,6 +362,7 @@ class RecoverySession:
             }
 
         async def invoke():
+            from agentscope.exception import StructuredOutputError
             from open_deep_research.agentscope_runtime.gateway import (
                 GatewayCallError,
                 gateway_operation_scope,
@@ -399,11 +400,11 @@ class RecoverySession:
                             "codec": "agentscope-failed-summary-v1", "framework": "2.0.8",
                             "error_type": str(exc), "usage_details": exc.usage_details,
                         }
-                    except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, GatewayCallError, ModelOutputProtocolError) as exc:
+                    except (jsonschema.ValidationError, ValidationError, json.JSONDecodeError, StructuredOutputError, GatewayCallError, ModelOutputProtocolError) as exc:
                         known_output_failure = not isinstance(exc, GatewayCallError) or (
                             not exc.uncertain and str(exc) in {"structured_output_missing", "structured_output_truncated"}
                         )
-                        if role != "quality_evaluation" or not known_output_failure:
+                        if role not in {"quality_evaluation", "report_review"} or not known_output_failure:
                             raise
                         result = {"codec": "agentscope-invalid-judge-v1", "framework": "2.0.8",
                                   "error": str(exc)[:2000]}

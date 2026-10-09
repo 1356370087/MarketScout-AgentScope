@@ -629,7 +629,8 @@ def _is_runtime_control_error(exc: Exception) -> bool:
 
 
 async def _call_with_limits(tool, input, context):
-    from open_deep_research.agentscope_runtime.runtime_limits import attributed, limited
+    from open_deep_research.agentscope_runtime.runtime_limits import attributed, limited, limited_tool
+    from open_deep_research.configuration import QUALITY_POLICY_VERSION
     from open_deep_research.tools.base import ToolExecutionZone
 
     cfg = Configuration.from_runnable_config(context.config)
@@ -641,7 +642,8 @@ async def _call_with_limits(tool, input, context):
             seconds = cfg.research_tool_call_timeout_seconds if tool.name in {
                 "web_research", "fetch_url", "web_search", "source_discovery", "search_documents",
             } else cfg.tool_call_timeout_seconds
-            return await limited(callback, seconds,
+            limit = limited_tool if context.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5" else limited
+            return await limit(callback, seconds,
                 deadline_at=context.config.get("metadata", {}).get("execution_deadline_at"))
         return await callback()
 

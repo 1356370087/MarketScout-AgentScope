@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from agentscope.message import AssistantMsg
 
 from open_deep_research.agentscope_runtime.research_pipeline import PendingDecision
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
 from open_deep_research.documents.contracts import (
     SourceSelection,
     selection_from_config,
@@ -150,6 +150,8 @@ class NativeResearchStages:
         modern = self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 18
         if modern:
             prompt += "\nReturn requirements quoted verbatim from the ORIGINAL user messages, not the brief. Split factual questions from recommendations, format, source counts, research dates and no-fabrication constraints. Include every core question. Classify recommendations/format as deliverable and source/execution rules as process. Quote mixed clauses as separate exact spans. Identify entities named by the user; propose their official entry URLs without certifying ownership."
+            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+                prompt += "\nFor each compound factual requirement, populate facets with exact substrings for its independently answerable aspects. Cover every word/qualifier of the original clause except numbering, punctuation and conjunctions; do not split an indivisible technical term. For comparisons, entities must include each explicitly compared subject. Each subject must answer every applicable factual aspect; one product's evidence cannot substitute for another's."
         result = await self.models.structured(
             "supervisor",
             prompt,
@@ -164,7 +166,9 @@ class NativeResearchStages:
         )
         if modern:
             from open_deep_research.quality.planning import compile_planned_requirements
-            contract = compile_planned_requirements(state.messages, result.requirements, brief=result.research_brief)
+            contract = compile_planned_requirements(state.messages, result.requirements, brief=result.research_brief,
+                atomic=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5",
+                entities=result.entities)
         else:
             contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())

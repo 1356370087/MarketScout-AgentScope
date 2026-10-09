@@ -440,6 +440,7 @@ def _uncovered_requirement_ids(state: dict) -> list[str]:
         for requirement in requirements
         if isinstance(requirement, Mapping)
         and requirement.get("requirement_id")
+        and (contract.get("schema_version", 2) < 4 or requirement.get("kind", "factual") == "factual")
         and (
             not isinstance(
                 ledger.get(str(requirement.get("requirement_id"))),
@@ -1067,6 +1068,7 @@ def _review_has_recoverable_content_failure(review: ReportReview) -> bool:
         "unknown_evidence_id",
         "review_protocol_invalid",
         "review_dimensions_missing",
+        "review_issue_not_actionable",
         "coverage_contract_rows_missing_or_invalid",
         "citation_audit_missing",
     }

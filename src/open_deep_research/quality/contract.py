@@ -74,6 +74,31 @@ def coverage_bound_input_schema(base_schema, contract):
     }
     return create_model(base_schema.__name__, __base__=base_schema, requirement_ids=(list[str], field))
 
+
+def research_delegation_scopes(contract):
+    """Offer stable, bounded scopes instead of asking a model to count ID lists."""
+    if contract.delegation_scopes:
+        by_id = {row.requirement_id: row for row in contract.requirements}
+        return [{"scope_id": scope_id, "requirement_ids": list(ids),
+                 "requirements": [coverage_requirement_display_text(contract, by_id[rid]) for rid in ids]}
+                for scope_id, ids in contract.delegation_scopes.items()]
+    delegable = set(contract.delegable_requirement_ids())
+    buckets = {}
+    for requirement in contract.requirements:
+        if requirement.requirement_id in delegable:
+            key = None if contract.single_research_task else (requirement.dimension_id, requirement.subject)
+            buckets.setdefault(key, []).append(requirement)
+    scopes = []
+    for requirements in buckets.values():
+        width = len(requirements) if contract.single_research_task else MAX_REQUIREMENTS_PER_RESEARCH_TASK
+        for start in range(0, len(requirements), width):
+            rows = requirements[start:start + width]
+            scopes.append({"scope_id": f"S{len(scopes) + 1:02d}",
+                "requirement_ids": [row.requirement_id for row in rows],
+                "requirements": [coverage_requirement_display_text(contract, row) for row in rows]})
+    return scopes
+
+
 RequirementKind = Literal["factual", "process", "deliverable"]
 
 _SINGLE_RESEARCH_TASK_RE = re.compile(
@@ -286,6 +311,7 @@ class CoverageRequirement(BaseModel):
     source_start: int = Field(ge=0)
     source_end: int = Field(ge=0)
     source_located: bool = True
+    subject: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CoverageDimension(BaseModel):
@@ -316,6 +342,7 @@ class ResearchCoverageContract(BaseModel):
     single_research_task: bool = False
     source_selection: SourceSelection | None = None
     source_plan: dict[str, Any] | None = Field(default=None, exclude_if=lambda value: value is None)
+    delegation_scopes: dict[str, tuple[str, ...]] = Field(default_factory=dict, exclude_if=lambda value: not value)
 
     def requirement_ids(self) -> tuple[str, ...]:
         """Return stable requirement identifiers in source order."""
@@ -389,6 +416,23 @@ def task_coverage_contract(contract, requirement_ids):
         ]})
         return contract.model_copy(update={"source_selection": selected})
     return contract
+
+
+def researcher_coverage_view(contract, requirement_ids):
+    """Expose only assigned factual obligations to a Researcher's model.
+
+    The caller keeps the full contract for source admission and orchestration.
+    Process and delivery constraints remain visible, but sibling facts and the
+    Supervisor's delegation choices must not become this worker's workload.
+    """
+    resolved = ResearchCoverageContract.model_validate(contract)
+    owned = set(requirement_ids)
+    return resolved.model_copy(update={
+        "requirements": tuple(row for row in resolved.requirements if row.kind != "factual" or row.requirement_id in owned),
+        "dimensions": tuple(row.model_copy(update={"requirement_ids": tuple(rid for rid in row.requirement_ids if rid in owned)})
+                            for row in resolved.dimensions if owned.intersection(row.requirement_ids)),
+        "delegation_scopes": {},
+    }).model_dump(mode="json")
 
 
 class DimensionCoverageSummary(BaseModel):
@@ -1340,9 +1384,11 @@ def coverage_requirement_display_text(
     requirement: CoverageRequirement,
 ) -> str:
     """Render an atomic requirement with its parent dimension context."""
+    subject = getattr(requirement, "subject", None)
+    text = f"{subject}：{requirement.text}" if subject else requirement.text
     dimension_id = getattr(requirement, "dimension_id", None)
     if not dimension_id:
-        return requirement.text
+        return text
     dimension = next(
         (
             item
@@ -1354,8 +1400,8 @@ def coverage_requirement_display_text(
     if dimension is None or requirement.text.startswith(
         (f"{dimension.label}：", f"{dimension.label}:")
     ):
-        return requirement.text
-    return f"{dimension.label}：{requirement.text}"
+        return text
+    return f"{dimension.label}：{text}"
 
 
 def aggregate_dimension_coverage(

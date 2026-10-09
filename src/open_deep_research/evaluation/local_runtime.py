@@ -33,9 +33,23 @@ def evaluation_state(snapshot):
     elif not result:
         result = {
             "status": "partial"
-            if product.get("quality_gate", {}).get("status") in {"failed", "degraded"}
+            if (product.get("quality_gate") or {}).get("status") in {"failed", "degraded"}
             else "success"
         }
+    # Keep runtime delivery authority alongside independent offline scores.
+    # Previously a degraded Reviewer result disappeared from this projection.
+    if product.get("quality_gate") is not None:
+        result["quality_gate"] = product["quality_gate"]
+    review = product.get("report_review")
+    if review is not None:
+        result["report_review"] = {key: review.get(key) for key in (
+            "decision", "status", "degraded", "skipped", "draft_sha256")}
+    if "completion_status" in product:
+        result["completion_status"] = product["completion_status"]
+    frozen = getattr(snapshot, "application", {}).get("configuration")
+    if frozen:
+        from open_deep_research.agentscope_runtime.run_config import RunConfig
+        result["report_review_enabled"] = RunConfig.restore(frozen).get("report_review_enabled")
     from open_deep_research.quality.planning import unique_evidence
     return {
         "engine": "agentscope",

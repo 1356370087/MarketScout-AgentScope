@@ -5,21 +5,25 @@ import re
 
 from open_deep_research.quality.contract import (
     CoverageRequirement,
+    CoverageDimension,
     ResearchCoverageContract,
     _message_content,
     _message_role,
     _stable_requirement_id,
+    _stable_dimension_id,
     build_research_coverage_contract,
     classify_requirement_kind,
+    research_delegation_scopes,
 )
 
 
-def compile_planned_requirements(messages, atoms, *, brief=""):
+def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=()):
     """Retain provenance and deterministic constraints without inventing facts."""
     original = {i: _message_content(m) for i, m in enumerate(messages)
                 if _message_role(m) in {"user", "human"}}
     fallback = build_research_coverage_contract(messages, advisory_dimensions=[brief])
     selected = []
+    facet_parents = []
     for atom in atoms:
         row = atom.model_dump() if hasattr(atom, "model_dump") else atom
         text = row["source_text"].strip()
@@ -33,7 +37,20 @@ def compile_planned_requirements(messages, atoms, *, brief=""):
         kind = classify_requirement_kind(text)
         if kind == "factual" and not ("？" in text or "?" in text):
             kind = row["kind"]
-        selected.append((index, start, start + len(text), text, kind))
+        facets = []
+        if atomic and kind == "factual":
+            for facet in row.get("facets", []):
+                facet = str(facet).strip()
+                offset = text.find(facet)
+                if facet and offset >= 0:
+                    facets.append((index, start + offset, start + offset + len(facet), facet, classify_requirement_kind(facet)))
+        if facets:
+            facet_parents.append((index, start, start + len(text), text))
+            selected.extend(facets)
+            if not _fully_quoted(text, start, facets):
+                selected.append((index, start, start + len(text), text, kind))
+        else:
+            selected.append((index, start, start + len(text), text, kind))
     expanded = []
     for i, start, end, text, kind in selected:
         markers = list(re.finditer(r"[（(]\d{1,2}[）)]", text)) if kind == "factual" else []
@@ -49,6 +66,7 @@ def compile_planned_requirements(messages, atoms, *, brief=""):
     selected = expanded
     # Explicit numbered clauses are user-authored structure. Keep all of them,
     # independent of the model's grouping, quoting or omission choices.
+    parents = []
     for i, content in original.items():
         markers = list(re.finditer(r"[（(]\d{1,2}[）)]", content))
         if len(markers) < 2:
@@ -61,8 +79,19 @@ def compile_planned_requirements(messages, atoms, *, brief=""):
                 b = a + ending.start()
             while b > a and content[b - 1] in "；;。 \r\n":
                 b -= 1
+            finer = [row for row in selected if row[0] == i and row[4] == "factual" and a <= row[1] < row[2] <= b
+                     and (row[1], row[2]) != (a, b)] if atomic else []
             selected = [row for row in selected if not (row[0] == i and row[4] == "factual" and row[1] < b and row[2] > a)]
-            selected.append((i, a, b, content[a:b], classify_requirement_kind(content[a:b])))
+            if finer:
+                selected.extend(finer)
+            if not finer or not _fully_quoted(content[a:b], a, finer):
+                selected.append((i, a, b, content[a:b], classify_requirement_kind(content[a:b])))
+            if atomic:
+                parents.append((i, a, b, content[a:b]))
+    for parent in facet_parents:
+        if not any(parent[0] == row[0] and parent[1] < row[2] and parent[2] > row[1] for row in parents):
+            parents.append(parent)
+    parents = sorted(dict.fromkeys(parents))
     if not any(row[4] == "factual" for row in selected):
         return fallback
     if sum(row[4] == "factual" for row in selected) > 2:
@@ -94,14 +123,62 @@ def compile_planned_requirements(messages, atoms, *, brief=""):
     unique = {}
     for row in sorted(selected):
         unique.setdefault((row[0], row[1], row[2]), row)
-    requirements = tuple(CoverageRequirement(
-        requirement_id=_stable_requirement_id(i, text, n), text=text, kind=kind,
-        source_message_index=i, source_start=start, source_end=end,
-    ) for n, (i, start, end, text, kind) in enumerate(unique.values(), 1))
-    return ResearchCoverageContract(
-        original_query_sha256=fallback.original_query_sha256, requirements=requirements,
+    comparison_subjects = _comparison_subjects(original, entities) if atomic else []
+    requirements = []
+    parent_rows = []
+    for ordinal, (i, a, b, text) in enumerate(parents, 1):
+        parent_rows.append(CoverageDimension(dimension_id=_stable_dimension_id(i, text, ordinal),
+            label=text, text=text, source_message_index=i, source_start=a, source_end=b))
+    for i, start, end, text, kind in unique.values():
+        parent = next((row for row in parent_rows if row.source_message_index == i
+                       and row.source_start <= start and end <= row.source_end), None) if kind == "factual" else None
+        subjects = []
+        if kind == "factual" and comparison_subjects:
+            # An explicitly named subject narrows its own clause; otherwise the
+            # comparison's named subjects each retain a separate obligation.
+            context = parent.text if parent else text
+            subjects = [name for name in comparison_subjects if name.casefold() in context.casefold()] or comparison_subjects
+        for subject in subjects or [None]:
+            n = len(requirements) + 1
+            requirements.append(CoverageRequirement(
+                requirement_id=_stable_requirement_id(i, f"{subject}: {text}" if subject else text, n),
+                text=text, kind=kind, subject=subject, dimension_id=parent.dimension_id if parent else None,
+                source_message_index=i, source_start=start, source_end=end))
+    dimensions = tuple(row.model_copy(update={"requirement_ids": tuple(
+        r.requirement_id for r in requirements if r.dimension_id == row.dimension_id)}) for row in parent_rows
+        if any(r.dimension_id == row.dimension_id for r in requirements))
+    compiled = ResearchCoverageContract(
+        schema_version=4 if atomic else fallback.schema_version,
+        original_query_sha256=fallback.original_query_sha256, requirements=tuple(requirements), dimensions=dimensions,
         single_research_task=fallback.single_research_task, advisory_dimensions=fallback.advisory_dimensions,
     )
+    if atomic:
+        compiled = compiled.model_copy(update={"delegation_scopes": {
+            row["scope_id"]: tuple(row["requirement_ids"]) for row in research_delegation_scopes(compiled)
+        }})
+    return compiled
+
+
+def _fully_quoted(text, start, rows):
+    """A model may split a source clause, but cannot silently omit its words."""
+    remaining = list(text)
+    for _, a, b, _, _ in rows:
+        remaining[max(0, a - start):min(len(text), b - start)] = " " * (min(len(text), b - start) - max(0, a - start))
+    value = re.sub(r"[（(]\d{1,2}[）)]", "", "".join(remaining))
+    value = re.sub(r"\b(?:and|or)\b|以及|及|与|和|并", "", value, flags=re.IGNORECASE)
+    return not re.search(r"\w", value)
+
+
+def _comparison_subjects(original, entities):
+    """Bind subjects only from an explicit comparison in the original input."""
+    names = [row.name if hasattr(row, "name") else row["name"] for row in entities]
+    for content in original.values():
+        for match in re.finditer(r"(?:比较|对比|对照|\bcompare\b|\bcomparison of\b)[^。；;\n!?]{1,240}", content, re.IGNORECASE):
+            found = [(match.group().casefold().find(name.casefold()), name) for name in names if name]
+            found = sorted((position, name) for position, name in found if position >= 0)
+            if len(found) >= 2:
+                return list(dict.fromkeys(name for _, name in found))
+    return []
 
 
 def unique_evidence(records):

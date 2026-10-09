@@ -44,6 +44,10 @@ MAX_SPECIFIC_DOMAIN_QUERIES = 24
 class SearchProviderError(RuntimeError):
     """Public, credential-free provider failure code."""
 
+    def __init__(self, code, *, diagnostics=None):
+        super().__init__(code)
+        self.diagnostics = diagnostics or {}
+
 
 def preserve_control_error(exc: BaseException) -> None:
     """Do not downgrade cancellation, lease loss or unknown execution to content."""
@@ -306,7 +310,7 @@ class SearchResources:
 
                 key = resolve_named_api_key("TAVILY_API_KEY", config)
                 if not key:
-                    raise SearchProviderError("missing_credential")
+                    raise SearchProviderError("missing_credential", diagnostics={"provider_requests": 0})
                 self.clients[provider] = AsyncTavilyClient(api_key=key)
             else:
                 self.clients[provider] = httpx.AsyncClient(
@@ -320,26 +324,31 @@ class SearchResources:
         url = PROVIDER_URLS[provider]
         modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
         for hop in range(3):
-            async with client.stream("GET", url, **kwargs) as response:
-                if response.is_redirect:
-                    target = urljoin(str(response.url), response.headers.get("location", ""))
-                    parsed = urlsplit(target)
-                    if not modern or provider != "bing" or hop == 2 or parsed.scheme != "https" or parsed.hostname not in {"www.bing.com", "cn.bing.com"} or parsed.path != "/search":
-                        raise SearchProviderError("provider_redirect_refused")
-                    if egress_authorizer.get() is not None and await authorize_url(target, "search.provider", consume=True) != "allow":
-                        raise SearchProviderError("provider_redirect_not_allowed")
-                    url = target
-                    kwargs.pop("params", None)
-                    continue
-                response.raise_for_status()
-                body = bytearray()
-                async for chunk in response.aiter_bytes():
-                    body.extend(chunk)
-                    if len(body) > 2 * 1024 * 1024:
-                        raise SearchProviderError("provider_response_too_large")
-                text = body.decode("utf-8", errors="replace")
-                info = {"http_status": response.status_code, "final_endpoint": str(response.url).split("?")[0], "redirect_count": hop}
-                return (text, info) if return_info else text
+            info = {"final_endpoint": url.split("?")[0], "redirect_count": hop}
+            try:
+                async with client.stream("GET", url, **kwargs) as response:
+                    info.update(http_status=response.status_code, final_endpoint=str(response.url).split("?")[0])
+                    diagnostics = {**info, "provider_requests": hop + 1}
+                    if response.is_redirect:
+                        target = urljoin(str(response.url), response.headers.get("location", ""))
+                        parsed = urlsplit(target)
+                        if not modern or provider != "bing" or hop == 2 or parsed.scheme != "https" or parsed.hostname not in {"www.bing.com", "cn.bing.com"} or parsed.path != "/search":
+                            raise SearchProviderError("provider_redirect_refused", diagnostics=diagnostics)
+                        if egress_authorizer.get() is not None and await authorize_url(target, "search.provider", consume=True) != "allow":
+                            raise SearchProviderError("provider_redirect_not_allowed", diagnostics=diagnostics)
+                        url = target
+                        kwargs.pop("params", None)
+                        continue
+                    response.raise_for_status()
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > 2 * 1024 * 1024:
+                            raise SearchProviderError("provider_response_too_large", diagnostics=diagnostics)
+                    text = body.decode("utf-8", errors="replace")
+                    return (text, info) if return_info else text
+            except httpx.HTTPError as exc:
+                raise SearchProviderError(error_code(exc), diagnostics={**info, "provider_requests": hop + 1}) from exc
 
 
     async def aclose(self):
@@ -378,10 +387,11 @@ class SearchService:
         self.config, self.models, self.resources = config, models, resources
         self.settings = Configuration.from_runnable_config(config)
         self.progress, self.legacy = progress, legacy
+        self.search_phase = "preparation" if config.get("metadata", {}).get("task_id") == "source-planning" else "research"
 
     async def _progress(self, phase: str, **payload):
         if self.progress:
-            await self.progress(phase, **payload)
+            await self.progress(phase, **{**payload, "search_phase": self.search_phase})
 
     async def _tavily(self, query: str, request: SearchRequest):
         options = {
@@ -411,12 +421,15 @@ class SearchService:
             },
         )
         html, info = value if isinstance(value, tuple) else (value, {})
-        return parse_bing_results(html), "", info
+        try:
+            return parse_bing_results(html), "", info
+        except SearchProviderError as exc:
+            raise SearchProviderError(str(exc), diagnostics={**info, "provider_requests": 1 + info.get("redirect_count", 0)}) from exc
 
     async def _brave(self, query: str, request: SearchRequest):
         key = resolve_named_api_key("BRAVE_API_KEY", self.config)
         if not key:
-            raise SearchProviderError("missing_credential")
+            raise SearchProviderError("missing_credential", diagnostics={"provider_requests": 0})
         text = await self.resources.get(
             "brave",
             self.config,
@@ -526,6 +539,12 @@ class SearchService:
 
         async def run(provider, index, query):
             async with semaphore:
+                attempts = raw_count = parsed_count = 0
+                filter_reasons = {}
+                attempted_queries = []
+                in_flight = False
+                info = {}
+                effective_query = bing_query(query, request.allowed_domains) if modern and provider == "bing" else query
                 await self._progress(
                     "query_started", provider=provider, query=query, query_index=index
                 )
@@ -541,15 +560,18 @@ class SearchService:
                         != "allow"
                     ):
                         raise SearchProviderError("provider_egress_not_allowed")
-                    effective_query = bing_query(query, request.allowed_domains) if modern and provider == "bing" else query
+                    attempts += 1
+                    in_flight = True
+                    attempted_queries.append(effective_query)
                     result = await (
                         strategies[provider](effective_query, request)
                         if provider in strategies
                         else self._model_search(provider, query, request)
                     )
                     rows, synthesis, *details = result
-                    parsed_count = 0
-                    filter_reasons = {}
+                    info = details[0] if details else {}
+                    attempts += info.get("redirect_count", 0)
+                    in_flight = False
                     def project(rows):
                         nonlocal parsed_count
                         items = []
@@ -570,18 +592,20 @@ class SearchService:
                         return items
                     items = project(rows)
                     raw_count = len(rows)
-                    info = details[0] if details else {}
-                    attempts = 1 + info.get("redirect_count", 0)
                     if modern and provider == "bing" and rows and not items:
                         retry_query = bing_query(query, request.allowed_domains, simplified=True)
                         if retry_query != effective_query:
                             if egress_authorizer.get() is not None and await authorize_url(PROVIDER_URLS[provider], "search.provider", consume=True) != "allow":
                                 raise SearchProviderError("provider_egress_not_allowed")
+                            attempts += 1
+                            in_flight = True
+                            attempted_queries.append(retry_query)
                             rows, synthesis, *details = await self._bing(retry_query, request)
+                            info = details[0] if details else {}
+                            attempts += info.get("redirect_count", 0)
+                            in_flight = False
                             items = project(rows)
                             raw_count += len(rows)
-                            info = details[0] if details else info
-                            attempts += 1 + info.get("redirect_count", 0)
                     outcome = dict(
                         provider=provider,
                         query=query,
@@ -592,20 +616,26 @@ class SearchService:
                         filter_reasons=filter_reasons,
                         unique_result_count=len({i.canonical_url for i in items}),
                         result_status="usable" if items else "all_filtered" if raw_count else "empty",
-                        provider_requests=attempts, effective_query=effective_query, **info,
+                        provider_requests=attempts, effective_query=effective_query,
+                        attempted_queries=attempted_queries, search_phase=self.search_phase, **info,
                     )
                     await self._progress("query_completed", **outcome)
                     return provider, items, synthesis, None, raw_count, attempts, outcome
                 except Exception as exc:  # noqa: BLE001 - preserve control errors before normalizing provider failures
                     preserve_control_error(exc)
                     code = error_code(exc)
-                    await self._progress(
-                        "provider_failed",
-                        provider=provider,
-                        query_index=index,
-                        error_code=code,
-                    )
-                    return provider, [], "", code, 0, 1, {"query": query, "error_code": code, "result_status": "failed"}
+                    diagnostics = getattr(exc, "diagnostics", {})
+                    if in_flight:
+                        attempts += diagnostics.get("provider_requests", 1) - 1
+                    info.update({key: value for key, value in diagnostics.items() if key != "provider_requests"})
+                    outcome = {"provider": provider, "query": query, "query_index": index,
+                        "error_code": code, "result_status": "failed", "result_count": 0,
+                        "raw_result_count": raw_count, "parsed_result_count": parsed_count,
+                        "filtered_result_count": raw_count, "filter_reasons": filter_reasons,
+                        "provider_requests": attempts, "effective_query": effective_query,
+                        "attempted_queries": attempted_queries, "search_phase": self.search_phase, **info}
+                    await self._progress("provider_failed", **{key: value for key, value in outcome.items() if key != "search_phase"})
+                    return provider, [], "", code, raw_count, attempts, outcome
 
         tasks = [
             asyncio.create_task(run(provider, index, query))
@@ -655,6 +685,9 @@ class SearchService:
                 filtered_result_count=sum(o[6].get("filtered_result_count", 0) for o in outcomes if o[0] == p),
                 query_outcomes=[o[6] for o in outcomes if o[0] == p],
                 result_count=len(by_provider[p]),
+                result_status="usable" if by_provider[p] else "failed" if failures[p]
+                    else "all_filtered" if any(o[4] for o in outcomes if o[0] == p) else "empty",
+                search_phase=self.search_phase,
                 status="failed"
                 if len(failures[p]) == len(request.queries)
                 else "partial"
@@ -671,4 +704,5 @@ class SearchService:
             provider_results=statuses,
             search_calls=sum(o[5] for o in outcomes),
             raw_candidate_count=len(exact) + sum(o[4] for o in outcomes),
+            search_phase=self.search_phase,
         )

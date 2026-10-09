@@ -41,7 +41,7 @@ from open_deep_research.agentscope_runtime.web_fetch_backends import (
     tavily_extract as _tavily_extract,
 )
 from open_deep_research.agentscope_runtime.web_progress import WebProgress
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
 from open_deep_research.documents.contracts import (
     selection_from_config,
 )
@@ -630,6 +630,11 @@ def create_web_pipeline(
 
     bounded = enabled(config)
     finite = corpus(config) if bounded else ()
+    metadata = config.get("metadata", {})
+    requirements = metadata.get("coverage_contract", {}).get("requirements", [])
+    if metadata.get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5" and "evidence_requirement_ids" in metadata:
+        owned = set(metadata["evidence_requirement_ids"])
+        requirements = [row for row in requirements if row.get("kind", "factual") != "factual" or row["requirement_id"] in owned]
     run_id = _resolve_run_identity(config)
     settings = _settings(config, run_id)
     settings.finite_corpus = bool(finite)
@@ -670,8 +675,8 @@ def create_web_pipeline(
         result_cache=getattr(factory, "research_cache", None) if bounded else None,
         evidence_context={
             "model": cfg.web_evidence_model,
-            "requirements": config.get("metadata", {}).get("coverage_contract", {}).get("requirements", []),
-            "objective": "\n".join(r.get("text", "") for r in config.get("metadata", {}).get("coverage_contract", {}).get("requirements", [])
+            "requirements": requirements,
+            "objective": "\n".join((r.get("subject", "") + ": " if r.get("subject") else "") + r.get("text", "") for r in requirements
                                    if r.get("kind", "factual") == "factual"),
         },
     )
@@ -806,6 +811,12 @@ def web_research_tool(
     browser_tools=(),
 ):
     """Expose bounded multi-provider research through the governed tool protocol."""
+    from open_deep_research.agentscope_runtime.efficiency import corpus, enabled
+
+    def accepts_no_query(config):
+        historical = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) != "quality-gate-v5"
+        return enabled(config) and (historical or bool(corpus(config)))
+
     client_factories = {
         k: v
         for k, v in {
@@ -855,7 +866,7 @@ def web_research_tool(
     return build_tool(
         name="web_research",
         description="Search selected providers in parallel, fetch sources and return citable evidence.",
-        input_schema=(WebResearchInput if Configuration.from_runnable_config(run_config_getter()).research_efficiency_mode == "bounded" else LegacyWebResearchInput),
+        input_schema=WebResearchInput if accepts_no_query(run_config_getter()) else LegacyWebResearchInput,
         call=call,
         origin=ToolOrigin.SEARCH,
         retryable=False,
@@ -864,7 +875,7 @@ def web_research_tool(
             "For a fixed list of selected URLs, call web_research with objective and omit queries to read the selected pages in one batch. "
             "Later calls inspect unread sections and reuse prior evidence. Do not invent or expand the URL list. "
             "For open discovery, provide one to three queries. Only fetched, source-checked evidence can support report claims."
-        ) if Configuration.from_runnable_config(config).research_efficiency_mode == "bounded" else
+        ) if accepts_no_query(config) else
         "Provide an objective and up to three queries. Only fetched, source-checked evidence can support report claims.",
         is_enabled=enforced_pipeline_enabled,
     )
@@ -878,6 +889,11 @@ def fetch_url_tool(
     async def call(input, context, progress=None):
         config = execution_config(context)
         if not source_allowed(input.url, config):
+            if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+                from open_deep_research.tools.governance import ToolError, ToolErrorType, ToolOutcomeError
+                raise ToolOutcomeError(ToolError(error_type=ToolErrorType.validation_error, tool_name="fetch_url",
+                    message="source_scope_denied: URL is outside the approved source plan. Use an approved source or request a source-plan revision.",
+                    detail={"reason_code": "source_scope_denied"}))
             raise ValueError("URL is outside this run's specific-source boundary")
         clients = resources or SearchResources()
         emitter = progress or WebProgress(

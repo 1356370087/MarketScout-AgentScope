@@ -23,10 +23,12 @@ export function ActivityCard({ group, onSource }: { group: ActivityGroup; onSour
       {group.events.filter((event) => event.type === "tool.progress").map((event) => <li key={event.event_id} data-status={event.status}>
         <strong>{typeof event.payload.provider === "string" ? `${event.payload.provider} · ` : ""}{event.title}</strong>
         <span>{event.summary}</span>
+        {event.payload.search_phase === "preparation" && <small>官网发现候选，尚未核验归属，不能作为报告证据</small>}
         {typeof event.payload.result_count === "number" && <small>{event.payload.result_count} 个候选来源</small>}
         {typeof event.payload.raw_result_count === "number" && <small>返回 {event.payload.raw_result_count} 条 · 范围过滤 {String(event.payload.filtered_result_count ?? 0)} 条 · 去重后 {String(event.payload.unique_result_count ?? event.payload.result_count ?? 0)} 条</small>}
         {event.payload.result_status === "all_filtered" && <small>本渠道返回结果均不在允许的来源范围内</small>}
-        {typeof event.payload.provider_requests === "number" && event.payload.provider_requests > 1 && <small>含一次简化查询，共 {event.payload.provider_requests} 次请求</small>}
+        {event.payload.result_status === "empty" && <small>本渠道没有返回候选来源</small>}
+        {typeof event.payload.provider_requests === "number" && event.payload.provider_requests > 1 && <small>共 {event.payload.provider_requests} 次请求（包含重试或重定向）</small>}
         {typeof event.payload.backend === "string" && <small>读取方式：{event.payload.backend}</small>}
         {event.payload.metrics != null && <Disclosure title="对照评估结果"><StructuredContent value={event.payload.metrics} /></Disclosure>}
       </li>)}

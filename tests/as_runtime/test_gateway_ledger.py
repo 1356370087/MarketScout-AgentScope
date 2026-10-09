@@ -45,6 +45,36 @@ async def test_web_reservation_carries_host_source_contract(host):
     assert reserved["coverage_contract"] == contract
 
 
+@pytest.mark.parametrize("version", ["quality-gate-v4", "quality-gate-v5"])
+async def test_gateway_extraction_owns_only_sql_task_requirements(host, tmp_path, version):
+    from types import SimpleNamespace
+    from open_deep_research.agentscope_runtime.efficiency import ResearchCache
+    from open_deep_research.agentscope_runtime.web_tools import create_web_pipeline
+
+    gateway, ledger, _ = host
+    ledger.config = {"metadata": {"quality_policy_version": version}}
+    ledger.research_cache = ResearchCache(ledger.recovery, tmp_path)
+    contract = {"requirements": [
+        {"requirement_id": "q", "text": "dense fusion", "subject": "Qdrant", "kind": "factual"},
+        {"requirement_id": "m", "text": "sparse fusion", "subject": "Milvus", "kind": "factual"},
+    ]}
+    ledger.recovery.snapshot.coverage_contract = contract
+    await ledger.research_cache.progress({"tasks": {"t": {"requirements": ["m"]}, "sibling": {"requirements": ["q"]}}})
+    reserved = await _tool_reserve(gateway, ledger, "owned-research", tool_name="web_research", idempotent=True)
+    assert reserved["coverage_contract"] == contract  # Source admission keeps the authority.
+    if version == "quality-gate-v5":
+        assert reserved["evidence_requirement_ids"] == ["m"]
+    else:
+        assert "evidence_requirement_ids" not in reserved
+    config = {"metadata": {**ledger.config["metadata"], "coverage_contract": reserved["coverage_contract"],
+                           **({"evidence_requirement_ids": reserved["evidence_requirement_ids"]} if "evidence_requirement_ids" in reserved else {})}}
+    pipeline = create_web_pipeline(config, SimpleNamespace(), SimpleNamespace())
+    ids = {row["requirement_id"] for row in pipeline.evidence_context["requirements"]}
+    assert ids == ({"m"} if version == "quality-gate-v5" else {"q", "m"})
+    if version == "quality-gate-v5":
+        assert pipeline.evidence_context["objective"] == "Milvus: sparse fusion"
+
+
 async def test_shadow_receipt_replays_diagnostics_and_fetch_usage_once(host):
     gateway, ledger, _ = host
     ledger.config = {"configurable": {"web_pipeline_mode": "shadow"}}

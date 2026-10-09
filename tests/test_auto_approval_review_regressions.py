@@ -71,7 +71,7 @@ async def test_authorization_precedes_dns(monkeypatch, nested, verdict):
 
         decision = await authorize_url(url, consume=True)
         assert decision == ("ask" if verdict == "ask" else "deny")
-        return SimpleNamespace(error=None, result=SimpleNamespace(output=decision))
+        return SimpleNamespace(error=None, result=SimpleNamespace(output=decision, metadata={}))
 
     monkeypatch.setattr("open_deep_research.agentscope_runtime.sandbox_catalog.assembled_tools", assemble)
     monkeypatch.setattr("open_deep_research.sandbox.gateway.resolve_profile", lambda c: (None, "p", _profile()))
@@ -253,7 +253,7 @@ async def test_proxy_denial_does_not_resolve_target(monkeypatch):
 @pytest.mark.asyncio
 async def test_robots_authorization_precedes_dns(monkeypatch):
     from open_deep_research.sandbox.egress_context import egress_authorizer
-    from open_deep_research.web import pipeline
+    from open_deep_research.web import fetching
 
     async def deny(*args, **kwargs):
         return "deny"
@@ -261,11 +261,11 @@ async def test_robots_authorization_precedes_dns(monkeypatch):
     async def forbidden_dns(*args):
         pytest.fail("Denied robots URLs must not reach DNS")
 
-    monkeypatch.setattr(pipeline, "validate_public_http_url", forbidden_dns)
+    monkeypatch.setattr(fetching, "validate_public_http_url", forbidden_dns)
     token = egress_authorizer.set(deny)
     try:
         with pytest.raises(PermissionError):
-            await pipeline._robots_allowed(None, "https://denied-robots.example/",
+            await fetching._robots_allowed(None, "https://denied-robots.example/",
                 SimpleNamespace(respect_robots_txt=True, cache_namespace="review-robots"))
     finally:
         egress_authorizer.reset(token)

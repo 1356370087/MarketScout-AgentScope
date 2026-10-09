@@ -425,6 +425,19 @@ An input_projection gap must have an empty next_query. Never invent an evidence 
 Legacy compressed_research_truncated/raw_notes_truncated markers describe missing evaluator input, not missing research.
 """
 
+HANDOFF_EVIDENCE_COVERAGE_RULES = """
+Factual coverage is assessed against the included, source-scoped evidence_registry,
+not against which records compressed_research happened to repeat. The registry is
+part of this handoff and travels separately to the Writer. For each owned requirement,
+first inspect the included records and bind the supporting evidence_ids. A required
+aspect supported by those records remains supported when the summary omits it;
+record the omission as an advisory writing caveat, with no next_query or research task.
+Do not put that summary omission in missing_information or lower evidence_coverage.
+This does not excuse an unsupported claim, a contradiction, missing registry evidence,
+or a failed deterministic check. Inspect every summary assertion for groundedness;
+a summary's claim that evidence exists does not establish that evidence exists.
+"""
+
 
 def _content_text(content: Any) -> str:
     if isinstance(content, str):
@@ -1675,6 +1688,7 @@ def _handoff_protocol_errors(
     exclusive_requirement_ids: tuple[str, ...] = (),
     evidence_ids: tuple[str, ...] = (),
     evidence_truncated: bool = True,
+    reduce_decision: bool = False,
 ) -> list[str]:
     """Return semantic contradictions in one handoff Judge response."""
     scores = (
@@ -1751,6 +1765,18 @@ def _handoff_protocol_errors(
         if (not result.accepted and checks.get("passed") and result.follow_up_tasks
                 and not any(g.kind in {"factual", "conflict", "input_projection"} for g in result.gaps)):
             errors.append("research_follow_up_requires_owned_gap")
+    if reduce_decision:
+        # Scores, hard checks and explicit gaps have one conservative outcome.
+        # Keep their useful evidence/feedback and let the admission reducer
+        # reject them; only malformed references/omitted rows need model repair.
+        reducible = {
+            "accepted_score_below_dimension_floor", "accepted_score_below_average_floor",
+            "accepted_failed_deterministic_checks", "accepted_contains_unresolved_gaps",
+            "accepted_contains_structured_gap", "caveat_acceptance_requires_caveat",
+        }
+        if any(g.kind in {"factual", "conflict", "input_projection"} for g in result.gaps):
+            reducible.add("accepted_contains_follow_up_action")
+        errors = [error for error in errors if error not in reducible]
     return errors
 
 
@@ -1931,7 +1957,7 @@ async def evaluate_tool_results(
                 QUALITY_POLICY_VERSION,
             )
         )
-        == "quality-gate-v4"
+        in {"quality-gate-v4", "quality-gate-v5"}
     )
     use_v4_contract = (
         resolved_contract is not None
@@ -2047,6 +2073,8 @@ async def evaluate_tool_results(
         if any(gap.kind == "input_projection" for gap in result.gaps):
             raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
+        from open_deep_research.agentscope_runtime.search_providers import preserve_control_error
+        preserve_control_error(exc)
         if isinstance(exc, (NativeQualityRuntimeMissing, QualityInputBudgetExceeded)):
             raise
         evaluator_failed = True
@@ -2258,12 +2286,15 @@ async def evaluate_subagent_handoff(
                 QUALITY_POLICY_VERSION,
             )
         )
-        == "quality-gate-v4"
+        in {"quality-gate-v4", "quality-gate-v5"}
     )
     use_v4_contract = (
         resolved_contract is not None
         and v4_policy_requested
     )
+    reduce_decision = use_v4_contract and config.get("metadata", {}).get(
+        "quality_policy_version", QUALITY_POLICY_VERSION
+    ) == "quality-gate-v5"
     evidence_optional_requirement_ids = (
         _evidence_optional_requirement_ids(resolved_contract)
         if use_v4_contract and resolved_contract is not None
@@ -2384,6 +2415,7 @@ async def evaluate_subagent_handoff(
                         "requirement_id": requirement.requirement_id,
                         "text": requirement.text,
                         "dimension_id": requirement.dimension_id,
+                        **({"subject": requirement.subject} if requirement.subject else {}),
                     }
                     for requirement in resolved_contract.requirements
                     if requirement.requirement_id in owned_requirement_ids
@@ -2418,7 +2450,15 @@ async def evaluate_subagent_handoff(
         result = await (evaluator or _evaluate_json)(
             HandoffAssessment,
             (
-                HANDOFF_EVALUATION_PROMPT_V4
+                HANDOFF_EVALUATION_PROMPT_V4 + (
+                    "\nFor a requirement with a subject, evaluate that named entity alone. "
+                    "Each atomic aspect must be supported independently; another entity or another aspect cannot fill its gap. "
+                    "An instruction to state uncertainty, avoid fabrication, or qualify recommendations does not waive factual research requirements. "
+                    "A negative finding may satisfy a factual requirement only when that requirement explicitly allows it and the checked authoritative material supports it. "
+                    "Put missing mandatory facts in missing_information and factual gaps; only optional details belong in caveats."
+                    + HANDOFF_EVIDENCE_COVERAGE_RULES
+                    if reduce_decision else ""
+                )
                 if use_v4_contract
                 else HANDOFF_EVALUATION_PROMPT
             ),
@@ -2434,6 +2474,7 @@ async def evaluate_subagent_handoff(
                 ),
                 evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["evidence_registry"]),
                 evidence_truncated=bool(payload["evidence_registry_stats"]["truncated"]),
+                reduce_decision=reduce_decision,
             ),
         )
         result = HandoffAssessment.model_validate(result)
@@ -2441,6 +2482,8 @@ async def evaluate_subagent_handoff(
             raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
         result.caveats = list(dict.fromkeys([*result.caveats, *(gap.reason for gap in result.gaps if gap.kind == "advisory")]))
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
+        from open_deep_research.agentscope_runtime.search_providers import preserve_control_error
+        preserve_control_error(exc)
         if isinstance(exc, (NativeQualityRuntimeMissing, QualityInputBudgetExceeded)):
             raise
         evaluator_failed = True
@@ -2524,6 +2567,14 @@ async def evaluate_subagent_handoff(
             if item.get("evidence_id")
         }
         v4_protocol_failures: list[str] = []
+        if reduce_decision:
+            v4_protocol_failures.extend(
+                "unresolved_requirement_gap:" + gap.requirement_id
+                for gap in result.gaps
+                if gap.kind in {"factual", "conflict"} and gap.requirement_id in exclusive_requirement_ids
+            )
+            if result.missing_information:
+                v4_protocol_failures.append("required_information_missing")
         if (
             evaluator_failed
             and configurable.quality_evaluation_fail_open

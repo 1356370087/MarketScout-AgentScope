@@ -44,6 +44,7 @@ class SecurityApproval(BaseModel):
     expires_at: float
     resolved_at: float | None = None
     resolved_by: str | None = None
+    inherited_from: str | None = Field(default=None, exclude_if=lambda value: value is None)
     operation_id: str
     version: int = 1
 
@@ -145,11 +146,27 @@ class SecurityApprovalStore:
                 raise ValueError("egress_version_conflict")
             current.update(decision=decision, reason=reason[:1000], actor=actor,
                            version=current["version"] + 1, updated_at=time.time())
+            if decision == "allow_run":
+                self._cover_pending_requests(data, target_id, fence_token, actor, reason,
+                    f"target:{target_id}:{current['version']}", current["updated_at"])
             data["version"] = int(data.get("version", 0)) + 1
             data.setdefault("egress_history", []).append(dict(current))
             return dict(current)
 
         return self._locked(apply)
+
+    @staticmethod
+    def _cover_pending_requests(data, fingerprint, fence, actor, reason, origin, now):
+        """Apply one exact allow-run consent to peers already waiting on it."""
+        for approval_id, raw in list(data["approvals"].items()):
+            item = SecurityApproval.model_validate(raw)
+            if (item.kind == "network" and item.status == "pending" and item.fence_token == fence
+                    and item.target_fingerprint == fingerprint and item.expires_at > now):
+                item.status, item.decision = "resolved", "allow_run"
+                item.resolved_by, item.resolved_at = actor, now
+                item.reason, item.inherited_from = reason[:1000], origin
+                item.version += 1
+                data["approvals"][approval_id] = item.model_dump(mode="json")
 
     def request(
         self,
@@ -283,6 +300,8 @@ class SecurityApprovalStore:
                                                expected_fence_token)
                 current.update(decision="allow_run", reason=item.reason, actor=actor,
                                version=current["version"] + 1, updated_at=item.resolved_at)
+                self._cover_pending_requests(data, item.target_fingerprint, expected_fence_token,
+                    actor, item.reason, f"approval:{item.approval_id}", item.resolved_at)
                 data.setdefault("egress_history", []).append(dict(current))
             data["version"] = int(data.get("version", 0)) + 1
             return item

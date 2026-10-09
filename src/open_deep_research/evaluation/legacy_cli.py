@@ -409,9 +409,11 @@ def apply_quality_assessment(
         rigor=resolved_rigor,
     )
     result["quality_grade"] = assessment["grade"]
-    result["quality_gate_passed"] = assessment["passed"]
-    result["quality_gate_failures"] = assessment["failures"]
+    result["offline_quality_gate_passed"] = assessment["passed"]
+    result["offline_quality_gate_failures"] = list(assessment["failures"])
     run_result = result.get("run_result", {})
+    if not isinstance(run_result, dict):
+        run_result = {}
     runtime_gate = (
         run_result.get("quality_gate", {}) if isinstance(run_result, dict) else {}
     )
@@ -429,10 +431,40 @@ def apply_quality_assessment(
     reason_codes = list(assessment["failures"])
     if isinstance(runtime_gate, dict):
         reason_codes.extend(str(item) for item in runtime_gate.get("reason_codes", []))
+    review = (run_result.get("report_review") or result.get("runtime_report_review")
+              or result.get("report_review") or {})
+    configuration = result.get("configuration") or {}
+    review_enabled = run_result.get("report_review_enabled", configuration.get("report_review_enabled"))
+    delivery_failure = None
+    if str(result.get("evaluation_scope", "")).startswith("review_draft"):
+        delivery_failure = "diagnostic_draft_not_delivered"
+        if assessment["passed"] and gate_status != "failed":
+            gate_status = "diagnostic"
+    elif review_enabled is False:
+        delivery_failure = "report_review_disabled"
+        if assessment["passed"] and gate_status != "failed":
+            gate_status = "unreviewed"
+    elif review_enabled is True or review.get("decision"):
+        if not review.get("decision"):
+            delivery_failure = "report_review_missing"
+        elif (review.get("skipped") or review.get("degraded") or review.get("decision") != "pass"
+              or review.get("status") in {"failed", "error", "degraded", "skipped"}):
+            delivery_failure = "report_review_not_passed"
+        if delivery_failure and assessment["passed"] and gate_status != "failed":
+            gate_status = "failed" if review.get("decision") == "fail" else "degraded"
+    if run_result.get("completion_status") == "partial" or run_result.get("status") == "partial":
+        delivery_failure = delivery_failure or "partial_research_delivery"
+        if assessment["passed"] and gate_status != "failed":
+            gate_status = "degraded"
+    if delivery_failure:
+        reason_codes.append(delivery_failure)
+    result["quality_gate_passed"] = gate_status == "passed"
+    result["quality_gate_failures"] = list(dict.fromkeys(reason_codes))
     result["quality_gate"] = {
         "status": gate_status,
         "evaluator_model": JudgeConfig.from_env().model_spec,
-        "policy_version": "offline-quality-gate-v4",
+        "policy_version": "offline-quality-gate-v5",
+        "offline_assessment_passed": assessment["passed"],
         "quality_rigor": assessment["quality_rigor"],
         "quality_thresholds": assessment["quality_thresholds"],
         "reason_codes": list(dict.fromkeys(reason_codes)),

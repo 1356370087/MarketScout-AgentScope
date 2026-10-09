@@ -6,12 +6,12 @@ import json
 import logging
 import re
 from collections import defaultdict, deque
-from typing import Any, cast
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
 from open_deep_research.evidence import source_scoped_evidence_records
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
@@ -228,14 +228,33 @@ async def _invoke_draft(
 ) -> EvidenceSynthesisDraft:
     """Invoke the configured report writer without exposing rejected prose."""
     configurable = Configuration.from_runnable_config(config)
+    schema = EvidenceSynthesisDraft
+    instructions = _DRAFT_PROMPT
+    modern = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5"
+    if modern:
+        ids = tuple(row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])
+                    if row.get("kind", "factual") == "factual")
+        if ids:
+            schema = create_model("EvidenceSynthesisDraft", __base__=schema,
+                unresolved_requirements=(list[Literal[ids]], Field(default_factory=list,
+                    description="Exact factual requirement IDs only. No explanations, prefixes, URLs, delivery constraints or execution rules.")))
+        instructions += (
+            "\nunresolved_requirements contains exact factual requirement IDs only, never descriptions or 'ID: explanation'. "
+            "Put explanations in claim qualifications or report prose. Language, length, dates, citation counts and recommendations "
+            "are not missing factual evidence: meet those delivery/execution constraints in the report."
+            " For a recommendation, cite the records supporting its factual premises and label assumptions in qualification. "
+            "Do not use an empty evidence_ids list or invent evidence for an unsupported recommendation."
+        )
     # Keep the same whole-record budgeting on the restricted recovery path.
     messages = writing_messages(
-        _DRAFT_PROMPT, {k: v for k, v in payload.items() if k != "eligible_evidence"},
+        instructions, {**{k: v for k, v in payload.items() if k != "eligible_evidence"},
+                       "_run_schema_version": config.get("metadata", {}).get("run_config_schema_version", 18),
+                       "_quality_policy_version": config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)},
         payload.get("eligible_evidence", []),
-        guidance="Return exactly this JSON schema: " + json.dumps(EvidenceSynthesisDraft.model_json_schema(), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        guidance="Return exactly this JSON schema: " + json.dumps(schema.model_json_schema(), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
     )
 
-    return await require_report_runtime().invoke("final_report", messages, configurable, span_name="lead.evidence_limited_writer", schema=EvidenceSynthesisDraft)
+    return await require_report_runtime().invoke("final_report", messages, configurable, span_name="lead.evidence_limited_writer", schema=schema)
 
 
 async def _invoke_grounding_judge(
@@ -497,6 +516,8 @@ async def build_evidence_limited_report(
         )
         return rendered
     except Exception as exc:  # noqa: BLE001 - recovery boundary is fail-closed
+        from open_deep_research.agentscope_runtime.search_providers import preserve_control_error
+        preserve_control_error(exc)
         reason_code = (
             str(exc)
             if isinstance(exc, ValueError)

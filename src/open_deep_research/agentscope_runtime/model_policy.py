@@ -104,13 +104,14 @@ class ModelCallPolicy:
     async def invoke(self, handler, input_kwargs, state):
         from open_deep_research.agentscope_runtime.gateway import SandboxChatModel
         from open_deep_research.agentscope_runtime.runtime_limits import (
-            call_context,
+            current_deadline_at,
             limited,
         )
 
         if self.total_timeout is None or all(isinstance(model, SandboxChatModel) for model in self.candidates):
             return await self._invoke(handler, input_kwargs, state)
-        deadline = min(time.time() + self.total_timeout, call_context.get().get("deadline_at", float("inf")))
+        parent_deadline = current_deadline_at()
+        deadline = min(time.time() + self.total_timeout, parent_deadline if parent_deadline is not None else float("inf"))
         result = await limited(lambda: self._invoke(handler, input_kwargs, state), self.total_timeout)
         if isinstance(result, (ChatResponse, StructuredResponse)):
             return result

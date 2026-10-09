@@ -20,7 +20,7 @@ RUN_CONFIG_SCHEMA_VERSION = 18
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
-QUALITY_POLICY_VERSION = "quality-gate-v4"
+QUALITY_POLICY_VERSION = "quality-gate-v5"
 RUN_CONFIG_FROZEN_FIELDS = (
     "model_backend",
     "litellm_policy_revision",

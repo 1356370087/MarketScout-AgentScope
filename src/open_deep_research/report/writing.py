@@ -48,6 +48,13 @@ citations and qualifications and must not introduce new facts.
 """
 
 EVIDENCE_MESSAGE = "report_evidence"
+WRITING_COVERAGE_RULES = """An input-budget omission is not a missing research fact.
+Do not infer that the full accepted inventory lacks evidence from records omitted
+in this call. Required evidence groups are checked by the runtime before writing.
+Preserve each required subject and factual aspect, and distinguish actual research
+gaps in the coverage/completion record from input selection. Do not present internal
+record counts or input-budget notices as research findings.
+"""
 
 
 class ReportInputBudgetExceeded(RuntimeError):
@@ -97,12 +104,15 @@ def writing_messages(
     from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
     payload = dict(payload)
     version = payload.pop("_run_schema_version", 18)
+    protect_coverage = payload.pop("_quality_policy_version", None) == "quality-gate-v5" and version >= 18
     return [
-        SystemMessage(content=WRITING_RULES + ("\n" + CONTEXT_RULES if version >= 18 else "") + "\n" + template.format(**placeholders) + "\n" + guidance),
+        SystemMessage(content=WRITING_RULES + ("\n" + CONTEXT_RULES if version >= 18 else "")
+                      + ("\n" + WRITING_COVERAGE_RULES if protect_coverage else "")
+                      + "\n" + template.format(**placeholders) + "\n" + guidance),
         HumanMessage(content=research_context_xml(payload.get("coverage_contract"), payload=payload)
                      if version >= 18 else json.dumps(payload, ensure_ascii=False, default=str)),
         HumanMessage(
-            content=json.dumps({"records": records}, ensure_ascii=False, default=str),
+            content=json.dumps({"records": records, **({"protect_coverage": True} if protect_coverage else {})}, ensure_ascii=False, default=str),
             name=EVIDENCE_MESSAGE,
         ),
     ]
@@ -168,6 +178,8 @@ def fit_writing_messages(
         int(json.loads(str(message.content)).get("omitted_record_count", 0))
         for message in messages if message.name == EVIDENCE_MESSAGE
     )
+    protect_coverage = any(json.loads(str(message.content)).get("protect_coverage", False)
+                           for message in messages if message.name == EVIDENCE_MESSAGE)
     selected: list[dict[str, Any]] = []
     # Reserve the envelope and omission notice even when all records fit.
     used = 128
@@ -181,16 +193,25 @@ def fit_writing_messages(
     from open_deep_research.quality.context import context_payload
     for message in fixed:
         if message.type == "human" and str(message.content).startswith("<research_context"):
-            required = set(context_payload(str(message.content)).get("required_evidence_ids", []))
+            payload = context_payload(str(message.content))
+            required = set(payload.get("required_evidence_ids", []))
             if required - {row.get("evidence_id") for row in selected}:
                 raise ReportInputBudgetExceeded("report_revision_issue_evidence_exceeds_budget")
+            if protect_coverage:
+                selected_ids = {row.get("evidence_id") for row in selected}
+                bindings = payload.get("requirement_to_evidence", {})
+                if any(bindings.get(rid) and not selected_ids.intersection(bindings[rid])
+                       for rid in payload.get("required_requirement_ids", [])):
+                    raise ReportInputBudgetExceeded("report_requirement_evidence_exceeds_budget")
     if not any(m.name == EVIDENCE_MESSAGE for m in messages):
         return messages, 0
     envelope = HumanMessage(
         content=json.dumps({
             "records": selected,
             "omitted_record_count": previously_omitted + len(records) - len(selected),
-            "budget_notice": "Omitted records are unavailable. State gaps; do not infer their contents.",
+            "budget_notice": ("Records omitted here remain in the accepted inventory. This is an input limit, not evidence of missing research. Do not report internal omission counts as findings."
+                              if protect_coverage else "Omitted records are unavailable. State gaps; do not infer their contents."),
+            **({"protect_coverage": True} if protect_coverage else {}),
         }, ensure_ascii=False, default=str),
         name=EVIDENCE_MESSAGE,
     )

@@ -75,6 +75,8 @@ class SearchProviderResult(BaseModel):
     parsed_result_count: int = 0
     filtered_result_count: int = 0
     query_outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    result_status: Literal["usable", "all_filtered", "empty", "failed"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    search_phase: Literal["preparation", "research"] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SearchBatch(BaseModel):
@@ -86,6 +88,7 @@ class SearchBatch(BaseModel):
     provider_results: list[SearchProviderResult] = Field(default_factory=list)
     search_calls: int = 0
     raw_candidate_count: int = 0
+    search_phase: Literal["preparation", "research"] | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class RankedCandidate(BaseModel):

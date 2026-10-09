@@ -83,7 +83,9 @@ async def test_litellm_frozen_cost_limit_reaches_sql_budget(store, monkeypatch):
         )
 
 
-async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
+@pytest.mark.parametrize("error_kind", ["jsonschema", "native_structured"])
+@pytest.mark.parametrize("role", ["quality_evaluation", "report_review"])
+async def test_invalid_judge_receipt_replays_without_poisoning_session(store, error_kind, role):
     import jsonschema
     from pydantic import BaseModel
     from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
@@ -96,6 +98,9 @@ async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
 
     async def invalid_judge():
         calls.append(1)
+        if error_kind == "native_structured":
+            from agentscope.exception import StructuredOutputError
+            raise StructuredOutputError("invalid relevance JSON")
         jsonschema.validate({}, Rating.model_json_schema())
 
     async def next_operation():
@@ -103,7 +108,7 @@ async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
 
     session = RecoverySession(store, lease, state, model_accounting="gateway")
     with pytest.raises(ModelOutputProtocolError, match="relevance"):
-        await session.model("quality_evaluation", [UserMsg("user", "judge")], invalid_judge, schema=Rating)
+        await session.model(role, [UserMsg("user", "judge")], invalid_judge, schema=Rating)
     assert session.problem is None
     assert await session.operation("next", {}, next_operation) == {"continued": True}
     await session.close()
@@ -111,7 +116,7 @@ async def test_invalid_judge_receipt_replays_without_poisoning_session(store):
     replay.model_accounting = "gateway"
     try:
         with pytest.raises(ModelOutputProtocolError, match="relevance"):
-            await replay.model("quality_evaluation", [UserMsg("user", "judge")], invalid_judge, schema=Rating)
+            await replay.model(role, [UserMsg("user", "judge")], invalid_judge, schema=Rating)
         assert replay.problem is None and calls == [1]
     finally:
         await replay.close()

@@ -218,9 +218,10 @@ class SecurityRoutes:
             run_id,
             require_live_fence=True,
         )
+        store = SecurityApprovalStore(run_id, runs_dir=configurable.runs_dir)
         try:
             approval = await asyncio.to_thread(
-                SecurityApprovalStore(run_id, runs_dir=configurable.runs_dir).resolve,
+                store.resolve,
                 approval_id,
                 decision=request.decision,
                 actor=user.user_id,
@@ -234,21 +235,19 @@ class SecurityRoutes:
         except ValueError as exc:
             status_code = 409 if str(exc) == "stale_fence" else 400
             raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-        await config["_event_publisher"].publish(
-            "security.approval.resolved",
-            stage="researching",
-            payload={
-                "approval_id": approval.approval_id,
-                "task_id": approval.task_id,
-                "kind": approval.kind,
-                "capability": approval.capability,
-                "decision": approval.decision,
-                "status": approval.status,
-                "version": approval.version,
-            },
-            dedupe_key=f"security-approval:{approval.approval_id}:resolved:{approval.version}",
-        )
+        _, records = await asyncio.to_thread(store.list)
+        await self._publish_approval_resolutions(config, [approval, *[
+            row for row in records if row.inherited_from == f"approval:{approval.approval_id}"]])
         return approval.model_dump(mode="json")
+
+    @staticmethod
+    async def _publish_approval_resolutions(config, records):
+        for approval in records:
+            await config["_event_publisher"].publish("security.approval.resolved", stage="researching", payload={
+                "approval_id": approval.approval_id, "task_id": approval.task_id, "kind": approval.kind,
+                "capability": approval.capability, "decision": approval.decision, "status": approval.status,
+                "version": approval.version,
+            }, dedupe_key=f"security-approval:{approval.approval_id}:resolved:{approval.version}")
 
     async def get_egress_state(
         self,
@@ -328,6 +327,10 @@ class SecurityRoutes:
             payload=result,
             dedupe_key=f"egress-target:{target_id}:{fence_token}:{result['version']}",
         )
+        if request.decision == "allow_run":
+            _, records = await asyncio.to_thread(store.list)
+            await self._publish_approval_resolutions(config, [row for row in records
+                if row.inherited_from == f"target:{target_id}:{result['version']}"])
         return result
 
     async def get_run_egress_mode(

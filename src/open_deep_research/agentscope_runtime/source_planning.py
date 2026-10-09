@@ -14,6 +14,16 @@ from open_deep_research.quality.context import CONTEXT_RULES, research_context_x
 from open_deep_research.quality.planning import source_intent_from_user
 
 
+class RelatedWebsite(BaseModel):
+    """A first-party page's explicit relationship to another linked website."""
+
+    url: str
+    relationship_quote: str = Field(description=(
+        "Exact contiguous PAGE quote containing the hyperlink that identifies this as "
+        "the entity's documentation, source repository, maintainer or product. "
+        "A search snippet, bare external URL or model explanation is not proof."))
+
+
 class SourceVerification(BaseModel):
     """Quotes and observed links substantiate a first-party ownership judgment."""
 
@@ -22,6 +32,8 @@ class SourceVerification(BaseModel):
     documentation_urls: list[str] = Field(default_factory=list, max_length=4)
     competing_websites: list[str] = Field(default_factory=list, max_length=3,
         description="Only plausible alternative official identities for the SAME named entity; its acknowledged maintainer, documentation site or product is not a competing identity.")
+    related_websites: list[RelatedWebsite] = Field(default_factory=list, max_length=6,
+        description="Associated official documentation, source repositories or maintainers explicitly linked by this PAGE; keep them separate from genuinely competing identities.")
     reason: str = ""
 
 
@@ -49,10 +61,30 @@ def verified_entry(entity, website, content, verdict, *, discovered_urls=None):
             continue
         if normalized in links:
             docs.append(normalized)
+    related = []
+    for candidate in verdict.related_websites:
+        try:
+            normalized = normalize_source_url(candidate.url)
+        except ValueError:
+            continue
+        quote = candidate.relationship_quote
+        if (quote and quote in content and normalized in links
+                and normalized in observed_links(quote, website)):
+            related.append({"url": normalized, "relationship_quote": quote})
+    associated = {website, *docs, *(row["url"] for row in related)}
+    competing = []
+    for candidate in verdict.competing_websites:
+        try:
+            normalized = normalize_source_url(candidate)
+        except ValueError:
+            competing.append(candidate)
+            continue
+        if normalized not in associated:
+            competing.append(normalized)
     quotes = verdict.entity_quote and verdict.ownership_quote
     confirmed = bool(quotes and verdict.entity_quote in content and verdict.ownership_quote in content
                      and entity.casefold() in verdict.entity_quote.casefold() and docs
-                     and not verdict.competing_websites)
+                     and not competing)
     if discovered_urls is not None:
         confirmed = confirmed and any(urlsplit(url).hostname == urlsplit(website).hostname for url in discovered_urls)
     relevant_discoveries = [url for url in (discovered_urls or []) if urlsplit(url).hostname == urlsplit(website).hostname]
@@ -62,7 +94,7 @@ def verified_entry(entity, website, content, verdict, *, discovered_urls=None):
             "discovered_urls": relevant_discoveries,
             "verification_basis": {"entity_quote": verdict.entity_quote, "ownership_quote": verdict.ownership_quote,
                                    "observed_documentation_links": docs, "reason": verdict.reason},
-            "competing_websites": verdict.competing_websites}
+            "competing_websites": competing, "related_websites": related}
 
 
 def apply_source_plan(contract, plan, original_selection):
@@ -188,7 +220,10 @@ class SourcePlanner:
             verdict = await self.models.structured("supervisor", "", SourceVerification, {"task_id": "source-planning"},
                 messages=[
                     SystemMsg("system", CONTEXT_RULES +
-                        "Verify ownership of the proposed website from the supplied PAGE text. Quote verbatim evidence of entity and ownership; list only documentation links literally present in the page. Search snippets are hints, not proof. Competing plausible official identities require confirmation. Missing evidence means empty fields."),
+                        "Verify ownership of the proposed website from the supplied PAGE text. Quote verbatim evidence of entity and ownership; list only documentation links literally present in the page. "
+                        "Put the entity's linked documentation, source repository, maintainer or product in related_websites with the exact hyperlink-containing PAGE quote. "
+                        "Competing websites mean alternative identities for the SAME name, not different URLs belonging to that entity. Search snippets are hints, not proof. "
+                        "Competing plausible official identities require confirmation. Missing evidence means empty fields."),
                     UserMsg("user", research_context_xml(payload={"entity": entity.name, "website": proposed, "discoveries": hits,
                         "observed_links": observed_links(content, proposed), "page": content}))],
                 purpose="source_ownership_verification")

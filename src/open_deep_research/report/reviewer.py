@@ -958,6 +958,12 @@ def _normalize_candidate(
     requirements = _requirements(state)
     issues = _safe_candidate_issues(model_review.issues)
     deterministic_failures: list[str] = []
+    if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+        if any(issue.severity != "info" and (
+            not issue.description.strip() or not issue.revision_instruction.strip()
+            or not (issue.location.strip() or issue.requirement_id or issue.evidence_ids or issue.citation_target)
+        ) for issue in issues):
+            deterministic_failures.append("review_issue_not_actionable")
     if (candidate_protocol_invalid or model_validation_failed) and model_error is None:
         issues.append(
             _issue(
@@ -1174,6 +1180,7 @@ def _normalize_candidate(
                 "unknown_evidence_id",
                 "review_protocol_invalid",
                 "review_dimensions_missing",
+                "review_issue_not_actionable",
                 "coverage_contract_rows_missing_or_invalid",
                 "citation_audit_missing",
                 "accepted_evidence_missing",
@@ -1257,13 +1264,19 @@ async def _invoke_reviewer(
 
     fields = {key: value for key, value in payload.items() if key != "evidence_registry"}
     fields["_run_schema_version"] = config.get("metadata", {}).get("run_config_schema_version", 18)
+    fields["_quality_policy_version"] = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
     if fields["_run_schema_version"] < 18:
         fields.pop("citation_targets", None)
     messages = writing_messages(
         getattr(_prompts, "report_review_prompt", "{payload}"),
         {**fields, "review_attempt": attempt}, list(payload.get("evidence_registry", [])),
         guidance=_REVIEW_SECURITY_SYSTEM_PROMPT + "\nUse report_evidence.records as evidence_registry. "
-        "Omitted evidence is unavailable; never certify unsupported claims as verified.",
+        "Omitted evidence is unavailable; never certify unsupported claims as verified. "
+        + ("Every non-info issue must identify a location, requirement ID, evidence ID or citation target, "
+           "describe the defect completely, and supply a concrete revision_instruction. "
+           "An acknowledged limitation requiring no change is informational, not a revision request. "
+           "A budget omission is an input limitation, not proof that the full evidence inventory lacks support."
+           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5" else ""),
     )
     schema = ReportReview
     if fields["_run_schema_version"] >= 18:
@@ -1307,6 +1320,7 @@ async def review_report(
             "unknown_requirement_id", "unknown_evidence_id", "review_protocol_invalid",
             "review_dimensions_missing", "coverage_contract_rows_missing_or_invalid",
             "citation_audit_missing",
+            "review_issue_not_actionable",
         }
         attempts = min(2, max(1, cfg.max_structured_output_retries)) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else max(1, cfg.max_structured_output_retries)
         previous_errors = None
@@ -1326,7 +1340,9 @@ async def review_report(
                 "errors": errors,
                 "instruction": "Correct the review metadata, not the draft. Use the exact supplied "
                 "requirement and evidence IDs, cover every requirement, and include all score "
-                "dimensions and citation audits. Do not invent IDs or omit mandatory rows.",
+                "dimensions and citation audits. Every non-info issue needs a complete description, "
+                "a concrete location/reference and an actionable revision_instruction. "
+                "Do not invent IDs or omit mandatory rows.",
             }}
     except Exception as exc:
         if isinstance(exc, NativeReportRuntimeMissing):
@@ -1405,6 +1421,9 @@ def _revision_prompt(
     modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
     extra = {"coverage_contract": state.get("coverage_contract", {}),
              "requirement_to_evidence": {k: v.get("evidence_ids", []) for k, v in state.get("coverage_ledger", {}).items()}} if modern else {}
+    extra["_quality_policy_version"] = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
+    if extra["_quality_policy_version"] == "quality-gate-v5":
+        extra["required_requirement_ids"] = [rid for rid, ids in extra.get("requirement_to_evidence", {}).items() if ids]
     records = _state_evidence(state)
     if modern:
         issue_ids = list(dict.fromkeys([

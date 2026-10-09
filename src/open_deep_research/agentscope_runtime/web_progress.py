@@ -68,6 +68,8 @@ class WebProgress:
             for k in ("provider", "query_index", "query", "url", "backend")
         )
         title = _TITLES.get(phase, "网页研究进度")
+        if phase == "query_completed":
+            title = {"all_filtered": "结果均不符合来源范围", "empty": "该查询没有检索结果"}.get(payload.get("result_status"), title)
         summary = str(
             payload.get("query")
             or payload.get("error_code")
@@ -81,7 +83,7 @@ class WebProgress:
             kind="tool",
             phase="tool_execution",
             status="warning"
-            if phase in {"provider_failed", "shadow_skipped"}
+            if phase in {"provider_failed", "shadow_skipped"} or payload.get("result_status") in {"all_filtered", "empty"}
             else "running",
             title=title,
             summary=summary[:500],

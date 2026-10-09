@@ -83,6 +83,7 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
         "result_count", "error_code", "backend", "reason", "metrics", "urls",
         "raw_result_count", "parsed_result_count", "filtered_result_count", "unique_result_count",
         "result_status", "provider_requests", "effective_query", "http_status", "final_endpoint", "redirect_count",
+        "search_phase", "attempted_queries",
     },
     "model.started": {"provider", "model", "attempt", "purpose", "parent_tool_call_id"},
     "model.completed": {

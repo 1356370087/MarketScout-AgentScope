@@ -362,6 +362,49 @@ async def test_researcher_isolation_typed_evidence_and_completion_signal():
     assert one.agent_state["session_id"] != two.agent_state["session_id"]
 
 
+@pytest.mark.parametrize("version", ["quality-gate-v4", "quality-gate-v5"])
+async def test_researcher_assignment_and_compression_authority_keep_owned_scope(version):
+    from open_deep_research.agentscope_runtime.native_context import NativeResearchContext
+    from open_deep_research.quality.context import context_payload
+    from open_deep_research.quality.contract import CoverageRequirement, ResearchCoverageContract
+
+    coverage = ResearchCoverageContract(schema_version=3, original_query_sha256="fixture", requirements=tuple(
+        CoverageRequirement(requirement_id=rid, text=text, kind=kind,
+                            source_message_index=0, source_start=0, source_end=len(text))
+        for rid, text, kind in (("owned", "Milvus deployment dependencies", "factual"),
+                                ("sibling", "Qdrant replication details", "factual"),
+                                ("format", "Use Chinese", "deliverable"))
+    )).model_dump(mode="json")
+    models = Models({"researcher": [[tool_call("web_research")], [tool_call("ResearchComplete", "done")]]})
+    config = cfg()
+    config["metadata"]["quality_policy_version"] = version
+    tool_contracts = []
+
+    async def tools(assignment):
+        async def call(input, context, progress):
+            tool_contracts.append(context.config["metadata"]["coverage_contract"])
+            return ToolResult(output={"evidence": [evidence()]})
+        return [build_tool(name="web_research", input_schema=Empty, description="Research sources",
+                           prompt="Search sources", call=call, origin=ToolOrigin.SEARCH,
+                           execution_zone=ToolExecutionZone.HOST_CONTROL)]
+
+    handoff = await Researcher(models, lambda: config, tools, run_id="run").run(
+        ResearchAssignment(research_topic="Milvus deployment", requirement_ids=["owned"]), coverage)
+    state = AgentState.model_validate(handoff.agent_state)
+    assignment = state.middle_context["research_context_authority"]["assignment"]
+    visible = context_payload(assignment)["coverage_contract"]["requirements"]
+    expected = {"owned", "format"} if version == "quality-gate-v5" else {"owned", "sibling", "format"}
+    assert {row["requirement_id"] for row in visible} == expected
+    assert {row["requirement_id"] for row in tool_contracts[0]["requirements"]} == {"owned", "sibling", "format"}
+    # The framework can replace messages with a lossy summary; reinjection must
+    # restore this worker's actual assignment, not the Supervisor's full plan.
+    state.context = [UserMsg("summary", "Compressed tool history")]
+    context = NativeResearchContext(models, "researcher", models.created[0][2], config)
+    restored = await context.on_system_prompt(SimpleNamespace(state=state), "Research")
+    assert "Milvus deployment dependencies" in restored
+    assert ("Qdrant replication details" in restored) is (version == "quality-gate-v4")
+
+
 async def test_researcher_iteration_limit_and_unregistered_citation():
     models = Models({"researcher": [[tool_call("think_tool", reflection="think")]]})
     researcher = Researcher(
@@ -373,6 +416,56 @@ async def test_researcher_iteration_limit_and_unregistered_citation():
     models.output_text = "见 https://invented.test/source"
     with pytest.raises(ValueError, match="unregistered"):
         await researcher.run(ResearchAssignment(research_topic="市场"), contract())
+
+
+async def test_bad_compression_citations_do_not_repeat_successful_research():
+    class Counter:
+        context_size = 64000
+
+        async def count_tokens(self, messages, tools):
+            return sum(len(message.get_text_content()) // 3 + 1 for message in messages)
+
+    class BadCompressor(Models):
+        def agent_model(self, role, task_id):
+            return Counter() if role == "compression" else super().agent_model(role, task_id)
+
+    models = BadCompressor({"researcher": [[tool_call("web_research")],
+        [tool_call("ResearchComplete", "done")]]}, text="Unsupported https://invented.test/source")
+    researcher = Researcher(models, lambda: cfg(), research_tools, run_id="run")
+    handoff = await researcher.run(ResearchAssignment(research_topic="市场"), contract())
+    assert len(models.text_calls) == 2
+    assert len(models.created[0][2].calls) == 2
+    assert len(handoff.evidence_registry) == 1
+    assert {key: handoff.evidence_registry[0][key] for key in evidence()} == evidence()
+    assert "invented.test" not in handoff.compressed_research
+    assert "ev1" in handoff.compressed_research
+    assert handoff.assessment["compression"]["status"] == "candidate_evidence_fallback"
+    assert "handoff" not in handoff.assessment  # Existing quality gate must still decide admission.
+
+
+async def test_v4_supervisor_uses_bounded_server_scopes_without_model_id_lists():
+    from open_deep_research.quality.contract import CoverageRequirement, ResearchCoverageContract
+
+    coverage = ResearchCoverageContract(schema_version=4, original_query_sha256="fixture", requirements=tuple(
+        CoverageRequirement(requirement_id=f"R{i}", text=f"Fact {i}", kind="factual",
+                            source_message_index=0, source_start=0, source_end=6) for i in range(4)))
+    models = Models({"supervisor": [[
+        tool_call("ConductResearch", "first", research_topic="First scope", scope_id="S01"),
+        tool_call("ConductResearch", "second", research_topic="Second scope", scope_id="S02"),
+    ], [tool_call("ResearchComplete", "done")]]})
+    received = []
+
+    class Worker:
+        async def run(self, assignment, contract, feedback):
+            received.append(assignment.requirement_ids)
+            return ResearchHandoff(task_id=assignment.task_id, research_topic=assignment.research_topic,
+                requirement_ids=assignment.requirement_ids, compressed_research="Grounded result.", evidence_registry=[evidence()])
+
+    supervisor = Supervisor(models, lambda: cfg(), Worker(), run_id="run")
+    outcomes, _ = await supervisor.run("Four factual requirements", coverage.model_dump(mode="json"))
+    assert len(outcomes) == 2
+    assert received == [["R0", "R1", "R2"], ["R3"]]
+    assert len(models.created[0][2].calls) == 2
 
 
 async def test_compression_input_omits_failed_urls_but_keeps_diagnostics():

@@ -1653,6 +1653,7 @@ class GatewayRuntime:
                 "sandbox_gateway_authorized_hosts": authorized_hosts,
                 **({"sql_fetch_grant": reservation["fetch_grant"]} if "fetch_grant" in reservation else {}),
                 **({"coverage_contract": reservation["coverage_contract"]} if "coverage_contract" in reservation else {}),
+                **({"evidence_requirement_ids": reservation["evidence_requirement_ids"]} if "evidence_requirement_ids" in reservation else {}),
                 **({"source_selection": reservation["coverage_contract"]["source_selection"]}
                    if reservation.get("coverage_contract", {}).get("source_selection") else {}),
                 **({"execution_deadline_at": min(v for v in (reservation.get("deadline_at"), request.deadline_at) if v is not None)}
@@ -1695,12 +1696,17 @@ class GatewayRuntime:
             if once_grants.get(grant_key) == authority.get("version", 0):
                 return "allow"
             approval_started = time.monotonic()
-            state, approval = await self._request_network_approval(nested_request, context,
-                host=host, port=port, capability=capability, consume=consume,
-                trigger_reason=precheck.source,
-                wait_for_decision=True,
-                expires_at=approval_deadline(context, timeout_seconds=profile.resources.approval_timeout_seconds))
-            approval_wait_ms += int((time.monotonic() - approval_started) * 1000)
+            from open_deep_research.agentscope_runtime.runtime_limits import waiting_for_approval
+            with waiting_for_approval() as execution_clock:
+                state, approval = await self._request_network_approval(nested_request, context,
+                    host=host, port=port, capability=capability, consume=consume,
+                    trigger_reason=precheck.source,
+                    wait_for_decision=True,
+                    expires_at=approval_deadline(context, timeout_seconds=profile.resources.approval_timeout_seconds))
+            if execution_clock is None:
+                approval_wait_ms += int((time.monotonic() - approval_started) * 1000)
+            else:
+                approval_wait_ms = int(execution_clock.waited_seconds * 1000)
             if state != "allowed":
                 return "ask" if state == "pending" else "deny"
             # Re-read authority after any human wait, including revocation races.

@@ -22,6 +22,8 @@ describe("fetch budget HITL", () => {
     expect(screen.queryByText("提交修改")).not.toBeInTheDocument();
     expect(submit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: label }));
-    await waitFor(() => expect(submit).toHaveBeenCalledWith("run-budget", "budget-action", decision, ""));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith("run-budget", "budget-action", decision, "", {
+      expected_version: undefined, source_selection: undefined,
+    }));
   });
 });

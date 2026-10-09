@@ -15,17 +15,19 @@ export function useRunStream(runId: string) {
     let usageRefreshTimer: ReturnType<typeof setTimeout> | undefined;
     const store = useResearchRunStore.getState();
     store.reset(runId);
+    const active = () => !stopped && useResearchRunStore.getState().runId === runId;
     async function connect() {
       try {
         const snapshot = await researchApi.getRun(runId);
-        if (stopped) return;
+        if (!active()) return;
         useResearchRunStore.getState().hydrate(snapshot);
         if (["completed", "failed", "cancelled"].includes(snapshot.status)) return;
         useResearchRunStore.getState().setConnection("connecting");
         await subscribeToRun({
           runId, after: snapshot.last_event_id ?? 0, signal: controller.signal,
-          onOpen: () => useResearchRunStore.getState().setConnection("connected"),
+          onOpen: () => { if (active() && !controller.signal.aborted) useResearchRunStore.getState().setConnection("connected"); },
           onEvent: async (event) => {
+            if (!active() || controller.signal.aborted) return;
             useResearchRunStore.getState().applyEvent(event);
             if (event.type === "run.usage.updated") {
               if (usageRefreshTimer) clearTimeout(usageRefreshTimer);
@@ -34,15 +36,28 @@ export function useRunStream(runId: string) {
               }, 300);
             }
             if (["run.completed", "run.failed", "run.cancelled"].includes(event.type)) {
-              const finalSnapshot = await researchApi.getRun(runId);
-              useResearchRunStore.getState().hydrate(finalSnapshot);
-              await queryClient.invalidateQueries({ queryKey: ["runs"] });
-              await queryClient.invalidateQueries({ queryKey: ["run-usage", runId] });
+              // EOF can arrive before the final GET finishes. Stop transport
+              // immediately so a completed run cannot re-enter reconnecting.
               controller.abort();
+              useResearchRunStore.getState().setConnection("closed");
+              try {
+                const finalSnapshot = await researchApi.getRun(runId);
+                if (!active()) return;
+                useResearchRunStore.getState().hydrate(finalSnapshot);
+                await queryClient.invalidateQueries({ queryKey: ["runs"] });
+                await queryClient.invalidateQueries({ queryKey: ["run-usage", runId] });
+              } catch {
+                // The persisted terminal event remains authoritative; opening
+                // the run again will reload its snapshot. Do not reject the
+                // async event callback or restart a finished stream.
+              }
             }
           },
-          onReconnect: () => useResearchRunStore.getState().setConnection("reconnecting", true),
-          onCursorAhead: async () => useResearchRunStore.getState().hydrate(await researchApi.getRun(runId)),
+          onReconnect: () => { if (active() && !controller.signal.aborted) useResearchRunStore.getState().setConnection("reconnecting", true); },
+          onCursorAhead: async () => {
+            const snapshot = await researchApi.getRun(runId);
+            if (active()) useResearchRunStore.getState().hydrate(snapshot);
+          },
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -52,7 +67,7 @@ export function useRunStream(runId: string) {
           await connect();
           return;
         }
-        if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) {
+        if (active() && !controller.signal.aborted && !(error instanceof DOMException && error.name === "AbortError")) {
           useResearchRunStore.getState().setConnection("error");
         }
       }

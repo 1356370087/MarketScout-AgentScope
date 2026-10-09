@@ -90,7 +90,7 @@ export interface PendingHumanAction {
   type: "clarification" | "plan_approval" | "outline_approval" | "fetch_budget_approval";
   payload: { question?: string; content_markdown?: string; research_plan?: string; report_outline?: string;
     version?: number;
-    requirements?: Array<{ requirement_id: string; text: string; kind: "factual" | "process" | "deliverable" }>;
+    requirements?: Array<{ requirement_id: string; text: string; subject?: string; kind: "factual" | "process" | "deliverable" }>;
     source_plan?: { version: number; intent: string; status: string; explicit?: boolean;
       selection?: SourceSelection;
       entries: Array<{ entity: string; website: string; domain?: string; documentation_urls: string[];

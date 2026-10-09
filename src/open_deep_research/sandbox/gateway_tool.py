@@ -35,7 +35,7 @@ def _request_for(
     input: BaseModel,
     context: ToolContext,
 ) -> GatewayToolRequestV1:
-    from open_deep_research.agentscope_runtime.runtime_limits import call_context
+    from open_deep_research.agentscope_runtime.runtime_limits import current_deadline_at
     metadata = context.config.get("metadata", {})
     arguments = input.model_dump(mode="json")
     stable = {
@@ -66,7 +66,7 @@ def _request_for(
         tool_name=tool.name,
         arguments=arguments,
         wave_id=str(metadata.get("research_wave_id") or ""),
-        deadline_at=call_context.get().get("deadline_at"),
+        deadline_at=current_deadline_at(),
     )
 
 

@@ -46,6 +46,37 @@ async def cache(tmp_path):
     await store.aclose()
 
 
+@pytest.mark.asyncio
+async def test_rejected_handoff_retains_diagnostic_artifact_without_admission(cache):
+    from tests.as_runtime.test_research_migration import Models, cfg, contract, evidence, tool_call
+    from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
+    from open_deep_research.quality.gate import HandoffAssessment
+
+    coverage = contract("Explain deployment limits.")
+    rid = coverage["requirements"][0]["requirement_id"]
+    models = Models({"supervisor": [[tool_call("ConductResearch", research_topic="Deployment", requirement_ids=[rid])]]})
+    models.recovery = cache.recovery
+    config = cfg(research_efficiency_mode="bounded", quality_evaluation_enabled=True, max_researcher_iterations=1)
+
+    class Worker:
+        async def run(self, assignment, contract, feedback):
+            return ResearchHandoff(**assignment.model_dump(), compressed_research="Original grounded handoff",
+                                   evidence_registry=[evidence()], agent_state={"private": "must not archive"})
+
+    class Quality:
+        async def handoff(self, outcome, contract):
+            return HandoffAssessment(accepted=False, relevance=4, source_quality=4, evidence_coverage=2,
+                                     groundedness=4, reason="Limits need further evidence.")
+
+    findings, _ = await Supervisor(models, lambda: config, Worker(), run_id="efficiency", quality=Quality()).run("brief", coverage)
+    assert len(findings) == 1 and findings[0]["evidence_registry"] == []
+    original = await cache.get(findings[0]["assessment"]["rejected_handoff_ref"])
+    assert original["compressed_research"] == "Original grounded handoff"
+    assert original["evidence_registry"][0]["evidence_id"] == "ev1"
+    assert original["coverage_contract"] == coverage
+    assert "agent_state" not in original
+
+
 def test_v16_fingerprint_and_behavior_survive_new_defaults(monkeypatch):
     frozen = freeze_run_config({"configurable": {"enable_memory": False}})
     frozen["metadata"]["run_config_schema_version"] = 16

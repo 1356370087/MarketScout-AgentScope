@@ -24,6 +24,7 @@ from .models import ReportOutline, SectionSpec, SourceRef, WrittenSection
 from .profiles import AssemblyMode, ReportProfile
 from .runtime import BaseMessage, RunnableConfig, get_buffer_string, get_today_str, require_report_runtime
 from .writing import (
+    ReportInputBudgetExceeded,
     order_evidence,
     project_evidence,
     writing_messages,
@@ -131,6 +132,12 @@ class ReportContext:
                 if self.strict_evidence or self.evidence_records
                 else [{"historical_note": note} for note in self.findings.split("\n\n") if note]
             )
+        from open_deep_research.configuration import QUALITY_POLICY_VERSION
+        payload["_quality_policy_version"] = self.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
+        if payload["_quality_policy_version"] == "quality-gate-v5" and any(row.get("evidence_id") for row in records):
+            owned = set(payload.get("requirement_ids") or self.requirement_to_evidence)
+            payload["requirement_to_evidence"] = {rid: ids for rid, ids in self.requirement_to_evidence.items() if rid in owned}
+            payload["required_requirement_ids"] = [rid for rid, ids in payload["requirement_to_evidence"].items() if ids]
         return writing_messages(
             template, payload, records,
             guidance=get_skill_report_context(self.configurable.skills),
@@ -249,8 +256,13 @@ class OneShotStrategy:
         if ctx.config.get("metadata", {}).get("run_config_schema_version", 18) >= 18:
             import json
             from .writing import fit_writing_messages
-            fitted, _ = fit_writing_messages(messages, ctx.configurable.final_report_model,
-                ctx.configurable, output_tokens=ctx.configurable.final_report_model_max_tokens)
+            try:
+                fitted, _ = fit_writing_messages(messages, ctx.configurable.final_report_model,
+                    ctx.configurable, output_tokens=ctx.configurable.final_report_model_max_tokens)
+            except ReportInputBudgetExceeded as exc:
+                if str(exc) != "report_requirement_evidence_exceeds_budget":
+                    raise
+                return await SectionedStrategy().build(ctx)
             selected = {r.get("evidence_id") for m in fitted if m.name == "report_evidence"
                         for r in json.loads(str(m.content)).get("records", [])}
             missing = [rid for rid, ids in ctx.requirement_to_evidence.items() if ids and not selected.intersection(ids)]
@@ -258,9 +270,16 @@ class OneShotStrategy:
                 # Existing sectioned assembly fits each question independently;
                 # budget omission must not become a claim that evidence is absent.
                 return await SectionedStrategy().build(ctx)
-        final_report = await ctx.invoke_writer_with_output_recovery(
-            messages, span_name="lead.final_report",
-        )
+        try:
+            final_report = await ctx.invoke_writer_with_output_recovery(
+                messages, span_name="lead.final_report",
+            )
+        except ReportInputBudgetExceeded as exc:
+            # A fallback candidate can have a smaller window than the model
+            # used for the preflight above. Preserve coverage there as well.
+            if str(exc) != "report_requirement_evidence_exceeds_budget":
+                raise
+            return await SectionedStrategy().build(ctx)
         return AssemblyResult(
             body_markdown=str(final_report.content), message=final_report,
             sources=ctx.sources,

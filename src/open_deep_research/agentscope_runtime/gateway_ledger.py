@@ -150,6 +150,9 @@ class SQLGatewayLedger:
                 result["coverage_contract"] = preparation["contract"]
         if getattr(self, "research_cache", None) is not None:
             progress = await self.research_cache.progress()
+            from open_deep_research.configuration import QUALITY_POLICY_VERSION
+            if getattr(self, "config", {}).get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+                result["evidence_requirement_ids"] = list(progress.get("tasks", {}).get(request.task_id, {}).get("requirements", []))
             budget = await session.store.budget(session.lease.run_id, session.lease.user_id)
             deadlines = [v for v in (budget.get("deadline"), progress.get("tasks", {}).get(request.task_id, {}).get("deadline_at")) if v is not None]
             if deadlines:
