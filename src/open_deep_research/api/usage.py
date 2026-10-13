@@ -12,7 +12,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from open_deep_research.configuration import Configuration
 from open_deep_research.models.credentials import (
@@ -94,6 +94,7 @@ def _build_usage_analytics_response(
     offset: int,
     user_id: str,
     gateway_spend_by_run: dict[str, int] | None = None,
+    native_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build historical usage off the event loop using owner-filtered SQL.
 
@@ -122,11 +123,21 @@ def _build_usage_analytics_response(
         cutoff = now - max(0.0, actual_days) * 86400
 
     store = SQLiteTraceStore(configurable.trace_store_path)
-    owned_runs = store.list_runs_for_usage(
+    native_by_run = {report["run_id"]: report for report in native_reports or []}
+    owned_runs = [run for run in store.list_runs_for_usage(
         user_id=user_id,
         cutoff=cutoff,
         status=_normalize_analytics_status(status),
-    )
+    ) if run["run_id"] not in native_by_run]
+    for report in native_by_run.values():
+        native_status = _normalize_analytics_status(report["status"])
+        if cutoff is not None and (report["started_at"] or 0) < cutoff:
+            continue
+        if status and native_status != _normalize_analytics_status(status):
+            continue
+        owned_runs.append({**report, "status": native_status,
+                           "metadata_json": json.dumps({"title": report["title"]})})
+    owned_runs.sort(key=lambda run: (run["started_at"] or 0, run["run_id"]), reverse=True)
     reports: list[dict[str, Any]] = []
     run_rows: list[dict[str, Any]] = []
     selected_runs: list[tuple[dict[str, Any], str]] = []
@@ -150,10 +161,11 @@ def _build_usage_analytics_response(
         selected_runs.append((run, title))
 
     reports_by_run = store.get_usage_accounting_many(
-        [str(run["run_id"]) for run, _title in selected_runs],
+        [str(run["run_id"]) for run, _title in selected_runs if run["run_id"] not in native_by_run],
         provider=provider,
         model=model,
     )
+    reports_by_run.update(native_by_run)
     for run, title in selected_runs:
         report = reports_by_run[str(run["run_id"])]
         if (provider or model) and not report["totals"]["calls"]["attempts"]:
@@ -180,7 +192,7 @@ def _build_usage_analytics_response(
     # for free because only rows already filtered to this user are overlaid.
     gateway_attributed_runs = 0
     gateway_spend_total = 0
-    if gateway_spend_by_run is not None:
+    if gateway_spend_by_run is not None and not (provider or model):
         for row in run_rows:
             spend = gateway_spend_by_run.get(str(row["run_id"]))
             if spend is None:
@@ -220,7 +232,7 @@ def _build_usage_analytics_response(
                 "estimated_tokens": 0,
                 "run_count": 0,
                 "provider_reported_responses": 0,
-                "successful_responses": 0,
+                "attempts": 0,
                 "rate_429_sum": 0.0,
                 "throughput_sum": 0.0,
                 "cache_hit_rate_sum": 0.0,
@@ -230,10 +242,10 @@ def _build_usage_analytics_response(
         day["estimated_tokens"] += int(row["estimated"]["total_tokens"])
         day["run_count"] += 1
         day["provider_reported_responses"] += int(row["calls"]["provider_reported"])
-        day["successful_responses"] += int(row["calls"]["successful_responses"])
+        day["attempts"] += int(row["calls"]["attempts"])
         day["rate_429_sum"] += float(row["operations"]["rate_429"])
         day["throughput_sum"] += float(row["operations"]["output_tokens_per_second"])
-        day["cache_hit_rate_sum"] += float(row["operations"]["cache_hit_rate"])
+        day["cache_hit_rate_sum"] += float(row["operations"]["cache_hit_rate"] or 0)
         status_key = str(row["status"] or "unknown")
         status_bucket = distributions["status"].setdefault(
             status_key,
@@ -253,10 +265,8 @@ def _build_usage_analytics_response(
             if not model_key:
                 model_key = provider_key
                 provider_key = "unknown"
-            for dimension, key in (
-                ("provider", provider_key),
-                ("model", model_key),
-            ):
+            dimensions = [("model", full_key)] if "by_provider" in report["breakdowns"] else [("provider", provider_key), ("model", model_key)]
+            for dimension, key in dimensions:
                 target = distributions[dimension].setdefault(
                     key,
                     {
@@ -269,13 +279,19 @@ def _build_usage_analytics_response(
                 target["reported_tokens"] += int(bucket["reported"]["total_tokens"])
                 target["estimated_tokens"] += int(bucket["estimated"]["total_tokens"])
                 target["call_count"] += int(bucket["call_count"])
+        for bucket in report["breakdowns"].get("by_provider", []):
+            target = distributions["provider"].setdefault(bucket["key"], {
+                "key": bucket["key"], "reported_tokens": 0, "estimated_tokens": 0, "call_count": 0})
+            target["reported_tokens"] += bucket["reported"]["total_tokens"]
+            target["estimated_tokens"] += bucket["estimated"]["total_tokens"]
+            target["call_count"] += bucket["call_count"]
 
     daily_rows: list[dict[str, Any]] = []
     for day in sorted(daily.values(), key=lambda item: item["date"]):
         count = max(1, int(day["run_count"]))
-        successful = int(day.pop("successful_responses"))
+        attempts = int(day.pop("attempts"))
         provider_reported = int(day.pop("provider_reported_responses"))
-        day["coverage_ratio"] = provider_reported / successful if successful else 0.0
+        day["coverage_ratio"] = provider_reported / attempts if attempts else 0.0
         day["rate_429"] = float(day.pop("rate_429_sum")) / count
         day["output_tokens_per_second"] = float(day.pop("throughput_sum")) / count
         day["cache_hit_rate"] = float(day.pop("cache_hit_rate_sum")) / count
@@ -283,6 +299,8 @@ def _build_usage_analytics_response(
 
     page = run_rows[offset : offset + limit]
     for item in page:
+        if item["run_id"] in native_by_run:
+            continue
         item["title"] = _usage_manifest_title(
             str(item["run_id"]),
             configurable=configurable,
@@ -299,7 +317,7 @@ def _build_usage_analytics_response(
         for row in run_rows
         if row["cost"]["estimated_cost_micro_usd"] is not None
     ]
-    successful = sum(int(row["calls"]["successful_responses"]) for row in run_rows)
+    attempts = sum(int(row["calls"]["attempts"]) for row in run_rows)
     provider_reported = sum(int(row["calls"]["provider_reported"]) for row in run_rows)
     return {
         "schema_version": 1,
@@ -314,7 +332,7 @@ def _build_usage_analytics_response(
             "estimated_cost_micro_usd": (
                 sum(int(value) for value in costs) if costs else None
             ),
-            "coverage_ratio": (provider_reported / successful if successful else 0.0),
+            "coverage_ratio": (provider_reported / attempts if attempts else 0.0),
             "gateway_spend_micro_usd": (
                 gateway_spend_total if gateway_spend_by_run is not None else None
             ),
@@ -359,6 +377,7 @@ async def _fetch_gateway_run_spend() -> dict[str, int] | None:
 
 @router.get("/usage/analytics")
 async def get_usage_analytics(
+    request: Request,
     range: Literal["7d", "30d", "retained"] = "30d",  # noqa: A002
     status: str | None = None,
     provider: str | None = None,
@@ -378,6 +397,8 @@ async def get_usage_analytics(
         raise HTTPException(status_code=422, detail="invalid timezone") from None
     offset = _analytics_cursor_offset(cursor)
     gateway_spend_by_run = await _fetch_gateway_run_spend()
+    service = getattr(request.app.state, "native_research_service", None)
+    native_reports = await _native_usage_reports(service.store, user.user_id, provider=provider, model=model) if service is not None else []
     return await asyncio.to_thread(
         _build_usage_analytics_response,
         range_name=range,
@@ -391,4 +412,25 @@ async def get_usage_analytics(
         offset=offset,
         user_id=user.user_id,
         gateway_spend_by_run=gateway_spend_by_run,
+        native_reports=native_reports,
     )
+
+
+async def _native_usage_reports(store, owner, *, provider=None, model=None):
+    """Use the same fenced receipts as run details, scoped to the current owner."""
+    from sqlalchemy import select
+    from open_deep_research.agentscope_runtime.usage_projection import project_usage
+
+    async with store.engine.connect() as connection:
+        identifiers = (await connection.execute(select(store.runs.c.run_id).where(
+            store.runs.c.user_id == owner))).scalars().all()
+    reports = []
+    for run_id in identifiers:
+        try:
+            reports.append(await project_usage(store, run_id, owner,
+                {"totals": SQLiteTraceStore._empty_accounting_totals(), "operations": {}},
+                provider=provider, model=model))
+        except KeyError:
+            # The owner may delete a run between enumeration and projection.
+            continue
+    return reports

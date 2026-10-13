@@ -23,6 +23,14 @@ docker compose -f docker-compose.yaml -f deploy/compose.web-e2e.yaml --profile s
 
 覆盖配置执行显式迁移，启用 Tavily/Bing 并行搜索，强制 `quality_evaluation_fail_open=false`。控制台沿用本地开发身份，仅监听本机；不要将这套免登录验收配置用于公开部署。
 
+需要文档摄取、独立知识问答或离线 Judge 时，应在这套项目的 LiteLLM 数据库中签发 Service Key。宿主机执行铸造前，将 `.env` 的 `LITELLM_BASE_URL` 设置为该项目实际映射的模型接口地址（默认 `http://127.0.0.1:4107/v1`，修改 `WEB_E2E_LITELLM_PORT` 后同步调整），然后运行：
+
+```powershell
+uv run --env-file .env python -m open_deep_research.models.mint_service_key
+```
+
+默认允许列表包含评估和嵌入模型，以及当前配置的资料元数据、知识问答和重排模型；默认预算为每 30 天 20 美元。将输出写入本地 `.env` 的 `LITELLM_SERVICE_KEY`，用同一项目名和覆盖文件执行 `up -d --no-deps` 重建需要该密钥的 API 或 Worker，单纯 `start` 不会刷新容器环境。虚拟密钥随 LiteLLM 数据库存储，不能假定其他独立验收项目中已登记同一密钥。预算环境变量仅用于铸造，改变它们不会修改已有密钥的额度。
+
 运行真实 Web 研究：
 
 ```powershell

@@ -15,6 +15,7 @@ import math
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -214,54 +215,66 @@ class LiteLLMSpendClient:
         self,
         *,
         api_key: str | None = None,
+        key_alias: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         page: int = 1,
         size: int = 100,
-        max_pages: int = 20,
+        max_pages: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Read ``/spend/logs`` rows; callers aggregate defensively.
-
-        1.98 returns a bare JSON array; older versions wrapped rows in
-        ``{"data": [...]}`` — both shapes are accepted. ``api_key`` matching
-        is unreliable (the gateway stores key hashes), so run-scoped callers
-        should filter client-side on the ``run:{id}`` request tag instead.
-        """
-        params: dict[str, Any] = {"page": page, "size": size}
+        """Read real paginated bills; never return a silently truncated snapshot."""
+        params: dict[str, Any] = {
+            "page": page, "page_size": size,
+            "start_date": start_date or "1970-01-01 00:00:00",
+            "end_date": end_date or (datetime.now(UTC) + timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+        }
         if api_key:
             params["api_key"] = api_key
-        if start_date:
-            params["start_date"] = start_date
-        if end_date:
-            params["end_date"] = end_date
+        if key_alias:
+            params["key_alias"] = key_alias
         rows: list[dict[str, Any]] = []
+        seen: dict[str, dict[str, Any]] = {}
         current = page
-        while current < page + max_pages:
-            response = await self._client.get("/spend/logs", params=params)
+        endpoint = "/spend/logs/v2"
+        while max_pages is None or current < page + max_pages:
+            response = await self._client.get(endpoint, params=params)
+            if response.status_code in {404, 405} and endpoint.endswith("/v2"):
+                # Older proxies expose the same paginated contract at /ui.
+                endpoint = "/spend/logs/ui"
+                response = await self._client.get(endpoint, params=params)
             response.raise_for_status()
             payload = response.json()
-            if isinstance(payload, list):
-                data = payload
-            else:
-                data = payload.get("data") if isinstance(payload, dict) else None
+            data = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(data, list):
-                break
-            rows.extend(item for item in data if isinstance(item, dict))
-            if len(data) < size:
-                break
+                raise ValueError("litellm_spend_logs_invalid_page")
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                identifier = item.get("request_id")
+                if identifier and seen.get(identifier) == item:
+                    continue
+                if identifier:
+                    # Conflicting receipts must reach the reconciler, not be hidden.
+                    seen[identifier] = item
+                rows.append(item)
+            total_pages = payload.get("total_pages")
+            if (isinstance(total_pages, int) and current >= total_pages) or (total_pages is None and len(data) < size):
+                return rows
+            if not data:
+                raise ValueError("litellm_spend_logs_incomplete_page")
             params["page"] = current = current + 1
-        return rows
+        raise RuntimeError("litellm_spend_logs_page_limit_exceeded")
 
     async def run_spend_logs(
         self,
         run_id: str,
         *,
         size: int = 500,
-        max_pages: int = 4,
+        max_pages: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Recent spend logs belonging to one run, matched by request tag."""
+        """All bills for a run's keys, with exact attribution checked by tag."""
         tag = f"run:{run_id}"
-        logs = await self.spend_logs(size=size, max_pages=max_pages)
+        logs = await self.spend_logs(key_alias=f"run-{run_id}-", size=size, max_pages=max_pages)
         return [
             log
             for log in logs

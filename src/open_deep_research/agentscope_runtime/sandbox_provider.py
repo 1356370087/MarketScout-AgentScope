@@ -108,6 +108,19 @@ class NativeGatewayProvider:
         if headers is not None:
             headers.update(response.headers)
 
+    @staticmethod
+    def request_metadata(request):
+        return {
+            **request.trace_metadata,
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "role": request.role,
+            "stage": request.stage,
+            "logical_operation_id": request.logical_operation_id,
+            "tags": [f"run:{request.run_id}", f"operation:{request.logical_operation_id}",
+                     f"role:{request.role}", f"stage:{request.stage}"],
+        }
+
     async def complete(self, request):
         if request.server_search is not None:
             from anthropic import APIConnectionError as AnthropicConnectionError
@@ -153,20 +166,7 @@ class NativeGatewayProvider:
                 tool_choice=choice,
                 max_tokens=request.max_output_tokens,
                 temperature=request.temperature,
-                metadata={
-                    **request.trace_metadata,
-                    "run_id": request.run_id,
-                    "task_id": request.task_id,
-                    "role": request.role,
-                    "stage": request.stage,
-                    "logical_operation_id": request.logical_operation_id,
-                    "tags": [
-                        f"run:{request.run_id}",
-                        f"operation:{request.logical_operation_id}",
-                        f"role:{request.role}",
-                        f"stage:{request.stage}",
-                    ],
-                },
+                metadata=self.request_metadata(request),
                 extra_headers={
                     "x-litellm-request-id": request.logical_operation_id,
                     "traceparent": current_traceparent(request.run_id),
@@ -263,7 +263,7 @@ class NativeGatewayProvider:
         try:
             result = await model.search_web(spec.query, allowed_domains=spec.allowed_domains,
                 blocked_domains=spec.blocked_domains, logical_operation_id=request.logical_operation_id,
-                progress=model_search_progress.get())
+                progress=model_search_progress.get(), trace_metadata=self.request_metadata(request))
         finally:
             self.headers.reset(token)
         raw = result.metadata.get("raw_usage", {})

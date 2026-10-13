@@ -1,12 +1,13 @@
 """Each native policy attempt owns one durable usage receipt (T023)."""
 
+import asyncio
 import json
 import math
 from contextlib import aclosing
 from contextvars import ContextVar
 from copy import deepcopy
 
-from agentscope.model import ChatResponse, StructuredResponse
+from agentscope.model import ChatResponse, FinishedReason, StructuredResponse
 
 current_accounting = ContextVar("model_attempt_accounting", default=None)
 
@@ -95,7 +96,8 @@ class AttemptAccounting:
                          "logical_call_id": call_context.get().get("logical_call_id") or self.key,
                          "purpose": call_context.get().get("purpose"),
                          "parent_tool_call_id": call_context.get().get("parent_tool_call_id"),
-                         "model": getattr(model, "model", None)},
+                         "model": getattr(model, "model", None),
+                         "provider": getattr(model, "accounting_provider", None)},
         )
         if record["replayed"]:
             receipt = record["result"]
@@ -104,21 +106,26 @@ class AttemptAccounting:
             return response_load(receipt["response"], structured=receipt["structured"])
 
         async def settle(response=None, error=None):
+            response = getattr(error, "billed_response", None) or response
+            interrupted = getattr(response, "finished_reason", None) == FinishedReason.INTERRUPTED
+            if interrupted and error is None:
+                error = asyncio.CancelledError()
             observed = response_usage(response)
             billed = billed_failure_usage(error) if error is not None else None
             if billed is not None:
                 observed = billed
             complete = error is None
+            measured = complete or billed is not None
             actual = dict(reserve)
             if observed is not None:
                 # A stream failure may only contain a partial usage snapshot.
-                actual.update(observed if complete or billed is not None else {
+                actual.update(observed if measured else {
                     name: max(reserve[name], count) for name, count in observed.items()
                 })
             metadata = getattr(response, "metadata", {}) or {}
             cost = metadata.get("response_cost_usd")
             if cost is not None or pricing is not None:
-                if cost is not None and complete:
+                if cost is not None and measured:
                     actual["cost_micro_usd"] = math.ceil(cost * 1_000_000)
                 elif pricing is not None:
                     actual["cost_micro_usd"] = math.ceil(
@@ -135,12 +142,12 @@ class AttemptAccounting:
                 "status": "completed" if complete else "failed",
                 "operation_id": key,
                 "observed_usage": observed,
-                "usage_status": "reported" if observed is not None and len(observed) == 2 and (complete or billed is not None) else "estimated",
+                "usage_status": "reported" if observed is not None and len(observed) == 2 and measured else "estimated",
                 # Native ChatUsage defaults to zero; absent provider facts stay unknown.
                 "cached_input_tokens": cached,
                 "cache_creation_input_tokens": facts.get("cache_creation_input_tokens", getattr(usage, "cache_creation_input_tokens", None) or None),
                 "response_cost_usd": cost,
-                "cost_status": "reported" if cost is not None and complete else "estimated" if pricing is not None or cost is not None else "unknown",
+                "cost_status": "reported" if cost is not None and measured else "estimated" if pricing is not None or cost is not None else "unknown",
                 "pricing_micro_usd": pricing,
                 "response": response_dump(response) if complete else None,
                 "structured": isinstance(response, StructuredResponse),
@@ -150,7 +157,7 @@ class AttemptAccounting:
                     error_type=type(error).__name__,
                     status_code=getattr(error, "status_code", None) or (503 if retryable(error) else None),
                     code=getattr(error, "code", None),
-                    uncertain=getattr(error, "uncertain", False),
+                    uncertain=interrupted or getattr(error, "uncertain", False),
                 )
             await self.session.store.commit_operation(self.session.lease, key, receipt, actual=actual)
             await self.session.hit("model_attempt_committed")

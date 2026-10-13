@@ -1352,9 +1352,14 @@ class GatewayRuntime:
         )
 
         token = bind_run_key(context.api_keys.get("LITELLM_RUN_KEY", ""))
+        from open_deep_research.agentscope_runtime.embedding_accounting import GatewayEmbeddingAccounting
+        from open_deep_research.documents.embeddings import run_embedding_accounting
+
+        accounting_token = run_embedding_accounting.set(GatewayEmbeddingAccounting(self, request, context))
         try:
             return await self._invoke_tool(request, context)
         finally:
+            run_embedding_accounting.reset(accounting_token)
             reset_run_key(token)
 
     async def _invoke_tool(
@@ -2242,7 +2247,6 @@ class GatewayRuntime:
                 )
 
         # Conservative reservation only; settlement uses the provider's measured usage.
-        estimated_input = max(1, len(json.dumps(request.messages, ensure_ascii=False).encode("utf-8")))
         estimated_output = max(1, int(request.max_output_tokens or 1024))
         budget = RemoteBudgetGate(
             internal=self.internal,
@@ -2282,6 +2286,9 @@ class GatewayRuntime:
                 "type": "function",
                 "function": {"name": STRUCTURED_OUTPUT_TOOL_NAME},
             }
+        estimated_input = max(1, len(json.dumps({
+            "messages": request.messages, "tools": tools, "tool_choice": tool_choice,
+        }, ensure_ascii=False).encode("utf-8")))
         dispatched = False
         try:
             # Reservation and dispatch journaling stay inside the try: any

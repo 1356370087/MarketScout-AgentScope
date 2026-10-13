@@ -69,7 +69,7 @@ class BudgetReserveRequest(ServiceRequest):
     physical_attempt_id: str
     model_name: str
     estimated_input_tokens: int = Field(ge=1)
-    estimated_output_tokens: int = Field(ge=1)
+    estimated_output_tokens: int = Field(ge=0)
     request_digest: str | None = None
     agent_role: str | None = None
 

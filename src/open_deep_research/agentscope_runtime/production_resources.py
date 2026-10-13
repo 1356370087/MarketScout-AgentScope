@@ -105,6 +105,14 @@ async def prepare_production_config(request, principal):
         await client.aclose()
     names = allowed_models(cfg)
     validate_model_catalog(catalog, names, budget_enabled=True)
+    if request.source_selection.documents_enabled:
+        from open_deep_research.documents.settings import get_document_settings
+
+        embedding_model = get_document_settings().embedding_model
+        # Embeddings have zero output price, but their input price must be frozen
+        # before the Gateway can reserve and settle against the research budget.
+        validate_model_catalog(catalog, [embedding_model], budget_enabled=False)
+        names = sorted({*names, embedding_model})
     config["configurable"]["model_catalog_snapshot"] = freeze_catalog_snapshot(
         catalog, names
     )

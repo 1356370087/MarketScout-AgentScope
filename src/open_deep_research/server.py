@@ -40,6 +40,7 @@ _admission = ApiAdmission()
 def _set_native_research_service(service):
     global _native_research_service
     _native_research_service = service
+    app.state.native_research_service = service
 
 
 class _ResearchService:

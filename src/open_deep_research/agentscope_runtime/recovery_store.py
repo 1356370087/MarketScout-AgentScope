@@ -568,7 +568,7 @@ class RecoveryStore:
                 if observation is not None:
                     # Only content-free dimensions are accepted, never request bodies.
                     dimensions = {k: observation[k] for k in
-                                  ("task_id", "agent_role", "stage", "model", "tool_name",
+                                  ("task_id", "agent_role", "stage", "model", "provider", "tool_name",
                                    "purpose", "logical_call_id", "parent_tool_call_id")
                                   if observation.get(k) is not None}
                     await self._event(conn, row, "research.operation_started",

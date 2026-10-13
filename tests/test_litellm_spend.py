@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 
 from open_deep_research.models.credentials import RunKeySettings
 from open_deep_research.models.spend import (
@@ -129,37 +130,39 @@ def test_list_keys_with_spend_paginates_and_stops() -> None:
     assert sum(entry.spend_micro_usd for entry in entries) == 5_000_000
 
 
-def test_spend_logs_accepts_bare_array_and_data_shapes_and_filters_by_run() -> None:
+def test_spend_logs_paginates_deduplicates_and_filters_by_run() -> None:
     requested: list[dict[str, str]] = []
     run_rows = [
         {
+            "request_id": "planning",
             "request_tags": ["run:run-1", "stage:planning"],
             "total_tokens": 10,
             "spend": "0.1",
         },
         {
+            "request_id": "writing",
             "request_tags": ["run:run-1", "stage:writing"],
             "total_tokens": 7,
             "spend": "0.02",
         },
     ]
     responses: list[Any] = [
-        # 1.98 returns a bare JSON array (first page, includes another run).
-        run_rows
-        + [
+        {"data": [run_rows[0],
             {
+                "request_id": "foreign",
                 "request_tags": ["run:run-2", "stage:researching"],
                 "total_tokens": 99,
                 "spend": "9",
             }
-        ],
-        # Older shapes wrap rows in {"data": [...]} (second page, short page).
-        {"data": [run_rows[0]], "total": 3},
-        # run_spend_logs fetch: bare array again.
-        run_rows,
+        ], "total_pages": 2},
+        {"data": run_rows, "total_pages": 2},
+        {"data": run_rows, "total_pages": 1},
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/spend/logs/v2"
+        assert "page_size" in request.url.params and "size" not in request.url.params
+        assert "start_date" in request.url.params and "end_date" in request.url.params
         requested.append(dict(request.url.params))
         return httpx.Response(200, json=responses.pop(0))
 
@@ -175,10 +178,10 @@ def test_spend_logs_accepts_bare_array_and_data_shapes_and_filters_by_run() -> N
     async def run():
         try:
             logs = await client.spend_logs(api_key="sk-run-key", size=2)
-            assert len(logs) == 4
+            assert len(logs) == 3
             buckets = aggregate_spend_logs_by_tag_prefix(logs, "stage:")
             assert [(b.key, b.calls) for b in buckets] == [
-                ("planning", 2),
+                ("planning", 1),
                 ("researching", 1),
                 ("writing", 1),
             ]
@@ -192,8 +195,34 @@ def test_spend_logs_accepts_bare_array_and_data_shapes_and_filters_by_run() -> N
     asyncio.run(run())
 
     assert requested[0]["api_key"] == "sk-run-key"
-    # run_spend_logs issues its own unfiltered fetch.
     assert "api_key" not in requested[-1]
+    assert requested[-1]["key_alias"] == "run-run-1-"
+
+
+def test_spend_pagination_uses_ui_when_public_endpoint_is_unavailable():
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        if request.url.path.endswith("/v2"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"data": [], "total_pages": 0})
+
+    async def run():
+        async with httpx.AsyncClient(base_url="http://proxy", transport=httpx.MockTransport(handler)) as http:
+            assert await LiteLLMSpendClient(settings(), client=http).spend_logs() == []
+    asyncio.run(run())
+    assert paths == ["/spend/logs/v2", "/spend/logs/ui"]
+
+
+def test_spend_page_limit_does_not_silently_return_partial_bills():
+    async def run():
+        async with httpx.AsyncClient(base_url="http://proxy", transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, json={"data": [{"request_id": "bill"}], "total_pages": 3})
+        )) as http:
+            with pytest.raises(RuntimeError, match="page_limit_exceeded"):
+                await LiteLLMSpendClient(settings(), client=http).spend_logs(size=1, max_pages=1)
+    asyncio.run(run())
 
 
 def test_unexpected_payload_shapes_break_cleanly() -> None:

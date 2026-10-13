@@ -57,6 +57,11 @@ def billed_failure_usage(error):
 
     缺失时返回 None：账本对未知用量保持保守预留，不得记零。
     """
+    response = getattr(error, "billed_response", None)
+    if response is not None:
+        from open_deep_research.agentscope_runtime.model_accounting import response_usage
+
+        return response_usage(response)
     completion = getattr(error, "completion", None)
     usage = getattr(completion, "usage", None)
     if usage is None:

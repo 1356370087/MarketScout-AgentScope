@@ -82,7 +82,12 @@ async def test_creation_freezes_document_generation_and_default_proxy_budget(
                     max_output_tokens=2000,
                     input_cost_per_token=0.001,
                     output_cost_per_token=0.002,
-                )
+                ),
+                get_document_settings().embedding_model: resources.ModelCatalogEntry(
+                    model_name=get_document_settings().embedding_model,
+                    context_window=8191, max_output_tokens=8191,
+                    input_cost_per_token=0.00000002, output_cost_per_token=0,
+                ),
             }
 
         async def aclose(self):
@@ -115,6 +120,8 @@ async def test_creation_freezes_document_generation_and_default_proxy_budget(
         request, research_principal("alice")
     )
     assert config["configurable"]["max_run_cost_micro_usd"] == 1234
+    embedding = config["configurable"]["model_catalog_snapshot"][get_document_settings().embedding_model]
+    assert embedding["input_cost_per_token"] == 0.00000002 and embedding["output_cost_per_token"] == 0
     assert (
         config["metadata"]["selected_source_snapshots"][0]["current_generation_id"]
         == "generation-1"

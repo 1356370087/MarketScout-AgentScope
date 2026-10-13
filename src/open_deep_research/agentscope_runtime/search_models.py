@@ -9,6 +9,7 @@ from agentscope.credential import CredentialBase
 from agentscope.model import ChatModelBase, ChatUsage, StructuredResponse
 from pydantic import BaseModel
 
+from open_deep_research.agentscope_runtime.model_accounting import cache_usage
 from open_deep_research.agentscope_runtime.search_providers import (
     parse_anthropic_search,
     parse_openai_search,
@@ -83,6 +84,9 @@ class ServerSearchModel(ChatModelBase):
             if logical_operation_id
             else None
         )
+        # Provider metadata has a different schema; LiteLLM consumes this field
+        # itself for Responses and Anthropic requests without forwarding tags.
+        proxy_options = {"extra_body": {"litellm_metadata": trace_metadata}} if self.proxy and trace_metadata else {}
         if self.provider == "openai":
             tool = {"type": "web_search_preview"}
             if allowed_domains:
@@ -96,6 +100,7 @@ class ServerSearchModel(ChatModelBase):
                 tools=[tool],
                 max_output_tokens=self.parameters.max_tokens,
                 extra_headers=headers,
+                **proxy_options,
             ) as stream:
                 async for event in stream:
                     if progress and event.type == "response.web_search_call.searching":
@@ -105,12 +110,6 @@ class ServerSearchModel(ChatModelBase):
                 response = await stream.get_final_response()
             text, sources = parse_openai_search(response)
             usage = response.usage
-            cached = (
-                getattr(
-                    getattr(usage, "input_tokens_details", None), "cached_tokens", 0
-                )
-                or 0
-            )
             finish = "length" if response.status == "incomplete" else "stop"
         else:
             tool = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
@@ -125,6 +124,7 @@ class ServerSearchModel(ChatModelBase):
                 messages=[{"role": "user", "content": query}],
                 tools=[tool],
                 extra_headers=headers,
+                **proxy_options,
             ) as stream:
                 async for event in stream:
                     if (
@@ -171,13 +171,16 @@ class ServerSearchModel(ChatModelBase):
                 exc.usage = response.usage
                 raise
             usage = response.usage
-            cached = getattr(usage, "cache_read_input_tokens", 0) or 0
             finish = response.stop_reason
+        cache = cache_usage(usage.model_dump(exclude_none=True)) if usage else {}
+        incoming = usage.input_tokens if usage else 0
+        if self.provider == "anthropic":
+            incoming += cache.get("cached_input_tokens", 0) + cache.get("cache_creation_input_tokens", 0)
         raw_usage = (
             {
-                "input_tokens": usage.input_tokens,
+                "input_tokens": incoming,
                 "output_tokens": usage.output_tokens,
-                "cached_input_tokens": cached,
+                **cache,
             }
             if usage
             else {}
@@ -185,9 +188,10 @@ class ServerSearchModel(ChatModelBase):
         return StructuredResponse(
             content={"text": text, "sources": sources},
             usage=ChatUsage(
-                input_tokens=usage.input_tokens,
+                input_tokens=incoming,
                 output_tokens=usage.output_tokens,
-                cache_input_tokens=cached,
+                cache_input_tokens=cache.get("cached_input_tokens", 0),
+                cache_creation_input_tokens=cache.get("cache_creation_input_tokens", 0),
                 time=time.monotonic() - started,
             )
             if usage

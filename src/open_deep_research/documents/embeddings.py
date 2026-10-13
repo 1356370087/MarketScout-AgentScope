@@ -6,6 +6,7 @@ import asyncio
 import os
 from collections import OrderedDict
 from collections.abc import Sequence
+from contextvars import ContextVar
 from threading import RLock
 
 from openai import AsyncOpenAI
@@ -28,6 +29,7 @@ _EmbeddingClientKey = tuple[str, str]
 _embedding_clients: OrderedDict[_EmbeddingClientKey, AsyncOpenAI] = OrderedDict()
 _embedding_clients_lock = RLock()
 _MAX_EMBEDDING_CLIENTS = 32
+run_embedding_accounting = ContextVar("run_embedding_accounting", default=None)
 
 
 def _get_embedding_client(base_url: str, api_key: str) -> AsyncOpenAI:
@@ -106,7 +108,16 @@ async def embed_texts(
 
         attempt = await reserve_attempt("embedding", settings.embedding_model) if operation == "knowledge_query" else None
         try:
-            response = await client.embeddings.create(model=settings.embedding_model, input=batch)
+            async def call(**kwargs):
+                return await client.embeddings.create(model=settings.embedding_model, input=batch, **kwargs)
+
+            if operation == "query":
+                accounting = run_embedding_accounting.get()
+                if accounting is None:
+                    raise EmbeddingError("document_query_accounting_unavailable")
+                response = await accounting.invoke(settings.embedding_model, batch, call)
+            else:
+                response = await call()
         except BaseException as error:
             await settle_attempt(attempt, error=error)
             raise

@@ -1,4 +1,4 @@
-"""Mint a budgeted LiteLLM Service Key for offline evaluation and maintenance.
+"""Mint a budgeted LiteLLM Service Key for evaluation and knowledge services.
 
 The Service Key replaces the hand-crafted ``LITELLM_SERVICE_KEY`` flow: the
 operator runs this module against a running gateway, and the printed key is
@@ -7,7 +7,7 @@ pasted into ``.env``. The key never expires; its spend is capped by
 
 Usage::
 
-    uv run python -m open_deep_research.models.mint_service_key \
+    uv run --env-file .env python -m open_deep_research.models.mint_service_key \
         [--alias insightforge-service] [--model if-evaluation-v1] \
         [--budget-micro-usd 20000000] [--budget-duration 30d]
 
@@ -15,6 +15,9 @@ Connection settings come from ``LITELLM_BASE_URL`` / ``LITELLM_MASTER_KEY``
 (and optionally ``LITELLM_RUN_TEAM_ID``, default ``insightforge-runs``);
 defaults for budgets come from ``LITELLM_SERVICE_BUDGET_MICRO_USD`` and
 ``LITELLM_SERVICE_BUDGET_DURATION``.
+The default allowlist covers evaluation, document embeddings, and configured
+metadata, knowledge-answer and rerank models. Explicit ``--model`` arguments
+replace that allowlist when provisioning a key for a narrower service.
 """
 
 from __future__ import annotations
@@ -31,8 +34,20 @@ from open_deep_research.models.credentials import (
 )
 
 DEFAULT_ALIAS = "insightforge-service"
-DEFAULT_MODELS = ("if-evaluation-v1",)
 DEFAULT_TEAM = "insightforge-runs"
+
+
+def default_service_models() -> list[str]:
+    """Resolve service model aliases from the deployment's current settings."""
+    models = {
+        (os.getenv("EVALUATION_MODEL") or os.getenv("QUALITY_EVALUATION_MODEL")
+         or "if-evaluation-v1").strip(),
+        os.getenv("DOCUMENT_EMBEDDING_MODEL", "if-embedding-v1").strip(),
+        os.getenv("DOCUMENT_METADATA_SUGGESTION_MODEL", "").strip(),
+        os.getenv("KNOWLEDGE_ANSWER_MODEL", "").strip(),
+        os.getenv("KNOWLEDGE_RERANK_MODEL", "").strip(),
+    }
+    return sorted(model for model in models if model)
 
 
 def _build_settings() -> RunKeySettings:
@@ -63,7 +78,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--model",
         action="append",
         dest="models",
-        help=f"allowed model group (repeatable; default {DEFAULT_MODELS[0]})",
+        help="allowed model group (repeatable; replaces the configured service model allowlist)",
     )
     parser.add_argument(
         "--budget-micro-usd",
@@ -101,7 +116,7 @@ async def mint(argv: list[str] | None = None) -> str:
     try:
         return await client.generate_service_key(
             alias=args.alias,
-            models=list(args.models or DEFAULT_MODELS),
+            models=args.models or default_service_models(),
             max_budget_usd=None if args.no_budget else float(
                 micro_usd_to_usd(budget_micro_usd)
             ),

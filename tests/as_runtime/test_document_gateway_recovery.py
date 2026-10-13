@@ -117,6 +117,8 @@ async def test_gateway_document_read_has_run_key_and_durable_receipt(host, monke
 
     monkeypatch.setattr(database, "document_schema_available", lambda: True)
     monkeypatch.setattr(definition, "document_schema_available", lambda: True)
+    # This module may already be imported by earlier Gateway catalog tests.
+    monkeypatch.setattr("open_deep_research.knowledge.research_assets.document_schema_available", lambda: True)
     monkeypatch.setattr("open_deep_research.agentscope_runtime.knowledge.KnowledgeApplication.search_research", retrieve)
 
     async def read_assets(owner, manifest, kind, query):

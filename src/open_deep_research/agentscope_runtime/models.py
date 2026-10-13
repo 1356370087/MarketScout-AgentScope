@@ -292,6 +292,7 @@ class ModelFactory:
             }
         instance = model_class(**kwargs)
         instance.retry_owner = "gateway" if binding.gateway else "application"
+        instance.accounting_provider = "litellm" if binding.gateway else provider
         entry = catalog.get(descriptor["model"])
         instance.accounting_price = (
             (entry["input_cost_per_token"] * 1_000_000, entry["output_cost_per_token"] * 1_000_000)

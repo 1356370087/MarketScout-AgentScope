@@ -112,7 +112,7 @@ def timeline(records):
     return output
 
 
-async def project_usage(store, run_id, owner, response):
+async def project_usage(store, run_id, owner, response, *, provider=None, model=None):
     """Fill the shared HTTP shape without classifying reservations as reported."""
     state, revision = await store.load(run_id, owner)
     budget = await store.budget(run_id, owner)
@@ -155,6 +155,17 @@ async def project_usage(store, run_id, owner, response):
         for e in events
         if e["type"] == "research.operation_committed"
     }
+    catalog = state.application.get("configuration", {}).get("contract", {}).get("configurable", {}).get("model_catalog_snapshot", {})
+
+    def model_dimensions(row):
+        outcome = (row["result"] or {}).get("outcome") or {}
+        meta = starts.get(row["key"], {})
+        name = meta.get("model") or outcome.get("requested_model") or "unknown"
+        provider_name = outcome.get("provider") or meta.get("provider")
+        base = catalog.get(name, {}).get("base_model") or name
+        if not provider_name:
+            provider_name = base.split(":" if ":" in base else "/", 1)[0] if ":" in base or "/" in base else "unknown"
+        return name, provider_name
     tool_rows = [
         r
         for r in rows
@@ -162,6 +173,10 @@ async def project_usage(store, run_id, owner, response):
         and (r["reservation"] or {}).get("tool_calls")
     ]
     rows = [r for r in rows if r["kind"] in {"gateway:model", "model_attempt"}]
+    if provider or model:
+        rows = [row for row in rows
+                if (not provider or model_dimensions(row)[1] == provider)
+                and (not model or model in {model_dimensions(row)[0], model_dimensions(row)[0].split(":", 1)[-1]})]
     totals = response["totals"]
     calls = totals["calls"]
     costs = []
@@ -228,7 +243,8 @@ async def project_usage(store, run_id, owner, response):
                     else meta.get("stage"),
                 ),
                 "agent_role": meta.get("agent_role"),
-                "model": meta.get("model") or outcome.get("requested_model"),
+                "model": model_dimensions(row)[0],
+                "provider": model_dimensions(row)[1],
                 "reported": normalized if reported else dict.fromkeys(vector, 0),
                 "estimated": dict.fromkeys(vector, 0) if reported else normalized,
                 "reported_complete": reported,
@@ -302,6 +318,7 @@ async def project_usage(store, run_id, owner, response):
             ("by_stage", "stage"),
             ("by_agent_role", "agent_role"),
             ("by_model", "model"),
+            ("by_provider", "provider"),
             ("by_task", "task_id"),
             ("by_purpose", "purpose"),
         )
@@ -328,10 +345,13 @@ async def project_usage(store, run_id, owner, response):
                       if event["type"] == "research.cancelled" or
                       (event["type"] == "research.state" and event.get("status") in {"completed", "failed", "cancelled"})]
     started_at = state.application.get("created_at")
+    finished_at = max(terminal_times) if terminal_times else None
+    response.update(run_id=run_id, title=state.application.get("title", run_id),
+                    started_at=started_at or min((e["timestamp"] for e in events), default=0),
+                    ended_at=finished_at)
     if started_at is not None:
         import time
 
-        finished_at = max(terminal_times) if terminal_times else None
         if finished_at is not None or state.status not in {"completed", "failed", "cancelled"}:
             response["duration_ms"] = max(0, int(((finished_at or time.time()) - started_at) * 1000))
     response["updated_at"] = max(ends.values(), default=None)

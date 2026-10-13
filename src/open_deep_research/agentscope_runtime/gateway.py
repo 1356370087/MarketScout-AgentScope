@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable
 from contextlib import aclosing, contextmanager
 from contextvars import ContextVar
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass, field
 
 import httpx
@@ -406,8 +406,25 @@ class GovernedModelMixin:
 
     _call_metadata = ContextVar("openai_call_metadata", default=None)
     _call_streams = ContextVar("model_call_streams", default=None)
+    _structured_usage = ContextVar("structured_model_usage", default=None)
 
     def _track_stream(self, result):
+        observed = self._structured_usage.get()
+        if observed is not None:
+            if isinstance(result, ChatResponse):
+                observed.update(response=result, complete=True)
+            else:
+                source = result
+
+                async def measured_stream():
+                    async with aclosing(source):
+                        async for chunk in source:
+                            if chunk.usage is not None:
+                                observed["response"] = deepcopy(chunk)
+                            yield chunk
+                    observed["complete"] = True
+
+                result = measured_stream()
         streams = self._call_streams.get()
         if streams is not None and not isinstance(result, ChatResponse):
             streams.append(result)
@@ -429,6 +446,8 @@ class GovernedModelMixin:
         token = self._call_metadata.set(metadata)
         streams = []
         stream_token = self._call_streams.set(streams)
+        observed = {}
+        usage_token = self._structured_usage.set(observed)
         try:
             result = await super().generate_structured_output(
                 messages, structured_model, **kwargs
@@ -444,9 +463,16 @@ class GovernedModelMixin:
                 raise GatewayCallError("structured_output_not_complete")
             result.metadata.update(metadata)
             return result
+        except Exception as error:
+            # The SDK validates tool arguments after consuming a billable response.
+            # Only a drained response is final usage; interrupted streams stay unknown.
+            if observed.get("complete") and observed.get("response") is not None:
+                error.billed_response = observed["response"]
+            raise
         finally:
             self._call_metadata.reset(token)
             self._call_streams.reset(stream_token)
+            self._structured_usage.reset(usage_token)
             for stream in reversed(streams):
                 await stream.aclose()
 
