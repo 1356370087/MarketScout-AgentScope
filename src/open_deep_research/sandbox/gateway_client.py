@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 import secrets
@@ -61,9 +63,9 @@ def split_gateway_registration(
     # environment instead of configurable.apiKeys.  Copy only the explicit
     # search/fetch allowlist into the in-memory Gateway Vault; never serialize
     # these values into the frozen config or Worker payload.
-    if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() != "true":
+    if config_getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() != "true":
         for key in _GATEWAY_ENV_CREDENTIAL_KEYS:
-            value = (os.getenv(key) or "").strip()
+            value = (config_getenv(key) or "").strip()
             if value:
                 credentials[key] = value
     for key in list(configurable):

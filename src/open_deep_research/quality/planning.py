@@ -17,7 +17,7 @@ from open_deep_research.quality.contract import (
 )
 
 
-def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=()):
+def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False):
     """Retain provenance and deterministic constraints without inventing facts."""
     original = {i: _message_content(m) for i, m in enumerate(messages)
                 if _message_role(m) in {"user", "human"}}
@@ -92,8 +92,20 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
         if not any(parent[0] == row[0] and parent[1] < row[2] and parent[2] > row[1] for row in parents):
             parents.append(parent)
     parents = sorted(dict.fromkeys(parents))
+    qualified = [(i, start, end) for i, content in original.items()
+                 for start, end in _qualified_question_spans(content)] if preserve_conditions else []
     if not any(row[4] == "factual" for row in selected):
-        return fallback
+        if not qualified:
+            return fallback
+        selected = [(r.source_message_index, r.source_start, r.source_end, r.text, r.kind) for r in fallback.requirements]
+    if preserve_conditions:
+        for i, start, end in qualified:
+            content = original[i]
+            # A scenario/claim to verify is not an asserted fact. Keep its
+            # governing condition with the question, even if a model facet
+            # quotes the antecedent verbatim and labels it factual.
+            selected = [row for row in selected if not (row[0] == i and start <= row[1] and row[2] <= end)]
+            selected.append((i, start, end, content[start:end], "factual"))
     if sum(row[4] == "factual" for row in selected) > 2:
         selected = [(i, a, b, text, "deliverable" if a == 0 and re.match(r"(?:研究主题[：:]|面向.{0,40}(?:助手|场景)[，,])", text) else kind)
                     for i, a, b, text, kind in selected]
@@ -159,6 +171,22 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     return compiled
 
 
+def _qualified_question_spans(content):
+    """Keep conditional and claim-verification clauses source-addressable."""
+    for match in re.finditer(r"[^。；;\n!?！？]+(?:[!?！？])?", content):
+        text = match.group()
+        condition = re.search(r"\b(?:if|when|assuming|given that)\b|如果|假如|假设|若|当.{1,80}(?:时|情况下)", text, re.IGNORECASE)
+        verification = re.search(r"核实并纠正|验证.{0,12}说法|核实.{0,12}说法|\b(?:verify|check|correct|refute)\b.{0,35}\b(?:claim|whether|statement)\b", text, re.IGNORECASE)
+        question = re.search(r"[?？]|是否|能否|如何|怎么|为何|什么|\b(?:whether|how|what)\b", text, re.IGNORECASE)
+        if condition and question or verification:
+            start, end = match.span()
+            while start < end and content[start].isspace():
+                start += 1
+            while end > start and content[end-1].isspace():
+                end -= 1
+            yield start, end
+
+
 def _fully_quoted(text, start, rows):
     """A model may split a source clause, but cannot silently omit its words."""
     remaining = list(text)
@@ -193,6 +221,57 @@ def unique_evidence(records):
                 *merged[key].get("requirement_ids", []), *record.get("requirement_ids", []),
             ]))
     return list(merged.values())
+
+
+def prioritize_evidence(records, requirements, *, guidance=""):
+    """Order whole records by the questions being answered, before confidence.
+
+    Lexical matches guide selection only; they never certify a
+    claim. Keep different requirements represented when the input is bounded.
+    """
+    from collections import Counter
+    import math
+
+    stop = {"the", "and", "for", "with", "from", "that", "this", "are", "how",
+            "what", "does", "explain", "whether", "container", "official"}
+
+    def terms(text):
+        result = set()
+        for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*|[\u4e00-\u9fff]+", text):
+            if word.isascii():
+                word = word.casefold()
+                if len(word) > 4 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+                    word = word[:-1]
+                if word not in stop:
+                    result.add(word)
+            else:
+                result.update(word[i:i+2] for i in range(len(word)-1))
+        return result
+
+    records = list(records)
+    rows = [row.model_dump() if hasattr(row, "model_dump") else row for row in requirements]
+    queries = [terms(f"{row.get('subject') or ''} {row.get('text', '')}") for row in rows]
+    if guidance:
+        queries.append(terms(guidance))
+    if not records or not any(queries):
+        return records
+    tokens = [terms(str(r.get("supporting_excerpt") or r.get("claim") or "")) for r in records]
+    frequency = Counter(t for values in tokens for t in values)
+
+    def score(index, query):
+        return sum(1 + math.log((len(records) + 1) / (frequency[t] + 1))
+                   for t in query.intersection(tokens[index]))
+
+    ranked = [sorted(range(len(records)), key=lambda i: (-score(i, query), i))
+              for query in queries if query]
+    ordered, seen = [], set()
+    for position in range(len(records)):
+        for ranking in ranked:
+            index = ranking[position]
+            if index not in seen:
+                ordered.append(records[index])
+                seen.add(index)
+    return ordered
 
 
 def source_intent_from_user(messages):

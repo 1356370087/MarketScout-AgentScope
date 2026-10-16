@@ -422,7 +422,7 @@ class Researcher:
         cfg = Configuration.from_runnable_config(scoped_config())
         model_contract = contract
         model_config = scoped_config()
-        scoped_model_context = model_config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5"
+        scoped_model_context = model_config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}
         if scoped_model_context:
             from open_deep_research.quality.contract import researcher_coverage_view
             model_contract = researcher_coverage_view(contract, assignment.requirement_ids)
@@ -683,7 +683,7 @@ class Researcher:
                 prompt += ("\n上次压缩包含未登记的 URL：" + json.dumps(sorted(unknown), ensure_ascii=False)
                     + "。请重新压缩，仅引用给定 evidence 的 source_url；未抓取来源只能描述为缺口，不得列出其 URL。")
         else:
-            if evidence and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+            if evidence and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
                 notes = await _evidence_handoff_notes(self.models, assignment, evidence, cfg)
                 compression["status"] = "candidate_evidence_fallback"
                 compression["reason"] = "compression_citation_validation_failed"
@@ -780,6 +780,10 @@ class Supervisor:
         # Both asynchronous modes spend turns dispatching, joining and reviewing
         # workers; the leaf Researcher limit must not cut off that coordination.
         coordination_limit = max(60, cfg.max_researcher_iterations) if cfg.enable_async_research else cfg.max_researcher_iterations
+        if use_scopes and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+            # A leaf's search depth must not prevent the supervisor from even
+            # assigning every frozen scope once and submitting completion.
+            coordination_limit = max(coordination_limit, len(delegation_scopes) + 1)
         completion = _Completion(coordination_limit)
         ledger = dict(getattr(self, "initial_coverage_ledger", {})) if contract.get("schema_version", 2) >= 3 else {}
         assessments = {}
@@ -818,6 +822,7 @@ class Supervisor:
                 coordination_limit,
                 completion_facts,
                 min_sources=required_source_count(cfg.quality_evaluation_min_sources, contract),
+                accept_covered_on_exit=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
             )
 
         def assign(input):
@@ -928,7 +933,7 @@ class Supervisor:
                     assessments[assignment.task_id] = assessment.model_dump(mode="json")
                     outcome.assessment["handoff"] = assessments[assignment.task_id]
                     if not assessment.accepted:
-                        if bounded and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+                        if bounded and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
                             from open_deep_research.agentscope_runtime.efficiency import fingerprint
                             original = {"task_id": assignment.task_id, "research_topic": outcome.research_topic,
                                 "requirement_ids": outcome.requirement_ids, "compressed_research": outcome.compressed_research,
@@ -1045,7 +1050,19 @@ class Supervisor:
                         active_work[key] = task
             if cfg.enable_async_research:
                 return ToolResult(output={"task_id": task_id, "status": "queued"})
-            return ToolResult(output=(await task).model_dump(mode="json", exclude={"agent_state"}))
+            output = (await task).model_dump(mode="json", exclude={"agent_state"})
+            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+                output["remaining_scopes"] = [
+                    {**row, "unassigned": not any(rid in claimed for rid in row["requirement_ids"])}
+                    for row in delegation_scopes
+                    if any(ledger.get(rid, {}).get("status") != "supported" for rid in row["requirement_ids"])
+                ]
+                output["coordination_instruction"] = (
+                    "Cover every remaining scope, including scopes not assigned yet. Evidence in one task "
+                    "does not mark a sibling scope covered. Select an unassigned scope before repeating "
+                    "completed work; the Researcher can reuse downloaded sources."
+                )
+            return ToolResult(output=output)
 
         def snapshot(task_id):
             task = tasks[task_id]
@@ -1235,6 +1252,8 @@ class Supervisor:
                 "Write research_topic only for that scope. Multiple independent scopes may run concurrently. "
                 "For a supplement select the same scope: the runtime skips already covered or exhausted IDs."
             )
+            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+                prompt += "\nAll delegation_scopes must be assigned and covered, including short scopes with only one requirement. Check remaining_scopes in every result; a broad task title does not automatically cover another scope."
         if contract.get("schema_version", 2) >= 3:
             prompt += "\n" + CONTEXT_RULES
         model = self.models.agent_model("supervisor", "supervisor")

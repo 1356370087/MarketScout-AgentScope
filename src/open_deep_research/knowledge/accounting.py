@@ -77,16 +77,28 @@ class ServiceAttemptAccounting:
         )
 
         attempt = await reserve_attempt(self.operation, kwargs["current_model"].model)
+        from open_deep_research.platform import accounting as platform_accounting
+        pricing = getattr(kwargs["current_model"], "accounting_price", None)
+        monthly = await platform_accounting.begin(kwargs["current_model"].model,
+            {key: value for key, value in kwargs.items() if key != "current_model"},
+            kwargs.get("accounting_max_tokens") or getattr(kwargs["current_model"], "max_tokens", None) or 8192,
+            self.operation, identity="knowledge:" + attempt if attempt else None,
+            owner=query_account.get()[0] if query_account.get() else None, pricing=pricing)
+        monthly_token = platform_accounting.current_charge.set(monthly.identity if monthly else None)
         try:
             result = await handler(**{key: value for key, value in kwargs.items() if key != "accounting_max_tokens"})
         except BaseException as error:
             await settle_attempt(attempt, error=error)
+            await platform_accounting.complete(monthly, error=error)
             raise
+        finally:
+            platform_accounting.current_charge.reset(monthly_token)
         usage = response_usage(result)
         pricing = getattr(kwargs["current_model"], "accounting_price", None)
         if usage is not None and pricing is not None:
             usage["estimated_cost_micro_usd"] = math.ceil(usage.get("input_tokens", 0) * pricing[0] + usage.get("output_tokens", 0) * pricing[1])
         await settle_attempt(attempt, usage=usage)
+        await platform_accounting.complete(monthly, usage)
         return result
 
 

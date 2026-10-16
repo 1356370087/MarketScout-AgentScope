@@ -32,18 +32,20 @@ from open_deep_research.quality.contract import (
     coverage_requirement_display_text,
 )
 from open_deep_research.quality.policy import (
+    PROCEDURAL_COVERAGE_RULES,
     QualityEvaluationRigor,
     get_quality_rigor_policy,
     get_run_quality_rigor_policy,
 )
 from open_deep_research.security.content import sanitize_report_markdown
 
-from .citations import check_citations
+from .citations import body_without_references, check_citations
 from .models import (
     ReportCitationReview,
     ReportCoverageReview,
     ReportDimensionScores,
     ReportDraft,
+    ReportIssueResolution,
     ReportReview,
     ReportReviewIssue,
 )
@@ -451,7 +453,7 @@ def build_reviewer_payload(
     ]
     # Single-shot review is a domain operation, not conversation compression.
     # Keep the draft and evidence intact; the native port budgets whole records.
-    return {
+    payload = {
         "research_brief": str(normalized_state.get("research_brief") or ""),
         "_run_schema_version": (config or {}).get("metadata", {}).get("run_config_schema_version", 18),
         "coverage_contract": {"requirements": requirements, "dimension_coverage": dimension_coverage},
@@ -468,6 +470,50 @@ def build_reviewer_payload(
         "reference_style": normalized_draft.reference_style,
         "outline": [{"name": section.name} for section in normalized_draft.sections],
     }
+    if (config or {}).get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+        history = normalized_state.get("report_review_history") or []
+        previous = history[-1] if history else {}
+        payload["previous_issues"] = [item for item in previous.get("issues", []) if item.get("issue_id")]
+        payload["previous_draft_sha256"] = previous.get("draft_sha256")
+        body = body_without_references(normalized_draft.markdown)
+        urls = {source.url for source in parse_sources_from_text(body)}
+        numbers = numbered_source_urls(normalized_draft.markdown)
+        urls.update(numbers[number] for number in re.findall(r"\[(\d+)\]", body) if number in numbers)
+        payload["citation_inventory"] = {"body_source_urls": sorted(urls), "body_source_count": len(urls),
+            "listed_source_urls": sorted({source.url for source in parse_sources_from_text(normalized_draft.markdown)})}
+    return payload
+
+
+def _track_review_issues(issues, resolutions, previous):
+    """Track explicit defects across drafts without trusting model pass/fail."""
+    prior = {item["issue_id"]: item for item in previous if item.get("issue_id")}
+    errors = []
+    for issue in issues:
+        if not issue.requires_change and issue.severity != "info":
+            errors.append("review_issue_not_actionable")
+        # Optional style improvements are retained as feedback. A factual,
+        # citation or user-requirement defect still blocks even at low severity.
+        issue.blocking = issue.severity != "info" and not (
+            issue.severity == "low" and issue.category in {"redundancy", "executive_readability"}
+            and not issue.requirement_id
+        )
+        if issue.issue_id and issue.issue_id not in prior:
+            errors.append("review_issue_identity_invalid")
+        if issue.issue_id in prior and issue.category != prior[issue.issue_id].get("category"):
+            errors.append("review_issue_identity_invalid")
+        if not issue.issue_id:
+            identity = [issue.category, issue.requirement_id, issue.citation_target,
+                        sorted(issue.evidence_ids), issue.location, issue.description]
+            issue.issue_id = "issue-" + _sha256(json.dumps(identity, ensure_ascii=False))[:16]
+    required = {identity for identity, item in prior.items() if item.get("blocking", True)}
+    by_id = {item.issue_id: item for item in resolutions}
+    if len(by_id) != len(resolutions) or set(by_id) - set(prior) or required - set(by_id):
+        errors.append("review_issue_resolution_missing_or_invalid")
+    remaining = {item.issue_id for item in issues if item.blocking}
+    for identity, resolution in by_id.items():
+        if (resolution.status == "retained") != (identity in remaining):
+            errors.append("review_issue_resolution_missing_or_invalid")
+    return list(dict.fromkeys(errors))
 
 
 def _candidate_payload(raw: Any) -> Any:
@@ -713,6 +759,7 @@ def _safe_candidate_citations(
     numbered_references: Mapping[str, str],
     protocol_errors: list[str],
     evidence_references: Mapping[str, str] | None = None,
+    allow_internal_ids: bool = False,
 ) -> list[ReportCitationReview]:
     """Validate citation audit IDs and targets against accepted evidence.
 
@@ -797,7 +844,7 @@ def _safe_candidate_citations(
                     citation.supported = False
         elif not identity:
             evidence_marker = re.fullmatch(
-                r"\[(EV-[A-Za-z0-9_.:-]{1,199})\]", target, flags=re.IGNORECASE
+                r"\[((?:EV-|ev_|evidence-)[A-Za-z0-9_.:-]{1,199})\]" if allow_internal_ids else r"\[(EV-[A-Za-z0-9_.:-]{1,199})\]", target, flags=re.IGNORECASE
             )
             if evidence_marker:
                 marker_id = evidence_marker.group(1)
@@ -813,6 +860,9 @@ def _safe_candidate_citations(
                     )
                 identity = evidence_references.get(marker_id, "")
                 identities = [identity] if identity else []
+                if allow_internal_ids and marker_id not in ids:
+                    issues.append(_issue("citation_correctness", "critical", "Evidence marker is not bound to its own accepted evidence record.", citation_target=target))
+                    citation.supported = False
             else:
                 issues.append(
                     _issue(
@@ -958,7 +1008,7 @@ def _normalize_candidate(
     requirements = _requirements(state)
     issues = _safe_candidate_issues(model_review.issues)
     deterministic_failures: list[str] = []
-    if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+    if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
         if any(issue.severity != "info" and (
             not issue.description.strip() or not issue.revision_instruction.strip()
             or not (issue.location.strip() or issue.requirement_id or issue.evidence_ids or issue.citation_target)
@@ -1043,6 +1093,7 @@ def _normalize_candidate(
             allowed_references,
             issues,
             evidence_references=evidence_references,
+            allow_internal_ids=config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
             numbered_references=numbered_references,
             protocol_errors=deterministic_failures,
         )
@@ -1054,6 +1105,7 @@ def _normalize_candidate(
     # manually supplied draft safe to review.
     has_body_citation = check_citations(
         draft.markdown, allowed_references, valid_evidence_ids,
+        strict_body=config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
     ).has_body_citation
     if model_error is None and has_body_citation and not citations:
         issues.append(
@@ -1084,6 +1136,9 @@ def _normalize_candidate(
         if unknown_ids:
             deterministic_failures.append("unknown_evidence_id")
     # De-duplicate deterministic issue codes and deduplicate repeated findings.
+    fidelity = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"
+    if fidelity:
+        deterministic_failures.extend(_track_review_issues(issues, model_review.issue_resolutions, payload.get("previous_issues", [])))
     deterministic_failures = list(dict.fromkeys(deterministic_failures))
     hard_failures = list(
         dict.fromkeys(
@@ -1181,6 +1236,8 @@ def _normalize_candidate(
                 "review_protocol_invalid",
                 "review_dimensions_missing",
                 "review_issue_not_actionable",
+                "review_issue_identity_invalid",
+                "review_issue_resolution_missing_or_invalid",
                 "coverage_contract_rows_missing_or_invalid",
                 "citation_audit_missing",
                 "accepted_evidence_missing",
@@ -1194,6 +1251,8 @@ def _normalize_candidate(
             for issue in issues
         )
         decision = "fail" if protocol_failure else "revise"
+    elif fidelity and issues and not any(issue.blocking for issue in issues):
+        decision = "pass"
     elif model_decision == "fail":
         decision = "fail"
     elif any(issue.severity != "info" for issue in issues) or model_decision == "revise":
@@ -1214,6 +1273,9 @@ def _normalize_candidate(
         "evaluation_epoch": evaluation_epoch,
         "input_truncated": bool(payload.get("input_truncated")),
     }
+    if fidelity:
+        provenance["blocking_issue_ids"] = [issue.issue_id for issue in issues if issue.blocking]
+        provenance["advisory_issue_ids"] = [issue.issue_id for issue in issues if not issue.blocking]
     if model_error:
         provenance["model_error"] = model_error[:500]
     summary = str(model_review.summary or "").strip()[:2_000]
@@ -1232,6 +1294,7 @@ def _normalize_candidate(
         coverage=coverage,
         citation_audit=citations,
         issues=issues,
+        issue_resolutions=model_review.issue_resolutions if fidelity else [],
         summary=summary,
         status=status,
         hard_failures=hard_failures,
@@ -1276,8 +1339,25 @@ async def _invoke_reviewer(
            "describe the defect completely, and supply a concrete revision_instruction. "
            "An acknowledged limitation requiring no change is informational, not a revision request. "
            "A budget omission is an input limitation, not proof that the full evidence inventory lacks support."
-           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5" else ""),
+           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"} else ""),
     )
+    fidelity = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"
+    if fidelity:
+        messages[0].content += (
+            PROCEDURAL_COVERAGE_RULES
+            + "\nReview judgments are fallible. Check the original excerpts, including adjacent sentences "
+            "and complete table rows, before alleging missing support. Translation and faithful synthesis "
+            "need not repeat the source's wording. Do not infer absence from a short paraphrase. "
+            "Use citation_inventory to distinguish body citations from bibliography-only entries. "
+            "Resolve every previous blocking issue with an explanation of the actual draft change or "
+            "source evidence. Retain its issue_id only if the same defect remains; leave issue_id empty "
+            "for a new defect. New blocking issues must be concrete factual, citation, coverage, or "
+            "material readability defects. Optional rewording, acknowledged limitations needing no "
+            "change, and harmless repetition are informational or low editorial feedback. Do not "
+            "request new rephrasing of an already corrected passage without identifying a real defect. "
+            "For a verification or an observation requiring no correction, set requires_change=false "
+            "and severity=info. Do not label a statement you explicitly confirm as correct as a defect."
+        )
     schema = ReportReview
     if fields["_run_schema_version"] >= 18:
         scores = create_model("ReportDimensionScores", **{
@@ -1293,6 +1373,28 @@ async def _invoke_reviewer(
             citation_target=(str, Field(default="", description="Copy a citation target from the actual draft inventory, never a link inside an excerpt.", json_schema_extra={"enum": targets})),
             evidence_ids=(list[str], Field(default_factory=list, json_schema_extra={"items": {"type": "string", "enum": ids}})))
         schema = create_model("ReportReview", __base__=schema, citation_audit=(list[audit], Field(default_factory=list)))
+    if fidelity:
+        previous_ids = [item["issue_id"] for item in payload.get("previous_issues", [])]
+        required_ids = [row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])]
+        issue_schema = create_model("ReportReviewIssue", __base__=ReportReviewIssue,
+            requires_change=(bool, Field(..., description="Whether a real defect requires correction; a no-change verification must have severity info.")),
+            issue_id=(str, Field(default="", description="Copy the previous issue_id for the same unresolved defect; leave empty for a new defect.", json_schema_extra={"enum": ["", *previous_ids]})),
+            requirement_id=(str | None, Field(default=None, json_schema_extra={"enum": [None, *required_ids]})))
+        coverage_schema = create_model("ReportCoverageReview", __base__=ReportCoverageReview,
+            requirement_id=(str, Field(..., json_schema_extra={"enum": required_ids} if required_ids else None)))
+        # Pydantic consumes runtime type objects here, not static type aliases.
+        issue_list: Any = list[cast(Any, issue_schema)]
+        coverage_list: Any = list[cast(Any, coverage_schema)]
+        resolution_schema = create_model("ReportIssueResolution", __base__=ReportIssueResolution,
+            issue_id=(str, Field(..., json_schema_extra={"enum": previous_ids} if previous_ids else None)))
+        resolution_list: Any = list[cast(Any, resolution_schema)]
+        blocking_count = sum(bool(item.get("blocking", True)) for item in payload.get("previous_issues", []))
+        schema = create_model("ReportReview", __base__=schema,
+            issues=(issue_list, Field(default_factory=list)),
+            issue_resolutions=(resolution_list, Field(..., min_length=blocking_count, max_length=len(previous_ids),
+                description="Resolve every prior blocking issue explicitly. Copy its exact issue_id, use resolved or retained, and explain the evidence or draft change. An empty array is valid only when there are no previous blocking issues.")),
+            coverage=(coverage_list, Field(..., min_length=len(required_ids),
+                max_length=len(required_ids) if required_ids else None)))
     return await require_report_runtime().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=schema)
 
 
@@ -1321,6 +1423,7 @@ async def review_report(
             "review_dimensions_missing", "coverage_contract_rows_missing_or_invalid",
             "citation_audit_missing",
             "review_issue_not_actionable",
+            "review_issue_identity_invalid", "review_issue_resolution_missing_or_invalid",
         }
         attempts = min(2, max(1, cfg.max_structured_output_retries)) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else max(1, cfg.max_structured_output_retries)
         previous_errors = None
@@ -1343,6 +1446,7 @@ async def review_report(
                 "dimensions and citation audits. Every non-info issue needs a complete description, "
                 "a concrete location/reference and an actionable revision_instruction. "
                 "Do not invent IDs or omit mandatory rows.",
+                "previous_issues": payload.get("previous_issues", []),
             }}
     except Exception as exc:
         if isinstance(exc, NativeReportRuntimeMissing):
@@ -1422,7 +1526,7 @@ def _revision_prompt(
     extra = {"coverage_contract": state.get("coverage_contract", {}),
              "requirement_to_evidence": {k: v.get("evidence_ids", []) for k, v in state.get("coverage_ledger", {}).items()}} if modern else {}
     extra["_quality_policy_version"] = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
-    if extra["_quality_policy_version"] == "quality-gate-v5":
+    if extra["_quality_policy_version"] in {"quality-gate-v5", "quality-gate-v6"}:
         extra["required_requirement_ids"] = [rid for rid, ids in extra.get("requirement_to_evidence", {}).items() if ids]
     records = _state_evidence(state)
     if modern:
@@ -1450,7 +1554,12 @@ def _revision_prompt(
         guidance="Use report_evidence.records as accepted_evidence. Preserve the complete draft; "
         "state evidence gaps explicitly rather than inventing missing support."
         + (" Review suggestions are fallible: check all issue evidence, including explicit restrictions, "
-           "before applying a suggested factual correction." if modern else ""),
+           "before applying a suggested factual correction." if modern else "")
+        + (" Address every blocking issue_id with the smallest complete correction. Preserve correctly "
+           "supported facts even if a review paraphrase overlooks the next source sentence. "
+           "Do not replace a required input with an uncertainty disclaimer when the evidence supplies it. "
+           "Optional editorial advice must not trigger a wholesale rewrite or new unsupported claims."
+           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else ""),
     )
 
 

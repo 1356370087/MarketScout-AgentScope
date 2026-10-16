@@ -20,7 +20,8 @@ async def policy_text(models, role, *, system, prompt):
     messages = [SystemMsg("system", system), UserMsg("user", prompt)]
 
     async def handler(current_model, messages, **kwargs):
-        response = await current_model(messages=messages)
+        from open_deep_research.platform.accounting import transport_options
+        response = await current_model(messages=messages, **transport_options())
         if isinstance(response, ChatResponse):
             return response
         final = None
@@ -64,7 +65,8 @@ async def service_text(*, model, api_key, base_url, system, prompt, timeout=120,
     binding = CredentialBinding("knowledge-service", "service", owner, (model,),
                                 SecretStr(api_key), base_url, gateway=True)
     factory = ModelFactory(run, scope="service", owner=owner, bindings={role: binding})
-    token = current_accounting.set(ServiceAttemptAccounting(operation) if query_account.get() else None)
+    from open_deep_research.platform.runtime import enabled as platform_enabled
+    token = current_accounting.set(ServiceAttemptAccounting(operation) if query_account.get() or platform_enabled() else None)
     try:
         factory.build(role).stream = False
         return await policy_text(factory, role, system=system, prompt=prompt)

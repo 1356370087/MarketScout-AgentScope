@@ -298,6 +298,11 @@ class ModelFactory:
             (entry["input_cost_per_token"] * 1_000_000, entry["output_cost_per_token"] * 1_000_000)
             if entry else None
         )
+        from open_deep_research.platform import runtime as platform_runtime
+        if instance.accounting_price is None and platform_runtime.enabled():
+            from open_deep_research.platform.accounting import model_price
+            instance.accounting_price = model_price(descriptor["model"], {
+                "runtime": {"model_costs_per_million": self.run.get("model_costs_per_million")}, "litellm": {}})
         self._models[cache_key] = instance
         return instance
 

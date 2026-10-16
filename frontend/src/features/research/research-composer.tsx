@@ -27,6 +27,9 @@ import { materialScopeFromParams, type MaterialScope } from "@/lib/knowledge-sco
 import { Button } from "@/components/ui/button";
 import { researchApi } from "@/lib/api";
 import { loadPublicationTheme, loadSettings } from "@/lib/settings";
+import { sanitizePublicationTheme, defaultPublicationTheme } from "@/lib/settings";
+import { platformApi, money, type ConfigPreview } from "@/lib/platform";
+import type { PublicationTheme } from "@/lib/types";
 import { buildSourceRefs, isPublishedDocument, sourceSelectionIsValid } from "@/lib/source-selection";
 import type { ResearchDocument, SourceMode, SourceSelection } from "@/lib/types";
 
@@ -84,7 +87,15 @@ export function ResearchComposer() {
   const [researchMode, setResearchMode] = useState<string>();
   const [teamMode, setTeamMode] = useState<string>();
   const [createError, setCreateError] = useState("");
-  const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: researchApi.capabilities, retry: false });
+  const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: researchApi.capabilities, retry: false,
+    refetchInterval: (query) => (query.state.data as { runtime_ready?: boolean; configuration_required?: boolean } | undefined)?.runtime_ready === false && !(query.state.data as { configuration_required?: boolean } | undefined)?.configuration_required ? 2000 : false });
+  const managed = (capabilities.data as { managed_configuration?: boolean } | undefined)?.managed_configuration === true;
+  const configurationRequired = (capabilities.data as { configuration_required?: boolean } | undefined)?.configuration_required === true;
+  const runtimeReady = (capabilities.data as { runtime_ready?: boolean } | undefined)?.runtime_ready !== false;
+  const preferences = useQuery({ queryKey: ["platform", "preferences"], queryFn: platformApi.preferences, enabled: managed });
+  const profiles = useQuery({ queryKey: ["platform", "configurations"], queryFn: platformApi.configurations, enabled: managed });
+  const [profile, setProfile] = useState<string | undefined>();
+  const [confirmation, setConfirmation] = useState<{ preview: ConfigPreview; configurable: Record<string, unknown>; query: string; selection: SourceSelection; theme: PublicationTheme } | null>(null);
   const documentCapability = (capabilities.data?.features as { document_research?: { enabled?: boolean; database?: string } } | undefined)?.document_research;
   const docsEnabled = Boolean(documentCapability?.enabled && documentCapability.database === "ready");
   const documents = useQuery({
@@ -106,8 +117,8 @@ export function ResearchComposer() {
   const retrieval = { version_mode: materialScope.version_mode, as_of_published: materialScope.as_of_published, as_of_valid: materialScope.as_of_valid, filters: materialScope.filters, profile_version: materialScope.profile_version };
   const selection: SourceSelection = { mode, sources: refs, ...(mode !== "web" ? { retrieval } : {}) };
   const [storedSettings, setStoredSettings] = useState<Record<string, unknown>>({});
-  useEffect(() => { setStoredSettings(loadSettings()); }, []);
-  const activeSettings = { ...capabilities.data?.defaults, ...storedSettings };
+  useEffect(() => { queueMicrotask(() => setStoredSettings(loadSettings())); }, []);
+  const activeSettings = { ...capabilities.data?.defaults, ...(managed ? preferences.data?.configurable : storedSettings) };
   const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
   const selectedTeamMode = teamMode ?? String(activeSettings.team_execution_mode ?? "direct");
   const sourceLabel = modes.find((item) => item.value === mode)?.label ?? mode;
@@ -126,6 +137,14 @@ export function ResearchComposer() {
     setCreating(true);
     setCreateError("");
     try {
+      if (managed) {
+        const configurable = { ...preferences.data?.configurable,
+          ...(researchMode === undefined ? {} : { enable_async_research: selectedResearchMode !== "sync", async_research_mode: selectedResearchMode === "teams" ? "teams" : "collaborator" }),
+          ...(teamMode === undefined ? {} : { team_execution_mode: selectedTeamMode }) };
+        const preview = await platformApi.preview((profile ?? preferences.data?.profile_revision_id) || null, configurable);
+        setConfirmation({ preview, configurable, query: researchQuery, selection, theme: sanitizePublicationTheme(preferences.data?.publication_theme, defaultPublicationTheme) });
+        return;
+      }
       const created = await researchApi.createRun(
         researchQuery,
         { ...loadSettings(capabilities.data?.defaults), enable_async_research: selectedResearchMode !== "sync",
@@ -142,7 +161,22 @@ export function ResearchComposer() {
     }
   }
 
+  async function confirmResearch() {
+    if (!confirmation) return;
+    setCreating(true); setCreateError("");
+    try {
+      const { query: question, configurable, preview, selection: sources, theme } = confirmation;
+      const created = await researchApi.createRun(question, configurable, question.slice(0, 80), sources, theme,
+        { profile_revision_id: preview.profile_revision_id, expected_platform_revision: preview.platform_revision_id });
+      router.push(`/research/${created.run_id}`);
+    } catch (cause) { setCreateError(cause instanceof Error ? cause.message : "研究任务创建失败"); }
+    finally { setCreating(false); }
+  }
+
   return <form className="research-composer research-composer-expanded" onSubmit={submit}>
+    {managed && !configurationRequired && !runtimeReady && <p className="form-alert" role="status">运行服务正在准备配置，请稍候。</p>}
+    {configurationRequired && <p className="form-alert" role="status">平台正在等待首次配置。请管理员进入<Link href="/admin/configurations">配置中心</Link>完成发布。</p>}
+    {managed && <label className="composer-profile">研究配置<select aria-label="研究配置模板" value={profile ?? preferences.data?.profile_revision_id ?? ""} onChange={(event) => setProfile(event.target.value)}><option value="">当前平台默认配置</option>{profiles.data?.items.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.number} · {item.scope === "personal" ? "个人" : "平台"}</option>)}</select></label>}
     <div className="composer-preferences"><SurfaceDialog title="研究偏好" description="本次研究使用的执行方式。" trigger={<button type="button" className="ui-text-button"><SlidersHorizontal size={15} /> 研究偏好</button>}>
       <ChoiceGroup label="研究执行模式" value={selectedResearchMode} onChange={setResearchMode} options={[{ value: "sync", label: "同步研究", description: "按研究计划执行" }, { value: "collaborator", label: "异步委派", description: "由 Lead 分配研究任务" }, { value: "teams", label: "团队协作", description: "多个成员协同研究" }]} />
       {selectedResearchMode === "teams" && <ChoiceGroup label="团队默认执行方式" value={selectedTeamMode} onChange={setTeamMode} options={[{ value: "direct", label: "直接执行" }, { value: "plan_approval", label: "先规划，由 Lead 审批" }]} />}
@@ -201,9 +235,12 @@ export function ResearchComposer() {
         <span className="source-ready"><i />{sourceLabel}</span>
         <Link href="/settings" title="打开研究配置"><SlidersHorizontal size={14} /><span>{activeSettings.report_type && activeSettings.report_type !== "default" ? String(activeSettings.report_type) : "标准报告"} · {activeSettings.enable_human_in_loop ? "人工复核" : "自动执行"}</span></Link>
       </div>
-      <Button className="composer-send" type="submit" disabled={creating || !query.trim() || !validSources} aria-label="启动研究">
+      <Button className="composer-send" type="submit" disabled={creating || !query.trim() || !validSources || configurationRequired || !runtimeReady || managed && !preferences.data} aria-label="启动研究">
         <span>{creating ? "正在创建" : "启动研究"}</span><ArrowUp size={17} />
       </Button>
     </div>
+    <SurfaceDialog title="确认本次研究配置" description="确认后，研究会记录并使用当前配置版本。" open={!!confirmation} onOpenChange={(open) => { if (!open && !creating) setConfirmation(null); }} trigger={<span hidden />}>
+      {confirmation && <><dl className="composer-config-summary"><div><dt>研究模型</dt><dd>{String(confirmation.preview.configurable.research_model ?? "平台默认")}</dd></div><div><dt>单次费用上限</dt><dd>{money(confirmation.preview.limits.max_run_cost_micro_usd)}</dd></div><div><dt>人工审批</dt><dd>{confirmation.preview.configurable.enable_human_in_loop ? "已启用" : "自动执行"}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}</dd></div></dl><p>配置版本：{confirmation.preview.profile_revision_id}</p>{createError && <p role="alert" className="form-alert error">{createError}</p>}<div className="ui-actions"><button type="button" className="primary" disabled={creating} onClick={() => void confirmResearch()}>确认配置并启动</button><button type="button" className="secondary" disabled={creating} onClick={() => setConfirmation(null)}>返回调整</button></div></>}
+    </SurfaceDialog>
   </form>;
 }

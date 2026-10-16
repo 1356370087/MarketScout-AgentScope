@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { interruptNativeRun } from "./native-faults";
+import { authenticatedRequest } from "./authenticated-request";
 
 // 仅在显式指定的真实原生部署执行；每个来源模式都必须提供真实可访问资料。
 test.skip(process.env.E2E_NATIVE_FULL !== "true", "设置 E2E_NATIVE_FULL=true 执行真实模型与搜索验收");
@@ -17,13 +18,14 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
     if (process.env.E2E_ADMIN_EMAIL && process.env.E2E_ADMIN_PASSWORD) {
       await page.goto("/login");
       await page.getByLabel("工作邮箱").fill(process.env.E2E_ADMIN_EMAIL);
-      await page.getByLabel("密码").fill(process.env.E2E_ADMIN_PASSWORD);
+      await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_ADMIN_PASSWORD);
       await page.getByRole("button", { name: "进入研究台" }).click();
       await expect(page).toHaveURL(/\/research\/new$/);
     } else {
       expect(process.env.NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS).toBe("true");
     }
-    const created = await page.request.post("/api/research/runs", { data: {
+    const api = authenticatedRequest(page);
+    const created = await api.post("/api/research/runs", { data: {
       messages: [{ role: "user", content: process.env.E2E_RESEARCH_QUESTION ?? "基于所选资料比较 PostgreSQL 17 与 16 的查询规划变化，给出可核验引用。" }],
       source_selection: selection,
       configurable: { allow_clarification: false, enable_human_in_loop: true, enable_async_research: true, run_deadline_seconds: runSeconds, ...overrides },
@@ -37,7 +39,7 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
       await page.goto(`/research/${runId}`);
       let snapshot;
       await expect.poll(async () => {
-        const response = await page.request.get(`/api/research/runs/${runId}`);
+        const response = await api.get(`/api/research/runs/${runId}`);
         expect(response.ok()).toBeTruthy();
         snapshot = await response.json();
         expect(snapshot.engine).toBe("agentscope");
@@ -49,7 +51,7 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
             // 等待旧租约自然过期，不修改 TTL、不清空 fence。
             await page.waitForTimeout(35_000);
             await expect.poll(async () => {
-              try { return (await page.request.post(`/api/research/runs/${runId}/resume`, { data: {} })).status(); }
+              try { return (await api.post(`/api/research/runs/${runId}/resume`, { data: {} })).status(); }
               catch { return 0; }
             }, { timeout: 90_000 }).toBe(202);
             await page.reload();
@@ -67,7 +69,7 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
       }, { timeout: waitSeconds * 1000, intervals: [2000] }).toBe("completed");
       completed = true;
       if (process.env.E2E_FAULT_SCENARIO) expect(faultInjected, "故障窗口没有触发，不能记为通过").toBe(true);
-      const final = await (await page.request.get(`/api/research/runs/${runId}`)).json();
+      const final = await (await api.get(`/api/research/runs/${runId}`)).json();
       expect(final.output.markdown.length).toBeGreaterThan(100);
       expect(final.output.markdown).toMatch(/https?:\/\/|local:\/\/|\/documents\//);
       if (overrides.report_review_enabled) {
@@ -80,21 +82,21 @@ for (const mode of ["web", "documents", "hybrid", "specific"]) {
       const reportScreenshot = testInfo.outputPath("native-report.png");
       await page.screenshot({ path: reportScreenshot, fullPage: true });
       await testInfo.attach("native-report", { path: reportScreenshot, contentType: "image/png" });
-      const usageResponse = await page.request.get(`/api/research/runs/${runId}/usage`);
+      const usageResponse = await api.get(`/api/research/runs/${runId}/usage`);
       expect(usageResponse.ok()).toBeTruthy();
       const usage = await usageResponse.json();
       expect(usage.totals.calls.attempts).toBeGreaterThan(0);
-      const publicationResponse = await page.request.post(`/api/research/runs/${runId}/publications`, { data: { format: "markdown" } });
+      const publicationResponse = await api.post(`/api/research/runs/${runId}/publications`, { data: { format: "markdown" } });
       expect(publicationResponse.ok(), await publicationResponse.text()).toBeTruthy();
       const publication = await publicationResponse.json();
-      await expect.poll(async () => (await (await page.request.get(`/api/research/runs/${runId}/publications/${publication.publication_id}`)).json()).status,
+      await expect.poll(async () => (await (await api.get(`/api/research/runs/${runId}/publications/${publication.publication_id}`)).json()).status,
         { timeout: 120_000 }).toBe("completed");
-      const download = await page.request.get(`/api/research/runs/${runId}/publications/${publication.publication_id}/download`);
+      const download = await api.get(`/api/research/runs/${runId}/publications/${publication.publication_id}/download`);
       expect(download.ok()).toBeTruthy();
       expect((await download.body()).length).toBeGreaterThan(100);
       await testInfo.attach("native-e2e-evidence", { body: JSON.stringify({ runId, mode, engine: final.engine, usage, publication }), contentType: "application/json" });
     } finally {
-      if (!completed) await page.request.post(`/api/research/runs/${runId}/cancel`);
+      if (!completed) await api.post(`/api/research/runs/${runId}/cancel`);
     }
   });
 }

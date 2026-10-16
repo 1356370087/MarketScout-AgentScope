@@ -150,8 +150,10 @@ class NativeResearchStages:
         modern = self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 18
         if modern:
             prompt += "\nReturn requirements quoted verbatim from the ORIGINAL user messages, not the brief. Split factual questions from recommendations, format, source counts, research dates and no-fabrication constraints. Include every core question. Classify recommendations/format as deliverable and source/execution rules as process. Quote mixed clauses as separate exact spans. Identify entities named by the user; propose their official entry URLs without certifying ownership."
-            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
                 prompt += "\nFor each compound factual requirement, populate facets with exact substrings for its independently answerable aspects. Cover every word/qualifier of the original clause except numbering, punctuation and conjunctions; do not split an indivisible technical term. For comparisons, entities must include each explicitly compared subject. Each subject must answer every applicable factual aspect; one product's evidence cannot substitute for another's."
+            if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+                prompt += "\nKeep a hypothetical condition together with the question it governs. A user saying 'if/when X, does Y?' is not asserting that X always occurs or asking you to prove X. Likewise, a quoted claim to verify or correct is not a required true conclusion. Do not split away if/when, negation, whether, or correction intent."
         result = await self.models.structured(
             "supervisor",
             prompt,
@@ -167,8 +169,9 @@ class NativeResearchStages:
         if modern:
             from open_deep_research.quality.planning import compile_planned_requirements
             contract = compile_planned_requirements(state.messages, result.requirements, brief=result.research_brief,
-                atomic=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5",
-                entities=result.entities)
+                atomic=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"},
+                entities=result.entities,
+                preserve_conditions=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6")
         else:
             contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())
@@ -298,6 +301,8 @@ class NativeResearchStages:
         state.final_report = report
 
     async def memory_extract_and_write(self, state):
+        if state.completion_outcome.get("reason") == "deadline_exceeded":
+            return
         cfg = self._memory_scope()
         if (
             cfg is None

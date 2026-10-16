@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import hashlib
 import json
@@ -396,7 +398,7 @@ class GatewayRuntime:
         self._egress_mode_cache: dict[str, tuple[float, str | None]] = {}
         self.nonces = NonceReplayCache()
         self.internal = SandboxInternalClient(
-            os.getenv("SANDBOX_API_INTERNAL_URL", "http://api:2024"),
+            config_getenv("SANDBOX_API_INTERNAL_URL", "http://api:2024"),
             configurable.sandbox_root_signing_key or "",
         )
 
@@ -2381,6 +2383,14 @@ class GatewayRuntime:
         except Exception as exc:
             # Once dispatched, only an explicit provider rejection proves that
             # no billable response was produced. Transport/receipt failures do not.
+            if not dispatched and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {408, 429}:
+                detail = exc.response.json().get("detail", "")
+                if isinstance(detail, str) and (detail == "deadline_exceeded" or detail.startswith("budget_exhausted:")):
+                    # The authority refused reservation. Retrying the queued
+                    # signed request reuses its nonce; transitioning a missing
+                    # receipt would turn a definite refusal into a fake unknown.
+                    return GatewayModelOutcomeV2(logical_operation_id=request.logical_operation_id,
+                        status="failed", requested_model=request.model, error_code=detail)
             definite_rejection = isinstance(exc, ModelGatewayError) and exc.code in {
                 "invalid_request", "authentication", "model_unavailable",
                 "budget_or_rate_limit", "gateway_budget_exceeded",
@@ -2462,7 +2472,13 @@ def create_gateway_app(
         evict = getattr(runtime, "evict_expired_runs", None)
         if callable(evict):
             evict()
-        return {"status": "ok", "registered_runs": len(runtime.runs)}
+        from open_deep_research.platform import runtime as platform_runtime
+        response = {"status": "ok", "registered_runs": len(runtime.runs)}
+        if platform_runtime.enabled():
+            from open_deep_research.sandbox.schema import load_policy_bundle, policy_digest
+            response["policy_digest"] = policy_digest(load_policy_bundle(runtime.configurable.sandbox_policy_path))
+            response["platform_revision_id"] = (platform_runtime.snapshot() or {}).get("revision_id")
+        return response
 
     @app.post("/internal/v1/runs/register")
     async def register_run(request: GatewayRunRegistrationRequest) -> dict[str, str]:
@@ -2596,12 +2612,12 @@ def main() -> None:
     configurable = Configuration.from_runnable_config(None)
     if not configurable.sandbox_enabled:
         raise SystemExit("SANDBOX_ENABLED must be true for sandbox-gateway")
-    if os.getenv("SANDBOX_GATEWAY_FAKE_PROVIDER", "false").lower() in {
+    if config_getenv("SANDBOX_GATEWAY_FAKE_PROVIDER", "false").lower() in {
         "1",
         "true",
         "yes",
         "on",
-    } and os.getenv("APP_ENV", "production").lower() not in {
+    } and config_getenv("APP_ENV", "production").lower() not in {
         "development",
         "test",
     }:
@@ -2617,13 +2633,13 @@ def main() -> None:
         proxy_server = await asyncio.start_server(
             proxy.handle,
             "0.0.0.0",
-            int(os.getenv("SANDBOX_GATEWAY_PROXY_PORT", "8080")),
+            int(config_getenv("SANDBOX_GATEWAY_PROXY_PORT", "8080")),
         )
         server = uvicorn.Server(
             uvicorn.Config(
                 create_gateway_app(runtime),
                 host="0.0.0.0",
-                port=int(os.getenv("SANDBOX_GATEWAY_PORT", "8081")),
+                port=int(config_getenv("SANDBOX_GATEWAY_PORT", "8081")),
                 log_level="info",
             )
         )

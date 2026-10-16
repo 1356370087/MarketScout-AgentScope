@@ -17,8 +17,8 @@ RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 # Match the API owner so private (0600) uploads remain readable on the shared volume.
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \
-    && mkdir -p /data/documents \
-    && chown insightforge:insightforge /data/documents
+    && mkdir -p /data/documents /data/platform-config \
+    && chown insightforge:insightforge /data/documents /data/platform-config
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 USER insightforge:insightforge
 CMD ["python", "-m", "open_deep_research.documents.worker"]

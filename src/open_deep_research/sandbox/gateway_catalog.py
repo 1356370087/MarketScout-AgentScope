@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 import secrets
@@ -116,8 +118,8 @@ async def load_gateway_catalog_tools(
     *, gateway_url: str | None = None, task_token: SecretStr | None = None,
 ) -> list[GatewayCatalogTool]:
     """Fetch replay-protected dynamic schemas from the authoritative Gateway."""
-    gateway_url = gateway_url if gateway_url is not None else os.getenv("SANDBOX_GATEWAY_URL", "")
-    task_token = task_token.get_secret_value() if task_token is not None else os.getenv("SANDBOX_TASK_TOKEN", "")
+    gateway_url = gateway_url if gateway_url is not None else config_getenv("SANDBOX_GATEWAY_URL", "")
+    task_token = task_token.get_secret_value() if task_token is not None else config_getenv("SANDBOX_TASK_TOKEN", "")
     if not gateway_url or not task_token:
         return []
     metadata = config.get("metadata", {})

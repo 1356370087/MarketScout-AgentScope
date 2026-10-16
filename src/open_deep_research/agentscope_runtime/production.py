@@ -79,6 +79,15 @@ class ProductionRunFactory:
 
     @asynccontextmanager
     async def __call__(self, snapshot, run_config, recovery):
+        from open_deep_research.platform import runtime as platform_runtime
+        frozen = run_config.compatibility_projection().get("metadata", {}).get("platform_snapshot")
+        secrets = await platform_runtime.credential_values(frozen, recovery.lease.user_id) if frozen else None
+        with platform_runtime.scope(frozen, recovery.lease.user_id, secrets):
+            async with self._open(snapshot, run_config, recovery) as pipeline:
+                yield pipeline
+
+    @asynccontextmanager
+    async def _open(self, snapshot, run_config, recovery):
         principal = await self.authorize(recovery.lease.user_id, snapshot.application)
         if (
             principal is None

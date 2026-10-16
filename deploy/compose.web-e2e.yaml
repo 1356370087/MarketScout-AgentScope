@@ -1,5 +1,5 @@
 # Web 与质量门禁实网验收；与根目录 docker-compose.yaml 合并使用。
-# 使用独立 Compose 项目和数据卷，同步研究不依赖远程 RocketMQ。
+# 使用独立 Compose 项目、远程验收数据库和工件卷，同步研究不依赖 RocketMQ。
 # 模型、搜索凭据沿用本地 .env；本配置不关闭质量门禁或网络审批。
 services:
   document-migrate:
@@ -8,14 +8,14 @@ services:
     image: ${COMPOSE_PROJECT_NAME}-api:latest
     env_file: .env
     environment:
-      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
     command: ["python", "-c", "import asyncio; from open_deep_research.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
     depends_on:
       document-migrate:
         condition: service_completed_successfully
     restart: "no"
-    networks: [document-internal]
+    networks: [default]
   api:
     volumes:
       - ${WEB_E2E_POLICY_PATH:-./.runs/web-docker-e2e-policy.toml}:/app/config/sandbox-policy.toml:ro
@@ -23,7 +23,7 @@ services:
       APP_ENV: development
       RESEARCH_ENGINE: native
       AS_NATIVE_RESOURCES: gateway
-      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
       AS_ROCKETMQ_ENDPOINT: ""
       ENABLE_ASYNC_RESEARCH: "false"

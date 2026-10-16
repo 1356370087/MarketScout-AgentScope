@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import json
 import logging
@@ -23,7 +25,7 @@ DEFAULT_LOG_PATH = "/workspace/logs/worker.log"
 
 
 def _setup_logging() -> None:
-    log_path = Path(os.getenv("SANDBOX_LOG_PATH", DEFAULT_LOG_PATH))
+    log_path = Path(config_getenv("SANDBOX_LOG_PATH", DEFAULT_LOG_PATH))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
@@ -55,8 +57,8 @@ def _deduplicate_iterations(items: list[dict]) -> list[dict]:
 
 async def _run() -> int:
     _setup_logging()
-    payload_path = Path(os.getenv("SANDBOX_TASK_PAYLOAD_PATH", DEFAULT_PAYLOAD_PATH))
-    result_path = Path(os.getenv("SANDBOX_RESULT_PATH", DEFAULT_RESULT_PATH))
+    payload_path = Path(config_getenv("SANDBOX_TASK_PAYLOAD_PATH", DEFAULT_PAYLOAD_PATH))
+    result_path = Path(config_getenv("SANDBOX_RESULT_PATH", DEFAULT_RESULT_PATH))
     config = None
 
     try:

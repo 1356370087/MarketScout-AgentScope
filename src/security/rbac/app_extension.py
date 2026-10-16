@@ -56,12 +56,14 @@ async def startup_checks(settings: IAMSettings | None = None) -> None:
             load_key_material(kind, settings=settings)  # type: ignore[arg-type]
         except KeyError_ as exc:
             raise StartupError(f"jwt_key_invalid:{kind}:{exc}") from exc
+    from open_deep_research.platform import runtime as platform_runtime
+    configured = not platform_runtime.enabled() or platform_runtime.snapshot() is not None
     if settings.is_production:
         if not settings.token_digest_secret:
             raise StartupError("production_requires_token_digest_secret")
-        if settings.open_registration and settings.mail_backend != "smtp":
+        if configured and settings.open_registration and settings.mail_backend != "smtp":
             raise StartupError("open_registration_requires_smtp")
-        if settings.mail_backend != "smtp":
+        if configured and settings.mail_backend != "smtp":
             raise StartupError("production_requires_smtp")
     logger.info("IAM startup checks passed.")
 

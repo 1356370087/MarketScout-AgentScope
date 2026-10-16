@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import json
 import logging
 import logging.config
@@ -64,10 +66,10 @@ class JSONFormatter(logging.Formatter):
 
 def configure_logging() -> None:
     """Configure root and uvicorn loggers from LOG_FORMAT."""
-    log_format = os.environ.get("LOG_FORMAT", "console").strip().lower()
+    log_format = config_environment.get("LOG_FORMAT", "console").strip().lower()
     if log_format not in {"console", "json"}:
         log_format = "console"
-    level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = config_environment.get("LOG_LEVEL", "INFO").upper()
     formatter = "json" if log_format == "json" else "console"
     logging.config.dictConfig(
         {

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import os
 import time
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from open_deep_research.api.activity_routes import _task_activity_preview_allowed
 from open_deep_research.configuration import Configuration
@@ -126,6 +128,7 @@ FRONTEND_EDITABLE_CONFIG_KEYS = (
 @router.get("/capabilities")
 async def get_capabilities(
     user: Principal = Depends(require_active_user),
+    request: Request = None,
 ) -> dict[str, Any]:
     """Return the safe, explicit browser-editable runtime contract."""
     schema = Configuration.model_json_schema()
@@ -136,10 +139,35 @@ async def get_capabilities(
         if key in properties
     }
     defaults = Configuration.from_runnable_config(None).model_dump(mode="json")
+    platform_extra = {}
+    from open_deep_research.platform import runtime as platform_runtime
+    if platform_runtime.enabled():
+        from open_deep_research.platform.store import get_store
+        store = get_store()
+        state = await store.state()
+        platform_extra = {"managed_configuration": True, "configuration_required": not state["active_revision"],
+                          "platform_revision_id": state["active_revision"], "locked_config_keys": {}}
+        if state["active_revision"]:
+            active = await store.active()
+            policy = active["document"].get("policy", {})
+            platform_extra["locked_config_keys"] = {key: "由平台策略锁定" for key in selected if not policy.get(key, {}).get("editable")}
+            selected = {key: value for key, value in selected.items() if policy.get(key, {}).get("editable")}
+            for key, value in selected.items():
+                rule = policy[key]
+                value = selected[key] = dict(value)
+                for bound in ("minimum", "maximum"):
+                    if rule.get(bound) is not None:
+                        value[bound] = rule[bound]
+                if rule.get("allowed") is not None:
+                    value["enum"] = rule["allowed"]
+        else:
+            selected = {}
     document_state = await document_health()
     document_settings = get_document_settings()
     publisher_settings = get_publisher_settings()
     return {
+        **platform_extra,
+        "runtime_ready": request is None or getattr(request.app.state, "native_research_service", None) is not None,
         "public_event_schema_version": PUBLIC_EVENT_SCHEMA_VERSION,
         "public_task_activity_schema_version": PUBLIC_TASK_ACTIVITY_SCHEMA_VERSION,
         "publication_schema_version": PUBLICATION_SCHEMA_VERSION,
@@ -154,7 +182,7 @@ async def get_capabilities(
             "subagent_activity": True,
             "subagent_activity_preview": _task_activity_preview_allowed(user),
             "report_review": bool(defaults.get("report_review_enabled", False)),
-            "local_dev_auth_bypass": os.environ.get("LOCAL_DEV_AUTH_BYPASS", "").lower()
+            "local_dev_auth_bypass": config_environment.get("LOCAL_DEV_AUTH_BYPASS", "").lower()
             in {"1", "true", "yes"},
             "document_research": document_state,
             "publications": {
@@ -200,7 +228,7 @@ async def get_capabilities(
             "properties": selected,
             "$defs": schema.get("$defs", {}),
         },
-        "defaults": {key: defaults[key] for key in selected if key in defaults},
+        "defaults": {key: defaults[key] for key in FRONTEND_EDITABLE_CONFIG_KEYS if key in defaults},
         "ui": {
             key: (Configuration.model_fields[key].json_schema_extra or {})
             for key in selected
@@ -304,6 +332,17 @@ async def get_model_catalog(
     user: Principal = Depends(require_active_user),
 ) -> dict[str, Any]:
     """Expose the gateway model catalog so settings can render safe dropdowns."""
+    from open_deep_research.platform import runtime as platform_runtime
+    if platform_runtime.enabled():
+        from open_deep_research.platform.model_routes import models
+        rows = await models(user)
+        result = [{"name": row["deployment"], "label": row["name"], "base_model": row["provider_model"],
+            "context_window": row["model_info"].get("max_input_tokens"),
+            "max_output_tokens": row["model_info"].get("max_output_tokens"),
+            "input_cost_per_token": row["model_info"].get("input_cost_per_token"),
+            "output_cost_per_token": row["model_info"].get("output_cost_per_token")} for row in rows["items"]]
+        return {"backend": "litellm", "models": result, "stale": False, "error": None,
+                "role_aliases": _model_catalog_role_aliases(Configuration.from_runnable_config(None))}
     configurable = Configuration.from_runnable_config(None)
     response: dict[str, Any] = {
         "backend": str(configurable.model_backend),

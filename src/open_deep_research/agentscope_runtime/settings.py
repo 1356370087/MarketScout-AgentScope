@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import os
 from dataclasses import dataclass
 
@@ -45,23 +47,23 @@ class ASRuntimeSettings:
     @classmethod
     def from_env(cls) -> ASRuntimeSettings:
         return cls(
-            database_url=os.environ.get("AS_DATABASE_URL") or None,
-            database_schema=os.environ.get("AS_DATABASE_SCHEMA")
+            database_url=config_environment.get("AS_DATABASE_URL") or None,
+            database_schema=config_environment.get("AS_DATABASE_SCHEMA")
             or DEFAULT_RUNTIME_SCHEMA,
             storage_auto_create=(
-                os.environ.get("AS_STORAGE_AUTO_CREATE", "").lower()
+                config_environment.get("AS_STORAGE_AUTO_CREATE", "").lower()
                 in ("1", "true", "yes")
             ),
-            bus_table_prefix=os.environ.get("AS_BUS_TABLE_PREFIX") or "as_bus_",
-            rocketmq_endpoint=os.environ.get("AS_ROCKETMQ_ENDPOINT", ""),
-            rocketmq_topic_prefix=os.environ.get(
+            bus_table_prefix=config_environment.get("AS_BUS_TABLE_PREFIX") or "as_bus_",
+            rocketmq_endpoint=config_environment.get("AS_ROCKETMQ_ENDPOINT", ""),
+            rocketmq_topic_prefix=config_environment.get(
                 "AS_ROCKETMQ_TOPIC_PREFIX", "insightforge_as"
             ),
-            rocketmq_group=os.environ.get("AS_ROCKETMQ_GROUP", ""),
-            rocketmq_access_key=os.environ.get("AS_ROCKETMQ_ACCESS_KEY", ""),
-            rocketmq_secret_key=os.environ.get("AS_ROCKETMQ_SECRET_KEY", ""),
-            rocketmq_tls=os.environ.get("AS_ROCKETMQ_TLS", "").lower() in ("true", "1"),
-            drain_timeout=float(os.environ.get("AS_DRAIN_TIMEOUT_SECONDS", "30")),
+            rocketmq_group=config_environment.get("AS_ROCKETMQ_GROUP", ""),
+            rocketmq_access_key=config_environment.get("AS_ROCKETMQ_ACCESS_KEY", ""),
+            rocketmq_secret_key=config_environment.get("AS_ROCKETMQ_SECRET_KEY", ""),
+            rocketmq_tls=config_environment.get("AS_ROCKETMQ_TLS", "").lower() in ("true", "1"),
+            drain_timeout=float(config_environment.get("AS_DRAIN_TIMEOUT_SECONDS", "30")),
         )
 
     @property

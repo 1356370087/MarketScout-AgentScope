@@ -8,12 +8,12 @@ import logging
 import re
 from collections.abc import Iterable, Mapping
 from datetime import date
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from open_deep_research.config_types import RuntimeConfig
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, Field, ValidationError, create_model, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from open_deep_research.configuration import QUALITY_POLICY_VERSION, Configuration
@@ -41,9 +41,18 @@ from open_deep_research.quality.contract import (
     task_coverage_contract,
 )
 from open_deep_research.quality.policy import (
+    PROCEDURAL_COVERAGE_RULES,
     QualityRigorPolicy,
     get_run_quality_rigor_policy,
     scores_meet_runtime_policy,
+)
+from open_deep_research.quality.procedures import (
+    PROCEDURE_CHECK_RULES,
+    ProcedureCoverage,
+    PrerequisiteActivation,
+    apply_procedure_gaps,
+    procedural_requirement_ids,
+    procedure_protocol_errors,
 )
 from open_deep_research.tool_taxonomy import classify_tool_name
 from open_deep_research.tools.governance import classify_llm_retryable_error
@@ -203,6 +212,9 @@ class HandoffAssessment(BaseModel):
         default_factory=list
     )
     caveats: list[str] = Field(default_factory=list)
+    # Required only in the v6 procedural schema; old frozen policies keep
+    # their original model schema and can still load their stored assessments.
+    procedure_checks: SkipJsonSchema[list[ProcedureCoverage]] = Field(default_factory=list)
     hard_rejection_reasons: SkipJsonSchema[list[str]] = Field(default_factory=list)
     reason: str
     deterministic_checks: SkipJsonSchema[dict[str, Any]] = Field(default_factory=dict)
@@ -397,7 +409,7 @@ requires them. Do not turn those optional examples into partial coverage or hard
 
 Requirements in shared_requirement_ids are co-owned by sibling research tasks and are aggregated at the run level afterwards. For a shared requirement, evaluate ONLY what this handoff's evidence_registry actually supports: if this handoff provides no evidence for it, omit the coverage row or mark it partial -- never mark it unsupported, never lower evidence_coverage because of it, and never list its absence in unsupported_claims or missing_information. Requirements in exclusive_requirement_ids must be fully supported by this handoff alone.
 The candidate compressed_research is available only to evaluate its deliverable structure, explicit guarantee/inference labels, limitations, and requested checklist. Treat every factual statement in it as unsupported unless it is grounded by an evidence_id in the source-scoped evidence_registry. A URL in compressed_research that violates the user's source constraint is a deterministic rejection; do not use it as support.
-evidence_registry is a size-bounded, citation-prioritized projection. evidence_registry_stats.truncated=true means unrelated eligible records were omitted and is not, by itself, a gap. explicit_citation_count and explicit_citation_included_count report whether IDs explicitly cited by the handoff fit; priority_matched_count and priority_included_count report broader claim/excerpt matches. Continue to require an included evidence_id for every factual claim you mark supported.
+evidence_registry is a size-bounded, citation-prioritized projection. evidence_registry_stats.truncated=true means eligible records were omitted; they may contain relevant facts. It is not, by itself, a gap. explicit_citation_count and explicit_citation_included_count report whether IDs explicitly cited by the handoff fit; priority_matched_count and priority_included_count report broader claim/excerpt matches. Continue to require an included evidence_id for every factual claim you mark supported.
 worker_budget_telemetry is deterministic runtime diagnostics, not factual evidence. When it reports zero physical fetches and budget-exhausted iterations, attribute the missing source content to the reported task/run fetch-budget boundary. Do not invent a source-authority rejection or retrieval failure that the payload does not report.
 input_truncated=true means optional records or advisory text were omitted for the evaluator budget. The complete handoff and owned requirements are preserved. An inability to review projected input is an input_projection gap, never a reason to retrieve the same material again.
 An input_projection gap requires omitted evidence records (evidence_registry_stats.truncated); insufficient traceable sources is a factual gap, not missing evaluator input.
@@ -436,6 +448,11 @@ Do not put that summary omission in missing_information or lower evidence_covera
 This does not excuse an unsupported claim, a contradiction, missing registry evidence,
 or a failed deterministic check. Inspect every summary assertion for groundedness;
 a summary's claim that evidence exists does not establish that evidence exists.
+An explanation may combine multiple cited source facts into a clearly identified
+inference. Do not demand a verbatim causal sentence when the premises and the
+inference are supported. Preserve the heading/strategy/version conditions of
+each excerpt. Every named parameter or probe needs its own behavior; mentioning
+the names without their distinct conditions does not satisfy that requirement.
 """
 
 
@@ -580,6 +597,7 @@ def _bounded_quality_payload(
                         "owned_requirement_ids",
                         "shared_requirement_ids",
                         "exclusive_requirement_ids",
+                        "procedural_requirement_ids",
                         "requirement_ids",
                         "evidence_ids",
                         "evidence_optional_requirement_ids",
@@ -817,6 +835,8 @@ def _bounded_evidence_records(
     *,
     max_chars: int,
     priority_text: str = "",
+    requirements: Any = (),
+    focus_text: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return strong, source-diverse evidence as a bounded JSON-native array.
 
@@ -983,6 +1003,12 @@ def _bounded_evidence_records(
             ),
         )
 
+    # A high confidence background sentence must not evict the formula or
+    # prerequisite that answers the owned question. Citation order stays fixed.
+    if requirements:
+        from open_deep_research.quality.planning import prioritize_evidence
+        candidate_order = prioritize_evidence(candidate_order, requirements, guidance=focus_text)
+        priority_records = []
     projected_records: list[dict[str, Any]] = []
     selected_identities: set[tuple[str, ...]] = set()
     used_chars = 2
@@ -1957,7 +1983,7 @@ async def evaluate_tool_results(
                 QUALITY_POLICY_VERSION,
             )
         )
-        in {"quality-gate-v4", "quality-gate-v5"}
+        in {"quality-gate-v4", "quality-gate-v5", "quality-gate-v6"}
     )
     use_v4_contract = (
         resolved_contract is not None
@@ -2005,6 +2031,8 @@ async def evaluate_tool_results(
     cumulative_evidence, evidence_stats = _bounded_evidence_records(
         scoped_evidence_registry,
         max_chars=evidence_budget,
+        requirements=[r for r in resolved_contract.requirements if r.requirement_id in owned_requirement_ids]
+        if resolved_contract and config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else (),
     )
     if evidence_stats["accepted_count"] and not cumulative_evidence:
         raise QualityInputBudgetExceeded("quality_evidence_record_does_not_fit")
@@ -2056,7 +2084,7 @@ async def evaluate_tool_results(
             raise ValueError(evaluation_input_error)
         result = await (evaluator or _evaluate_json)(
             ToolResultAssessment,
-            TOOL_RESULT_EVALUATION_PROMPT,
+            TOOL_RESULT_EVALUATION_PROMPT + (PROCEDURAL_COVERAGE_RULES if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else ""),
             payload,
             config,
             span_name="researcher.evaluate_tool_results",
@@ -2267,6 +2295,7 @@ async def evaluate_subagent_handoff(
     requirement_ids: list[str] | tuple[str, ...] | None = None,
     risk_profile: ResearchRiskProfile | None = None,
     evaluator=None,
+    _projection_focus: str = "",
 ) -> HandoffAssessment:
     """Run the Supervisor handoff gate over one completed subagent result."""
     configurable = Configuration.from_runnable_config(config)
@@ -2286,7 +2315,7 @@ async def evaluate_subagent_handoff(
                 QUALITY_POLICY_VERSION,
             )
         )
-        in {"quality-gate-v4", "quality-gate-v5"}
+        in {"quality-gate-v4", "quality-gate-v5", "quality-gate-v6"}
     )
     use_v4_contract = (
         resolved_contract is not None
@@ -2294,7 +2323,7 @@ async def evaluate_subagent_handoff(
     )
     reduce_decision = use_v4_contract and config.get("metadata", {}).get(
         "quality_policy_version", QUALITY_POLICY_VERSION
-    ) == "quality-gate-v5"
+    ) in {"quality-gate-v5", "quality-gate-v6"}
     evidence_optional_requirement_ids = (
         _evidence_optional_requirement_ids(resolved_contract)
         if use_v4_contract and resolved_contract is not None
@@ -2364,6 +2393,9 @@ async def evaluate_subagent_handoff(
             limit - compressed_reserve - raw_notes_reserve,
         ),
         priority_text=full_compressed_research,
+        focus_text=_projection_focus,
+        requirements=[r for r in resolved_contract.requirements if r.requirement_id in owned_requirement_ids]
+        if resolved_contract and config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else (),
     )
     if (evidence_stats["accepted_count"] and not evidence_registry
             or evidence_stats.get("explicit_citation_included_count", 0) < evidence_stats.get("explicit_citation_count", 0)):
@@ -2431,6 +2463,12 @@ async def evaluate_subagent_handoff(
                 ),
             }
         )
+    procedure_ids = procedural_requirement_ids([
+        row for row in payload.get("owned_requirements", [])
+        if row["requirement_id"] in exclusive_requirement_ids
+    ]) if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else []
+    if procedure_ids:
+        payload["procedural_requirement_ids"] = procedure_ids
     evaluation_input_error = contract_error
     if evaluation_input_error is None:
         try:
@@ -2447,10 +2485,18 @@ async def evaluate_subagent_handoff(
     try:
         if evaluation_input_error is not None:
             raise ValueError(evaluation_input_error)
+        handoff_schema = HandoffAssessment
+        if procedure_ids:
+            procedure_schema = create_model("ProcedureCoverage", __base__=ProcedureCoverage,
+                requirement_id=(str, Field(..., json_schema_extra={"enum": procedure_ids})),
+                activation_controls=(list[PrerequisiteActivation], Field(...)))
+            procedure_list: Any = list[cast(Any, procedure_schema)]
+            handoff_schema = create_model("ProceduralHandoffAssessment", __base__=HandoffAssessment,
+                procedure_checks=(procedure_list, Field(..., min_length=len(procedure_ids), max_length=len(procedure_ids))))
         result = await (evaluator or _evaluate_json)(
-            HandoffAssessment,
+            handoff_schema,
             (
-                HANDOFF_EVALUATION_PROMPT_V4 + (
+                HANDOFF_EVALUATION_PROMPT_V4 + (PROCEDURAL_COVERAGE_RULES if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else "") + (PROCEDURE_CHECK_RULES if procedure_ids else "") + (
                     "\nFor a requirement with a subject, evaluate that named entity alone. "
                     "Each atomic aspect must be supported independently; another entity or another aspect cannot fill its gap. "
                     "An instruction to state uncertainty, avoid fabrication, or qualify recommendations does not waive factual research requirements. "
@@ -2475,9 +2521,33 @@ async def evaluate_subagent_handoff(
                 evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["evidence_registry"]),
                 evidence_truncated=bool(payload["evidence_registry_stats"]["truncated"]),
                 reduce_decision=reduce_decision,
-            ),
+            ) + (procedure_protocol_errors(candidate.procedure_checks, procedure_ids,
+                [str(e.get("evidence_id")) for e in payload["evidence_registry"]]) if procedure_ids else []),
         )
         result = HandoffAssessment.model_validate(result)
+        # Before asking researchers to fetch the same source again, inspect a
+        # second bounded view of the evidence already in this handoff. This is
+        # a single re-evaluation with identical source/coverage/score rules.
+        if (not _projection_focus and payload["evidence_registry_stats"]["truncated"]
+                and config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"):
+            gaps = [gap for gap in result.gaps if gap.kind in {"factual", "input_projection"}]
+            focus = " ".join(gap.reason + " " + gap.next_query for gap in gaps)
+            if focus:
+                alternative, _ = _bounded_evidence_records(scoped_handoff.get("evidence_registry", []),
+                    max_chars=max(500, limit - compressed_reserve), priority_text=full_compressed_research,
+                    requirements=payload.get("owned_requirements", []), focus_text=focus)
+                visible = {row["evidence_id"] for row in payload["evidence_registry"]}
+                if any(row["evidence_id"] not in visible for row in alternative):
+                    return await evaluate_subagent_handoff(research_topic, handoff, config,
+                        coverage_contract=coverage_contract, requirement_ids=requirement_ids,
+                        risk_profile=risk_profile, evaluator=evaluator, _projection_focus=focus)
+        if procedure_ids:
+            # Injected/offline evaluators use the same protocol as native calls.
+            errors = procedure_protocol_errors(result.procedure_checks, procedure_ids,
+                [str(e.get("evidence_id")) for e in payload["evidence_registry"]])
+            if errors:
+                raise QualityProtocolError(errors)
+            apply_procedure_gaps(result, payload["evidence_registry"])
         if any(gap.kind == "input_projection" for gap in result.gaps):
             raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
         result.caveats = list(dict.fromkeys([*result.caveats, *(gap.reason for gap in result.gaps if gap.kind == "advisory")]))

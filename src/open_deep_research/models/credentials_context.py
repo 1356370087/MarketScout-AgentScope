@@ -1,5 +1,7 @@
 """Framework-independent run credential context shared by model and embedding adapters."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import contextvars
 import os
 
@@ -28,7 +30,7 @@ def current_run_key() -> str:
 
 def current_gateway_key() -> str:
     """Return the Run Key, falling back to a restricted non-run service key."""
-    key = _run_key.get() or os.getenv("LITELLM_SERVICE_KEY")
+    key = _run_key.get() or config_getenv("LITELLM_SERVICE_KEY")
     if not key:
         raise RuntimeError("litellm_gateway_key_unavailable")
     return key

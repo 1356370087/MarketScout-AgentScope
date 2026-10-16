@@ -1,5 +1,7 @@
 """Checksummed knowledge archives and transactional, ID-remapped import."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import hashlib
 import io
 import json
@@ -181,7 +183,7 @@ def _read_archive(source):
     try:
         infos = archive.infolist()
         names = [i.filename for i in infos]
-        maximum = int(os.getenv("KNOWLEDGE_IMPORT_MAX_BYTES", str(10 * 1024**3)))
+        maximum = int(config_getenv("KNOWLEDGE_IMPORT_MAX_BYTES", str(10 * 1024**3)))
         if (
             len(infos) > 100000
             or len(set(names)) != len(names)

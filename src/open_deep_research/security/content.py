@@ -202,7 +202,7 @@ _DANGEROUS_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _EVENT_HANDLER_RE = re.compile(r"\s+on[a-z]+\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s>]+)", re.IGNORECASE)
-_DANGEROUS_SCHEME_RE = re.compile(r"(?i)(?:javascript|vbscript|data)\s*:")
+_DANGEROUS_SCHEME_RE = re.compile(r"(?i)(?<![\w])(?:javascript|vbscript|data)\s*:")
 
 
 def sanitize_report_markdown(markdown: str) -> str:

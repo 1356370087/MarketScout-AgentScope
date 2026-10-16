@@ -204,6 +204,9 @@ class SandboxChatModel(ChatModelBase):
         )
         record_shadow_model(outcome)
         if outcome.status != "completed":
+            if outcome.status == "failed" and outcome.error_code == "deadline_exceeded":
+                from open_deep_research.budgets import DeadlineExceeded
+                raise DeadlineExceeded("run deadline exceeded before gateway dispatch")
             if outcome.status == "failed" and outcome.error_code == GATEWAY_TOKEN_LIMIT_MARKER:
                 raise GatewayCallError(GATEWAY_TOKEN_LIMIT_MARKER, status_code=400)
             if (outcome.error_code or "").startswith("budget_exhausted:"):

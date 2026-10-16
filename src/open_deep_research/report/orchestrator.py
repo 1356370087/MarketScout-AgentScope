@@ -1330,7 +1330,9 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         )
         review = await review_report(
             draft,
-            state,
+            ({**state, "report_review_history": history}
+             if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"
+             else state),
             config,
             attempt=revision_count + 1,
         )
@@ -1360,6 +1362,10 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             config, "report.review.completed", draft, attempt=len(history),
             revision_count=revision_count, review=review,
         )
+        from .runtime import native_report
+        port = native_report.get()
+        if port is not None and hasattr(port, "check_recovery_budget"):
+            await port.check_recovery_budget(cfg)
         draft = await recover_report_draft(
             draft,
             state,

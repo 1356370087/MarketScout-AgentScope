@@ -22,6 +22,8 @@ replace that allowlist when provisioning a key for a narrower service.
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import argparse
 import asyncio
 import os
@@ -40,20 +42,20 @@ DEFAULT_TEAM = "insightforge-runs"
 def default_service_models() -> list[str]:
     """Resolve service model aliases from the deployment's current settings."""
     models = {
-        (os.getenv("EVALUATION_MODEL") or os.getenv("QUALITY_EVALUATION_MODEL")
+        (config_getenv("EVALUATION_MODEL") or config_getenv("QUALITY_EVALUATION_MODEL")
          or "if-evaluation-v1").strip(),
-        os.getenv("DOCUMENT_EMBEDDING_MODEL", "if-embedding-v1").strip(),
-        os.getenv("DOCUMENT_METADATA_SUGGESTION_MODEL", "").strip(),
-        os.getenv("KNOWLEDGE_ANSWER_MODEL", "").strip(),
-        os.getenv("KNOWLEDGE_RERANK_MODEL", "").strip(),
+        config_getenv("DOCUMENT_EMBEDDING_MODEL", "if-embedding-v1").strip(),
+        config_getenv("DOCUMENT_METADATA_SUGGESTION_MODEL", "").strip(),
+        config_getenv("KNOWLEDGE_ANSWER_MODEL", "").strip(),
+        config_getenv("KNOWLEDGE_RERANK_MODEL", "").strip(),
     }
     return sorted(model for model in models if model)
 
 
 def _build_settings() -> RunKeySettings:
     """Load only the admin connection fields; Run Key-only fields are inert."""
-    base_url = (os.getenv("LITELLM_BASE_URL") or "").strip()
-    master_key = (os.getenv("LITELLM_MASTER_KEY") or "").strip()
+    base_url = (config_getenv("LITELLM_BASE_URL") or "").strip()
+    master_key = (config_getenv("LITELLM_MASTER_KEY") or "").strip()
     if not base_url or not master_key:
         raise SystemExit(
             "missing LITELLM_BASE_URL / LITELLM_MASTER_KEY; source .env first"
@@ -61,7 +63,7 @@ def _build_settings() -> RunKeySettings:
     return RunKeySettings(
         base_url=base_url,
         master_key=master_key,
-        team_id=(os.getenv("LITELLM_RUN_TEAM_ID") or DEFAULT_TEAM).strip(),
+        team_id=(config_getenv("LITELLM_RUN_TEAM_ID") or DEFAULT_TEAM).strip(),
         encryption_key=b"\x00" * 32,  # unused by generate_service_key
         default_budget_micro_usd=1,
         maximum_budget_micro_usd=1,
@@ -104,12 +106,12 @@ async def mint(argv: list[str] | None = None) -> str:
     args = _parse_args(argv)
     budget_micro_usd = args.budget_micro_usd
     if budget_micro_usd is None:
-        raw = (os.getenv("LITELLM_SERVICE_BUDGET_MICRO_USD") or "").strip()
+        raw = (config_getenv("LITELLM_SERVICE_BUDGET_MICRO_USD") or "").strip()
         budget_micro_usd = int(raw) if raw else 20_000_000
     if budget_micro_usd < 1:
         raise SystemExit("budget must be positive")
     budget_duration = args.budget_duration or (
-        (os.getenv("LITELLM_SERVICE_BUDGET_DURATION") or "").strip() or "30d"
+        (config_getenv("LITELLM_SERVICE_BUDGET_DURATION") or "").strip() or "30d"
     )
     settings = _build_settings()
     client = LiteLLMKeyAdminClient(settings)

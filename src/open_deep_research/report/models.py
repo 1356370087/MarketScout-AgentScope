@@ -365,6 +365,10 @@ class ReportReviewIssue(BaseModel):
     citation_target: str | None = None
     description: str = ""
     revision_instruction: str = ""
+    issue_id: str = ""
+    # Assigned by the versioned reducer, never trusted from model output.
+    blocking: bool | None = None
+    requires_change: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -542,6 +546,14 @@ class ReportDimensionScores(BaseModel):
         }
 
 
+class ReportIssueResolution(BaseModel):
+    """A subsequent review must explain the disposition of an earlier defect."""
+
+    issue_id: str
+    status: Literal["resolved", "retained"]
+    explanation: str = Field(min_length=1, max_length=2000)
+
+
 class ReportReview(BaseModel):
     """Structured result of the final-report Reviewer gate.
 
@@ -558,6 +570,7 @@ class ReportReview(BaseModel):
     coverage: List[ReportCoverageReview] = Field(default_factory=list)
     citation_audit: List[ReportCitationReview] = Field(default_factory=list)
     issues: List[ReportReviewIssue] = Field(default_factory=list)
+    issue_resolutions: List[ReportIssueResolution] = Field(default_factory=list)
     summary: str = ""
     # ``status`` describes execution/availability and is deliberately separate
     # from the quality decision (e.g. a fail-open skipped review is degraded).

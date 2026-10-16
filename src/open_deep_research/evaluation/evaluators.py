@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import json
 import logging
 import os
@@ -490,7 +492,7 @@ def _evaluation_snapshot(outputs: dict[str, Any]) -> dict[str, Any] | None:
 
 def _evidence_context(outputs: dict[str, Any]) -> str:
     """Prefer bounded, accepted canonical evidence over legacy raw notes."""
-    max_chars = max(256, int(os.getenv("EVALUATION_EVIDENCE_MAX_CHARS", "120000")))
+    max_chars = max(256, int(config_getenv("EVALUATION_EVIDENCE_MAX_CHARS", "120000")))
     snapshot = _evaluation_snapshot(outputs)
     registry = (
         snapshot.get("evidence_registry", [])

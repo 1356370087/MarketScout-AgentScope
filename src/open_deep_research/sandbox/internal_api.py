@@ -567,6 +567,9 @@ def build_internal_sandbox_router(
             try:
                 return await ledger.reserve(request)
             except Exception as exc:
+                from open_deep_research.budgets import DeadlineExceeded
+                if isinstance(exc, DeadlineExceeded):
+                    raise HTTPException(408, "deadline_exceeded") from None
                 if hasattr(exc, "dimension"):
                     raise _budget_exhausted(exc) from None
                 raise
@@ -637,6 +640,9 @@ def build_internal_sandbox_router(
             try:
                 return await ledger.reserve_tool(request)
             except Exception as exc:
+                from open_deep_research.budgets import DeadlineExceeded
+                if isinstance(exc, DeadlineExceeded):
+                    raise HTTPException(408, "deadline_exceeded") from None
                 if hasattr(exc, "dimension"):
                     raise _budget_exhausted(exc) from None
                 if type(exc).__name__ == "UnknownOperation":

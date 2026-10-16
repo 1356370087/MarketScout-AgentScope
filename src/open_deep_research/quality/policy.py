@@ -8,6 +8,24 @@ from types import MappingProxyType
 from typing import Any
 
 
+PROCEDURAL_COVERAGE_RULES = (
+    "\nFor a user asking how to perform an operation, verify the required inputs, prerequisites, "
+    "ordering, result, and applicable limitations from the sources. A required argument, an enabling "
+    "setting, or a step needed for the result to work is a factual requirement, not an optional code example. "
+    "An exhaustive script, tuning guide, or unrelated deployment detail is not required unless requested. "
+    "If a procedure depends on a separately configured subsystem, merely naming that subsystem is not "
+    "enough: verify how it is enabled or obtained and any default that determines whether the operation "
+    "works. In open-web research, consult the authoritative configuration/reference page within the "
+    "approved source scope. In a fixed corpus, report an unresolved prerequisite when that information "
+    "is absent. This applies only to prerequisites of the requested operation, not unrelated setup. "
+    "Do not downgrade a previously identified mandatory gap to advisory merely because retrieval omitted it. "
+    "Distinguish 'the accepted excerpts do not establish this' from 'the official documentation says nothing'. "
+    "When a source is available but a required passage is missing, request targeted reading of that source "
+    "and name the missing fact; do not repeat broad searches or add requirements outside the user's scope. "
+    "A processed chunk and a high source count do not establish factual coverage."
+)
+
+
 class QualityEvaluationRigor(str, Enum):
     """User-selectable semantic approval rigor."""
 

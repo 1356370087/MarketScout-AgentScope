@@ -7,6 +7,29 @@ from agentscope.message import SystemMsg, TextBlock, UserMsg
 from open_deep_research.report.runtime import ReportMessage, native_report
 
 
+def _partial_report_update(snapshot, state, config, reason):
+    """Deliver only deterministic accepted evidence after a bounded stop."""
+    from open_deep_research.configuration import Configuration
+    from open_deep_research.report.orchestrator import _canonical_report_payload
+    from open_deep_research.report.profiles import get_profile
+    from open_deep_research.report.recovery import build_evidence_recovery_report
+
+    decision = {**snapshot.completion_outcome, "action": "complete_partial", "reason": reason,
+                "gaps": list(dict.fromkeys([*snapshot.completion_outcome.get("gaps", []),
+                    *(["report_review_not_completed"] if reason == "deadline_exceeded" else [])]))}
+    snapshot.completion_outcome = decision
+    state = {**state, "completion_outcome": decision, "completion_decision": decision}
+    cfg = Configuration.from_runnable_config(config)
+    markdown = build_evidence_recovery_report(state["evidence_registry"],
+        gaps=decision["gaps"], rejection_reasons=[reason], artifact_refs=[])
+    return {"final_report": markdown, "completion_decision": decision,
+        "quality_gate": {"status": "partial", "reason_codes": [reason]},
+        "report_review": {"status": "skipped", "skipped": True, "degraded": True,
+            "summary": "仅交付确定性证据恢复结果，未完成模型报告复核：" + reason,
+            "decision": "fail"} if cfg.report_review_enabled else None,
+        "canonical_report": _canonical_report_payload(markdown, state, config, get_profile(cfg.report_type), [])}
+
+
 class NativeReportWriter:
     """Preserve domain report rules while native models own calls and retries."""
 
@@ -51,7 +74,7 @@ class NativeReportWriter:
         return response.content
 
     async def __call__(self, snapshot, config):
-        from open_deep_research.report.orchestrator import build_report
+        from open_deep_research.report.orchestrator import build_report, _unwrap_update_value
 
         port = _ReportRun(self.models, snapshot)
         token = native_report.set(port)
@@ -86,29 +109,23 @@ class NativeReportWriter:
                 snapshot.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
                 or not state["evidence_registry"]
             ):
-                from open_deep_research.configuration import Configuration
-                from open_deep_research.report.orchestrator import (
-                    _canonical_report_payload,
-                )
-                from open_deep_research.report.profiles import get_profile
-                from open_deep_research.report.recovery import (
-                    build_evidence_recovery_report,
-                )
-
-
                 reason = snapshot.completion_outcome.get("reason", "insufficient_evidence")
-                markdown = build_evidence_recovery_report(state["evidence_registry"],
-                    gaps=snapshot.completion_outcome.get("gaps", []), rejection_reasons=[reason], artifact_refs=[])
-                update = {"final_report": markdown, "completion_decision": snapshot.completion_outcome,
-                    "quality_gate": {"status": "partial", "reason_codes": [reason]},
-                    "report_review": {"status": "skipped", "skipped": True, "degraded": True,
-                        "summary": "仅交付确定性证据恢复结果，未执行模型报告复核：" + reason,
-                        "decision": "fail"} if Configuration.from_runnable_config(config).report_review_enabled else None,
-                    "canonical_report": _canonical_report_payload(markdown, state, bound_config,
-                        get_profile(Configuration.from_runnable_config(config).report_type), [])}
+                update = _partial_report_update(snapshot, state, bound_config, reason)
             else:
-                update = await build_report(state, bound_config)
-            final_decision = update.get("completion_decision") or snapshot.completion_outcome
+                from open_deep_research.budgets import DeadlineExceeded
+                try:
+                    update = await build_report(state, bound_config)
+                except DeadlineExceeded as exc:
+                    # Unknown dispatched calls, fence loss and cancellation do
+                    # not enter this path. Never label an unreviewed draft pass.
+                    recovery = self.models.recovery
+                    if recovery is not None:
+                        if recovery.problem is not None and not isinstance(recovery.problem, DeadlineExceeded):
+                            raise
+                        recovery.problem = None
+                    reason = "report_time_reserved" if str(exc) == "report_time_reserved" else "deadline_exceeded"
+                    update = _partial_report_update(snapshot, state, bound_config, reason)
+            final_decision = _unwrap_update_value(update.get("completion_decision"), snapshot.completion_outcome)
             update["completion_status"] = "partial" if final_decision.get("action") == "complete_partial" else "success"
             update["stop_reason"] = final_decision.get("reason")
             update["uncovered_requirements"] = [row["requirement_id"] for row in snapshot.coverage_contract.get("requirements", [])
@@ -145,6 +162,17 @@ class _ReportRun:
 
     def active_span(self):
         return self
+
+    async def check_recovery_budget(self, cfg):
+        """Leave enough time for fallback writing, grounding and its review."""
+        import time
+        from open_deep_research.budgets import DeadlineExceeded
+        recovery = self.models.recovery
+        if recovery is None:
+            return
+        budget = await recovery.store.budget(recovery.lease.run_id, recovery.lease.user_id)
+        if budget.get("deadline") and budget["deadline"] - time.time() < 3 * cfg.model_call_timeout_seconds:
+            raise DeadlineExceeded("report_time_reserved")
 
     def score(self, name, value, *args, **kwargs):
         self.snapshot.agent_states.setdefault("report_metrics", {})[name] = value
@@ -190,6 +218,12 @@ class _ReportRun:
         factory = self.models.factory
         descriptor = factory.descriptor(role)
         recovery = self.models.recovery
+        if recovery is not None:
+            import time
+            from open_deep_research.budgets import DeadlineExceeded
+            budget = await recovery.store.budget(recovery.lease.run_id, recovery.lease.user_id)
+            if budget.get("deadline") and time.time() >= budget["deadline"]:
+                raise DeadlineExceeded("report call refused after run deadline")
         candidates = (
             [self.models.model_for(role, task_id)] if self.models.model_for else None
         )

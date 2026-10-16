@@ -42,7 +42,9 @@ evidence_ids. Never infer absence from a failed search. Put uncertainty in the
 qualification field and preserve unresolved user requirement IDs. Do not add
 URLs that are not present in the evidence records. A community_issue is
 anecdotal evidence and must never support a claim framed as an official
-guarantee."""
+guarantee. For a code example set code_language (for example yaml) and put the
+complete raw code in text, without Markdown fences. Never render code as a
+prose bullet or change operators and identifiers when quoting it."""
 _GROUNDING_PROMPT = """You are an independent fail-closed grounding judge.
 Check whether every factual statement in the draft is supported by its bound
 evidence records and whether qualifications accurately express uncertainty.
@@ -57,6 +59,7 @@ class EvidenceBoundClaim(BaseModel):
     text: str
     evidence_ids: list[str] = Field(min_length=1)
     qualification: str | None = None
+    code_language: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_+-]{1,32}$")
 
 
 class EvidenceSynthesisSection(BaseModel):
@@ -230,7 +233,7 @@ async def _invoke_draft(
     configurable = Configuration.from_runnable_config(config)
     schema = EvidenceSynthesisDraft
     instructions = _DRAFT_PROMPT
-    modern = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5"
+    modern = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}
     if modern:
         ids = tuple(row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])
                     if row.get("kind", "factual") == "factual")
@@ -321,9 +324,14 @@ def _render_draft(
                 if claim.qualification
                 else ""
             )
-            lines.append(
-                f"- {claim.text}{qualification} {citations}".rstrip()
-            )
+            if claim.code_language:
+                fence = "`" * max(3, 1 + max((len(m[0]) for m in re.finditer(r"`+", claim.text)), default=0))
+                lines.extend(["", fence + claim.code_language, claim.text, fence,
+                              "", f"{qualification} {citations}".strip(), ""])
+            elif claim.text.lstrip().startswith(("```", "~~~")):
+                lines.extend(["", claim.text, "", f"{qualification} {citations}".strip(), ""])
+            else:
+                lines.append(f"- {claim.text}{qualification} {citations}".rstrip())
         lines.append("")
     lines.extend(["## 限制与不确定性", ""])
     if draft.unresolved_requirements:
@@ -356,7 +364,8 @@ def _render_draft(
             if url
             else f"- [{evidence_id}] {title}"
         )
-    return sanitize_report_markdown("\n".join(lines).strip())
+    from .orchestrator import _transform_markdown_prose
+    return _transform_markdown_prose("\n".join(lines).strip(), sanitize_report_markdown)
 
 
 async def build_evidence_limited_report(

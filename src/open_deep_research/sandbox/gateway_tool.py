@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import hashlib
 import json
 import os
@@ -77,8 +79,8 @@ async def _call_gateway(
     context: ToolContext,
     *, gateway_url: str | None = None, task_token: SecretStr | None = None,
 ) -> GatewayToolOutcomeV1:
-    gateway_url = gateway_url if gateway_url is not None else os.environ.get("SANDBOX_GATEWAY_URL", "")
-    task_token = task_token.get_secret_value() if task_token is not None else os.environ.get("SANDBOX_TASK_TOKEN", "")
+    gateway_url = gateway_url if gateway_url is not None else config_environment.get("SANDBOX_GATEWAY_URL", "")
+    task_token = task_token.get_secret_value() if task_token is not None else config_environment.get("SANDBOX_TASK_TOKEN", "")
     if not gateway_url or not task_token:
         raise RuntimeError("sandbox_gateway_not_configured")
     headers = {

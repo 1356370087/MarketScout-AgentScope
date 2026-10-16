@@ -13,4 +13,4 @@ RUN addgroup --gid 65532 gateway && \
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER 65532:65532
 EXPOSE 8081
-ENTRYPOINT ["python", "-m", "open_deep_research.sandbox.gateway"]
+ENTRYPOINT ["python", "-m", "open_deep_research.platform.component_runner", "--component", "sandbox-gateway"]

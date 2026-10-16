@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import os
 from types import SimpleNamespace
@@ -30,7 +32,7 @@ def _task_activity_preview_allowed(user: Principal) -> bool:
     """Authorize bounded diagnostic previews without trusting the browser."""
     if local_dev_bypass_enabled():
         return True
-    enabled = os.environ.get("TASK_ACTIVITY_PREVIEW_ENABLED", "false").lower() in {
+    enabled = config_environment.get("TASK_ACTIVITY_PREVIEW_ENABLED", "false").lower() in {
         "1",
         "true",
         "yes",

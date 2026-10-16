@@ -52,7 +52,14 @@ def allowed_models(config):
     }
     values.update(model for chain in config.model_fallbacks.values() for model in chain)
     values.add(config.report_review_model or config.quality_evaluation_model)
-    values.add("if-fallback-v1")
+    from open_deep_research.platform import runtime as platform_runtime
+    if platform_runtime.enabled():
+        from open_deep_research.platform.components import model_aliases
+        aliases = model_aliases((platform_runtime.snapshot() or {}).get("document", {}))
+        if "if-fallback-v1" in aliases:
+            values.add(aliases["if-fallback-v1"])
+    else:
+        values.add("if-fallback-v1")
     for provider in config.resolved_search_providers:
         if provider.value in {"openai", "anthropic"}:
             try:

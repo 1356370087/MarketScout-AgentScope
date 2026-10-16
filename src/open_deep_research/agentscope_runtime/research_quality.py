@@ -153,7 +153,7 @@ class NativeResearchQuality:
         return {**result.model_dump(mode="json"), "accepted": accepted}
 
     async def handoff(self, outcome, contract):
-        return await evaluate_subagent_handoff(
+        result = await evaluate_subagent_handoff(
             outcome.research_topic,
             outcome.model_dump(mode="json"),
             self.config_provider(),
@@ -161,3 +161,24 @@ class NativeResearchQuality:
             requirement_ids=outcome.requirement_ids,
             evaluator=self.evaluate,
         )
+        config = self.config_provider()
+        supported = {row.requirement_id for row in result.requirement_coverage if row.status == "supported"}
+        # If every owned fact is already supported, a misleading compression
+        # should be repaired from the same evidence, not sent back to Web search.
+        if (config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"
+                and not result.accepted and result.unsupported_claims and not result.missing_information
+                and set(outcome.requirement_ids) <= supported
+                and not any(gap.kind != "advisory" for gap in result.gaps)
+                and result.deterministic_checks.get("passed") and not result.evaluator_error
+                and set(result.hard_rejection_reasons) <= {"unsupported_claims"}):
+            from .research_agents import ResearchAssignment, _evidence_handoff_notes
+            assignment = ResearchAssignment(task_id=outcome.task_id, research_topic=outcome.research_topic,
+                                            requirement_ids=outcome.requirement_ids)
+            outcome.assessment["summary_repair"] = {"attempts": 1, "reason": "supported_evidence_summary_mismatch",
+                "original_summary": outcome.compressed_research, "initial_assessment": result.model_dump(mode="json")}
+            outcome.compressed_research = await _evidence_handoff_notes(self.models, assignment, outcome.evidence_registry,
+                                                                       Configuration.from_runnable_config(config))
+            result = await evaluate_subagent_handoff(outcome.research_topic, outcome.model_dump(mode="json"), config,
+                coverage_contract=contract, requirement_ids=outcome.requirement_ids, evaluator=self.evaluate)
+            outcome.assessment["summary_repair"]["accepted"] = result.accepted
+        return result

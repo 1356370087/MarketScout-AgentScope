@@ -83,9 +83,14 @@ class MaintenanceModels:
                 owner="memory-maintenance",
                 bindings={"memory": binding},
             )
-        return await ResearchModels(self.factory).structured(
-            role, prompt, schema, state
-        )
+        from open_deep_research.platform.runtime import enabled as platform_enabled
+        from open_deep_research.agentscope_runtime.model_accounting import current_accounting
+        from open_deep_research.knowledge.accounting import ServiceAttemptAccounting
+        token = current_accounting.set(ServiceAttemptAccounting("memory_maintenance") if platform_enabled() else current_accounting.get())
+        try:
+            return await ResearchModels(self.factory).structured(role, prompt, schema, state)
+        finally:
+            current_accounting.reset(token)
 
     async def aclose(self):
         if self.factory:

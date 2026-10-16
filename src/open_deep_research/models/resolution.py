@@ -9,6 +9,7 @@ all of those layers without creating import cycles.
 from __future__ import annotations
 
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 from collections import ChainMap
 from collections.abc import Mapping
 from typing import Any
@@ -105,12 +106,12 @@ def _key_source(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     ):
         api_keys = configurable.get("apiKeys", {})
         return (
-            ChainMap(api_keys, os.environ)
+            ChainMap(api_keys, config_environment)
             if isinstance(api_keys, Mapping)
-            else os.environ
+            else config_environment
         )
-    if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() != "true":
-        return os.environ
+    if config_getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() != "true":
+        return config_environment
     if not isinstance(configurable, Mapping):
         return {}
     api_keys = configurable.get("apiKeys", {})
@@ -189,18 +190,18 @@ def resolve_base_url(
     if provider == "openai":
         # An explicit OpenAI-compatible endpoint is authoritative. Model-name
         # heuristics are only defaults for users who did not select an endpoint.
-        if openai_base_url := os.getenv("OPENAI_BASE_URL"):
+        if openai_base_url := config_getenv("OPENAI_BASE_URL"):
             return openai_base_url
         if is_dashscope_qwen(model_spec):
-            return os.getenv("DASHSCOPE_BASE_URL") or _DASHSCOPE_DEFAULT_BASE_URL
+            return config_getenv("DASHSCOPE_BASE_URL") or _DASHSCOPE_DEFAULT_BASE_URL
         if model.lower().startswith("deepseek"):
-            return os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+            return config_getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
         return None
     if provider == "deepseek":
-        return os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        return config_getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
     if provider == "anthropic":
-        return os.getenv("ANTHROPIC_BASE_URL")
-    return os.getenv(f"{provider.upper()}_BASE_URL")
+        return config_getenv("ANTHROPIC_BASE_URL")
+    return config_getenv(f"{provider.upper()}_BASE_URL")
 
 
 def resolve_compatibility_kwargs(

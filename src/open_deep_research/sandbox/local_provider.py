@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
+
 import asyncio
 import os
 import shutil
@@ -19,9 +21,9 @@ MAX_COMMAND_OUTPUT_BYTES = 1_000_000
 
 def task_workspace(config: RuntimeConfig) -> Path:
     """Resolve the task-owned workspace without accepting a caller path root."""
-    if os.getenv("SANDBOX_TASK_TOKEN"):
+    if config_getenv("SANDBOX_TASK_TOKEN"):
         return Path(
-            os.getenv("INSIGHTFORGE_TASK_WORKSPACE_ROOT", "/workspace/work")
+            config_getenv("INSIGHTFORGE_TASK_WORKSPACE_ROOT", "/workspace/work")
         ).resolve()
     configurable = Configuration.from_runnable_config(config)
     metadata = config.get("metadata", {})
@@ -54,7 +56,7 @@ def safe_workspace_path(config: RuntimeConfig, value: str) -> Path:
 
 def developer_tools_enabled(config: RuntimeConfig, permission: str) -> bool:
     """Require both administrator Profile selection and an RBAC capability."""
-    profile_id = os.getenv("SANDBOX_PROFILE_ID") or str(
+    profile_id = config_getenv("SANDBOX_PROFILE_ID") or str(
         config.get("configurable", {}).get("sandbox_profile_id") or ""
     )
     if profile_id != "developer-workspace":
@@ -161,15 +163,15 @@ class BubblewrapSandboxProvider:
             raise ValueError("sandbox_command_cwd_not_directory")
         shim = None
         environment = {
-            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
+            "PATH": config_environment.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "LANG": config_environment.get("LANG", "C.UTF-8"),
             "HOME": "/tmp/sandbox-home",
             "TMPDIR": "/tmp",
-            "SANDBOX_TASK_TOKEN": os.environ.get("SANDBOX_TASK_TOKEN", ""),
+            "SANDBOX_TASK_TOKEN": config_environment.get("SANDBOX_TASK_TOKEN", ""),
         }
         process = None
         try:
-            if os.getenv("SANDBOX_TASK_TOKEN"):
+            if config_getenv("SANDBOX_TASK_TOKEN"):
                 shim = await asyncio.create_subprocess_exec(
                     sys.executable,
                     "-m",

@@ -10,8 +10,8 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked uv sync --frozen --
 # 与 publisher-worker 使用同一 uid，保证共享卷上 0600 的 Job/工件双向可读写。
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \
-    && mkdir -p /data/runs /data/documents /home/insightforge \
-    && chown -R insightforge:insightforge /data/runs /data/documents /home/insightforge
+    && mkdir -p /data/runs /data/documents /data/platform-config /home/insightforge \
+    && chown -R insightforge:insightforge /data/runs /data/documents /data/platform-config /home/insightforge
 COPY config ./config
 # 默认追踪库与运行工件共用可写目录，支持直接以非 root 用户启动镜像。
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 HOME=/home/insightforge RUNS_DIR=/data/runs TRACE_STORE_PATH=/data/runs/traces.sqlite3

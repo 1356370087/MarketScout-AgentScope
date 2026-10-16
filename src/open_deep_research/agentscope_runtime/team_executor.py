@@ -4,6 +4,8 @@ AS_TEAM_EXECUTION contains only the leader lease and task id. Credentials and
 SQL settings come from the trusted deployment, never from task arguments.
 """
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import json
 import os
@@ -50,7 +52,7 @@ async def execute(request):
             pass
         state, _ = await store.load(lease.run_id, lease.user_id)
         recovery = RecoverySession(store, lease, state, model_accounting="gateway")
-        root = Path(os.environ.get("RUNS_DIR", ".runs"))
+        root = Path(config_environment.get("RUNS_DIR", ".runs"))
         factory = ProductionRunFactory(
             runtime,
             authorize_run_owner,

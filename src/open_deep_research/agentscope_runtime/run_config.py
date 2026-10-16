@@ -20,6 +20,9 @@ FIELD_MAP = json.loads(
     Path(__file__).with_name("config_fields.json").read_text(encoding="utf-8")
 )
 _METADATA = {
+    "platform_revision_id",
+    "profile_revision_id",
+    "platform_snapshot",
     "runtime_config_frozen",
     "run_config_schema_version",
     "quality_policy_version",

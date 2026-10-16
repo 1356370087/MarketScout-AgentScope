@@ -1,5 +1,7 @@
 """Trusted team containers use the existing authenticated Controller boundary."""
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import hashlib
 import json
@@ -52,7 +54,7 @@ def install_team_routes(app, runtime):
             "insightforge.deployment": request.deployment_id,
             "insightforge.run_id": lease["run_id"],
         }
-        if os.environ.get("AS_TEAM_PROJECT"):
+        if config_environment.get("AS_TEAM_PROJECT"):
             labels["insightforge.project"] = os.environ["AS_TEAM_PROJECT"]
         try:
             container = runtime.client.containers.get(name)
@@ -88,7 +90,7 @@ def install_team_routes(app, runtime):
         )
         mounts = [
             Mount(**item)
-            for item in json.loads(os.environ.get("AS_TEAM_CONTROLLER_MOUNTS", "[]"))
+            for item in json.loads(config_environment.get("AS_TEAM_CONTROLLER_MOUNTS", "[]"))
         ]
         runtime.client.containers.run(
             image,
@@ -101,7 +103,7 @@ def install_team_routes(app, runtime):
             healthcheck={"test": ["NONE"]},
             labels=labels,
             environment=environment,
-            network=os.environ.get("AS_TEAM_WORKER_NETWORK"),
+            network=config_environment.get("AS_TEAM_WORKER_NETWORK"),
             mounts=mounts,
             cap_drop=["ALL"],
             security_opt=["no-new-privileges:true"],

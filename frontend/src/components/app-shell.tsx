@@ -1,12 +1,13 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, ChevronRight, CircleDot, Files, Languages, Library, LogOut, Menu, PanelRight, Radar, Settings, Shield, SquarePen, UserRound } from "lucide-react";
+import { BarChart3, ChevronRight, CircleDot, Files, Languages, Library, LogOut, Menu, PanelRight, Radar, Settings, SquarePen, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useSyncExternalStore, type ReactNode } from "react";
 import "./app-shell.css";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { WorkspaceSwitch } from "@/components/workspace-switch";
 import { SurfaceDialog } from "@/components/ui/workspace";
 import { researchApi } from "@/lib/api";
 import { authFetch, iamApi, localAuthBypass } from "@/lib/auth";
@@ -32,9 +33,11 @@ export function AppShell({ children, inspector, inspectorOpen, onInspectorOpenCh
   const rightOpen = inspectorOpen ?? localRightOpen;
   const setRightOpen = onInspectorOpenChange ?? setLocalRightOpen;
   const showDesktopInspector = !desktopCollapsed || rightOpen;
-  const runs = useQuery({ queryKey: ["runs"], queryFn: () => researchApi.listRuns() });
+  const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: researchApi.capabilities, retry: false });
+  const configurationRequired = (capabilities.data as { configuration_required?: boolean } | undefined)?.configuration_required === true;
+  const runtimeReady = (capabilities.data as { runtime_ready?: boolean } | undefined)?.runtime_ready !== false;
+  const runs = useQuery({ queryKey: ["runs"], queryFn: () => researchApi.listRuns(), enabled: capabilities.isSuccess && !configurationRequired && runtimeReady });
   const { data: identity } = useQuery({ queryKey: ["identity"], queryFn: iamApi.me, enabled: !localAuthBypass, retry: false });
-  const isAdmin = identity?.permissions.includes("iam.users.read");
   const displayName = identity?.display_name || identity?.email || (localAuthBypass ? "本地研究员" : "正在验证身份");
   const identityInitial = displayName.trim().slice(0, 1).toUpperCase() || "I";
   const logout = async () => { await authFetch("/api/auth/logout", { method: "POST" }); router.replace("/login"); router.refresh(); };
@@ -42,6 +45,7 @@ export function AppShell({ children, inspector, inspectorOpen, onInspectorOpenCh
   const link = (href: string, label: string, icon: ReactNode, active: boolean) => <Link href={href} aria-current={active ? "page" : undefined} className={active ? "active" : ""} onClick={() => setLeftOpen(false)}>{icon}<span>{label}</span></Link>;
   const sidebar = <>
     <Link className="brand-lockup" href="/research/new" aria-label="InsightForge 首页"><div className="brand-mark"><Radar size={19} /></div><strong>InsightForge</strong></Link>
+    <WorkspaceSwitch identity={identity} />
     <Link className="new-run-button" href="/research/new" onClick={() => setLeftOpen(false)}><SquarePen size={17} /> 新建研究</Link>
     <nav className="shell-nav" aria-label="工作台功能">
       {link("/documents", "资料库", <Files size={17} />, pathname.startsWith("/documents"))}
@@ -50,12 +54,11 @@ export function AppShell({ children, inspector, inspectorOpen, onInspectorOpenCh
     </nav>
     <section className="shell-history"><div className="sidebar-section-title"><span>最近研究</span><span>{runs.data?.items.length ?? ""}</span></div>
       <nav className="run-list" aria-label="研究历史">{runs.data?.items.map((item) => { const id = String(item.run_id); const active = pathname === `/research/${id}`; return <Link key={id} className={`run-item ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} href={`/research/${id}`} onClick={() => setLeftOpen(false)}><i data-status={String(item.status)} /><span><b>{String(item.title ?? id)}</b><small>{statusLabel[String(item.status)] ?? String(item.status)}</small></span><ChevronRight size={14} /></Link>; })}</nav>
-      {runs.isPending && <p className="empty-note">正在读取研究记录…</p>}{runs.isError && <p className="empty-note">历史暂不可用。<button className="ui-text-button" onClick={() => void runs.refetch()}>重试</button></p>}{runs.isSuccess && !runs.data.items.length && <p className="empty-note">提出第一个问题，研究会保存在这里。</p>}
+      {configurationRequired ? <p className="empty-note">完成平台配置后开始研究。</p> : runs.isPending && <p className="empty-note">正在读取研究记录…</p>}{runs.isError && <p className="empty-note">历史暂不可用。<button className="ui-text-button" onClick={() => void runs.refetch()}>重试</button></p>}{runs.isSuccess && !runs.data.items.length && <p className="empty-note">提出第一个问题，研究会保存在这里。</p>}
     </section>
     <nav className="shell-nav shell-nav-bottom" aria-label="账户与偏好">
       {link("/settings", "研究设置", <Settings size={17} />, pathname === "/settings")}
       {link("/account/security", "账户安全", <UserRound size={17} />, pathname.startsWith("/account"))}
-      {isAdmin && link("/admin", "管理后台", <Shield size={17} />, pathname === "/admin")}
     </nav>
     <div className="sidebar-preferences"><button className="sidebar-action" onClick={switchLocale}><Languages size={17} /> 中 / EN</button></div>
     {localAuthBypass && <div className="dev-badge"><CircleDot size={12} /> 本地开发 · 认证已跳过</div>}

@@ -72,6 +72,7 @@ async def _process(worker_id: str) -> bool:
     job = await claim_job(worker_id, settings.worker_lease_seconds)
     if not job:
         return False
+    platform_scope = contextlib.AsyncExitStack()
     started = time.perf_counter()
     outcome = "success"
     failure_code: str | None = None
@@ -90,6 +91,9 @@ async def _process(worker_id: str) -> bool:
         if not document:
             await complete_job(str(job["id"]), worker_id)
             return True
+        from open_deep_research.platform.workers import job_context
+        await platform_scope.enter_async_context(job_context("document", str(job["id"]), str(document["owner_id"])))
+        settings = get_document_settings()
         if job["kind"] == "delete":
             storage_key = await delete_if_unreferenced(str(document["id"]))
             if storage_key:
@@ -158,10 +162,14 @@ async def _process(worker_id: str) -> bool:
         logger.exception(
             "document ingestion failed document_id=%s code=%s", job["document_id"], code
         )
-        await fail_job(job, code, settings.worker_max_attempts, worker_id)
+        from open_deep_research.budgets import BudgetExhausted
+        from open_deep_research.platform.accounting import UncertainServiceCall
+        attempts = int(job["attempts"]) if isinstance(exc, (BudgetExhausted, UncertainServiceCall)) else settings.worker_max_attempts
+        await fail_job(job, code, attempts, worker_id)
         if job["kind"] != "delete":
             await versioning.fail_generation_attempt(str(job["document_id"]), code)
     finally:
+        await platform_scope.aclose()
         lease_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await lease_task
@@ -178,7 +186,14 @@ async def _process(worker_id: str) -> bool:
 
 async def run_worker(*, once: bool = False) -> None:
     """Run the durable worker loop or process at most one claim."""
+    from open_deep_research.platform.workers import initialize, acknowledge, active_ready
+    await initialize("document-worker")
     settings = get_document_settings()
+    from open_deep_research.platform.runtime import enabled as platform_enabled
+    while platform_enabled() and not settings.configured:
+        await asyncio.sleep(3)
+        await initialize("document-worker")
+        settings = get_document_settings()
     if not settings.configured:
         raise RuntimeError("document_research_not_configured")
     worker_id = f"{socket.gethostname()}-{uuid.uuid4().hex[:12]}"
@@ -190,6 +205,12 @@ async def run_worker(*, once: bool = False) -> None:
     )
     try:
         while True:
+            from open_deep_research.documents.database import get_document_pool
+            await get_document_pool()
+            acknowledge("document-worker")
+            if not await active_ready():
+                await asyncio.sleep(3)
+                continue
             worked = await _process(worker_id)
             if once:
                 return

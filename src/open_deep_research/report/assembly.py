@@ -134,7 +134,7 @@ class ReportContext:
             )
         from open_deep_research.configuration import QUALITY_POLICY_VERSION
         payload["_quality_policy_version"] = self.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
-        if payload["_quality_policy_version"] == "quality-gate-v5" and any(row.get("evidence_id") for row in records):
+        if payload["_quality_policy_version"] in {"quality-gate-v5", "quality-gate-v6"} and any(row.get("evidence_id") for row in records):
             owned = set(payload.get("requirement_ids") or self.requirement_to_evidence)
             payload["requirement_to_evidence"] = {rid: ids for rid, ids in self.requirement_to_evidence.items() if rid in owned}
             payload["required_requirement_ids"] = [rid for rid, ids in payload["requirement_to_evidence"].items() if ids]

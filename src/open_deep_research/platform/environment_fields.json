@@ -1,0 +1,1697 @@
+{
+  "LOG_FORMAT": {
+    "description": "日志格式：console（本地友好）或 json（生产采集）。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "console"
+  },
+  "SANDBOX_ENABLED": {
+    "description": "沙箱默认关闭。启用后必须部署 Controller/Gateway；原生同步研究和异步团队均可使用。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_POLICY_PATH": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_CONTROLLER_SOCKET": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "SANDBOX_GATEWAY_URL": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "SANDBOX_GATEWAY_FAKE_PROVIDER": {
+    "description": "至少 32 字节随机值的 Base64；API、Controller 与 Gateway 必须一致。 SANDBOX_ROOT_SIGNING_KEY= 仅 development/test 的确定性 CI Provider；生产环境强制拒绝 true。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "SANDBOX_STARTUP_GRACE_SECONDS": {
+    "description": "Compose 同时启动三服务时允许依赖就绪的等待窗口；窗口结束仍 fail-closed。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 30
+  },
+  "SANDBOX_EGRESS_APPROVAL_MODE": {
+    "description": "出网审批 auto 模式（仿 Claude Code auto mode）：unknown_target=auto 时， 未知域名先经模型分类器裁决（allow 免审批 / ask 转人工 / deny 拒绝）， 分类器任何故障都 fail-safe 回人工审批。三档宽度 deny < manual < auto < open， run 级设置与运行时切换只能收窄、不能突破 TOML 基线。 run 级模式：profile（跟随基线）/ manual / auto / open。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EGRESS_CLASSIFIER_STAGES": {
+    "description": "分类器模型（provider:model）；未配置时回退 QUALITY_EVALUATION_MODEL。 EGRESS_CLASSIFIER_MODEL= 分类器流水线：both（快筛+深度复核，默认）/ fast / thinking。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EGRESS_CLASSIFIER_TIMEOUT_SECONDS": {
+    "description": "单目标两阶段合计超时（秒）；超时即回人工审批。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EGRESS_CLASSIFIER_MAX_CALLS_PER_RUN": {
+    "description": "每 run 分类器模型调用预算；耗尽后回人工审批。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EGRESS_CLASSIFIER_MAX_CONSECUTIVE_FAILURES": {
+    "description": "连续失败多少次后本 run 剩余时间退化为 manual。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_EGRESS_PENDING_WAIT_SECONDS": {
+    "description": "命中即直接放行、不进分类器也不发人工审批。主要用于 E2E 预热常用研究域名， 避免人工 allow_once 延迟吃掉任务研究窗口；合并结果会计入冻结的 run 策略摘要。 SANDBOX_EGRESS_ALLOW_DOMAINS=www.gov.cn,www.epa.gov,www.iea.org egress 审批等待：首次请求立即返回 approval_required（该轮不计入 react 预算）， 重试附着到 pending 审批时最多阻塞该窗口等待人工决定，之后再次返回 pending。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "APPROVAL_PENDING_TURN_ALLOWANCE": {
+    "description": "审批等待轮的物理轮次余量（这些轮会从有效 react 预算中退还）。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "OPENAI_API_KEY": {
+    "description": "OpenAI API Key；config/litellm.yaml 启用 openai/* 部署时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "OPENAI_BASE_URL": {
+    "description": "可选的 OpenAI 兼容接口地址。官方 OpenAI 留空；自托管或代理端点按 YAML 示例启用 api_base。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "DASHSCOPE_API_KEY": {
+    "description": "阿里云百炼 DashScope API Key；YAML 启用 DashScope/Qwen 部署时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "DEEPSEEK_API_KEY": {
+    "description": "DeepSeek API Key；YAML 启用 deepseek/* 部署时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "DEEPSEEK_BASE_URL": {
+    "description": "DeepSeek 兼容接口地址；使用 LiteLLM 原生 deepseek/* 路由时通常无需修改。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "ANTHROPIC_API_KEY": {
+    "description": "Anthropic API Key；YAML 启用 anthropic/* 部署或使用 Anthropic 原生搜索时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "GOOGLE_API_KEY": {
+    "description": "Google API Key；YAML 启用 Gemini 部署时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "SUMMARIZATION_MODEL": {
+    "description": "对搜索结果、网页内容和长对话进行摘要的模型。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SUPERVISOR_MODEL": {
+    "description": "Supervisor 规划和研究调度模型；留空时继承 RESEARCH_MODEL。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RESEARCH_MODEL": {
+    "description": "执行 Subagent 推理、工具规划和研究循环的主模型。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MESSAGE_SUMMARY_MODEL": {
+    "description": "长对话自动摘要模型。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "COMPRESSION_MODEL": {
+    "description": "将 Subagent 原始研究结果压缩为结构化交接内容的模型。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FINAL_REPORT_MODEL": {
+    "description": "汇总全部研究证据并生成最终报告的模型。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SUMMARIZATION_MODEL_MAX_TOKENS": {
+    "description": "摘要模型单次响应的最大输出 Token 数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RESEARCH_MODEL_MAX_TOKENS": {
+    "description": "研究模型单次响应的最大输出 Token 数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "COMPRESSION_MODEL_MAX_TOKENS": {
+    "description": "压缩模型单次响应的最大输出 Token 数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FINAL_REPORT_MODEL_MAX_TOKENS": {
+    "description": "最终报告模型单次响应的最大输出 Token 数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SEARCH_API": {
+    "description": "兼容单搜索服务设置；默认 tavily，可选 tavily、openai、anthropic、bing、brave、none。 SEARCH_PROVIDERS 未填写时使用此项；none 仅关闭提供商搜索，不代表禁止指定 URL 抓取。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "tavily"
+  },
+  "SEARCH_PROVIDERS": {
+    "description": "并行搜索服务列表，填写 JSON 数组，例如 [\"tavily\",\"bing\",\"brave\"]。 默认留空，沿用 SEARCH_API；[] 关闭提供商搜索。各渠道分别使用自己的凭据与配额。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SEARCH_MAX_CONCURRENCY": {
+    "description": "单次搜索跨提供商、跨查询的请求并发上限；单位为请求数，默认 4，范围 1～16。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "OPENAI_SEARCH_MODEL": {
+    "description": "OpenAI 原生搜索模型；默认留空，仅在研究模型为 openai:模型名时继承。 LiteLLM 部署需填写已配置且支持 Responses Web Search 的逻辑别名。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "ANTHROPIC_SEARCH_MODEL": {
+    "description": "Anthropic 原生搜索模型；默认留空，仅在研究模型为 anthropic:模型名时继承。 LiteLLM 部署需填写已配置且支持 Messages 服务端 Web Search 的逻辑别名。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "ALLOW_CLARIFICATION": {
+    "description": "是否允许系统在研究开始前向用户提出一次澄清问题。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_CONCURRENT_RESEARCH_UNITS": {
+    "description": "同一轮 Supervisor 最多并行运行的 Researcher 数量。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_RESEARCHER_ITERATIONS": {
+    "description": "Supervisor 最多执行的研究调度轮数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_REACT_TOOL_CALLS": {
+    "description": "单个 Researcher 最多执行的工具循环次数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RESEARCH_TOOL_CALL_TIMEOUT_SECONDS": {
+    "description": "单次研究工具调用的超时时间，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TAVILY_API_KEY": {
+    "description": "Tavily API Key；选择 Tavily 搜索或启用 tavily_extract 提取器时必须填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "BRAVE_API_KEY": {
+    "description": "Brave Web Search API 密钥；仅选择 brave 时必填，由 Gateway 的运行凭据仓库管理。 Bing 搜索不需要搜索 API 密钥；Brave 使用官方 Web Search 接口。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "FIRECRAWL_API_KEY": {
+    "description": "Firecrawl API Key；启用对应网页抓取能力时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "WEB_PIPELINE_MODE": {
+    "description": "Web 流水线模式；默认 enforced，执行结构化证据流程。 legacy 返回搜索摘要；shadow 返回相同摘要，并按采样比例复用搜索结果进行额外证据对照。 shadow 会消耗正常抓取和模型预算，其证据不会直接写入正式报告。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "WEB_PIPELINE_SHADOW_SAMPLE_RATE": {
+    "description": "shadow 模式下进入旁路评估的请求比例，取值范围为 0 到 1。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "WEB_SHADOW_FETCH_TOP_K": {
+    "description": "单次旁路评估最多读取的来源数；单位为 URL 获取链，默认 2，范围 1～8。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "WEB_SHADOW_TIMEOUT_SECONDS": {
+    "description": "单次旁路评估的最长时间；单位为秒，默认 60，并受研究工具总超时限制。 额度不足或需要新增出网审批时跳过，取消、失租和未知外部结果沿用运行恢复协议。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FETCH_BACKEND_ORDER": {
+    "description": "网页获取后端的执行顺序，使用 JSON 数组；仅在允许回退的失败类型下尝试下一项。 默认先本地 HTTP，再受管浏览器、Tavily Extract 和 Firecrawl。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EXTERNAL_EXTRACT_BACKENDS": {
+    "description": "允许的外部提取器，使用 JSON 数组；默认两项，实际顺序由 FETCH_BACKEND_ORDER 决定。 需要对应密钥和出网授权；兼容旧值 tavily，内部统一为 tavily_extract。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "BROWSER_RENDER_FALLBACK_ENABLED": {
+    "description": "普通 HTTP 抓取失败时是否允许使用浏览器渲染作为降级方案。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FETCH_TOP_K": {
+    "description": "搜索候选中实际进入抓取阶段的 Top-K 数量。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "WEB_MIN_SOURCE_AUTHORITY": {
+    "description": "来源权威度最低阈值，取值范围为 0 到 1。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 0.65
+  },
+  "WEB_RERANK_MODEL": {
+    "description": "搜索候选来源重排模型；LiteLLM 模式填写逻辑模型别名。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "WEB_EVIDENCE_MODEL": {
+    "description": "网页内容证据抽取模型；LiteLLM 模式填写逻辑模型别名。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SEARCH_CANDIDATE_LIMIT": {
+    "description": "每次搜索允许进入重排阶段的最大候选来源数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_FETCHES_PER_RESEARCHER": {
+    "description": "单个 Researcher 允许执行的最大网页抓取次数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_FETCHES_PER_RUN": {
+    "description": "单次完整研究运行允许执行的最大网页抓取次数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FETCH_GLOBAL_CONCURRENCY": {
+    "description": "全局同时执行网页抓取的最大并发数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FETCH_PER_HOST_CONCURRENCY": {
+    "description": "同一域名同时执行网页抓取的最大并发数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "HTML_MAX_BYTES": {
+    "description": "单个 HTML 文档允许读取的最大字节数，示例值为 2 MiB。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "PDF_MAX_BYTES": {
+    "description": "单个 PDF 文档允许读取的最大字节数，示例值为 20 MiB。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "PDF_MAX_PAGES": {
+    "description": "单个 PDF 文档允许处理的最大页数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RESPECT_ROBOTS_TXT": {
+    "description": "是否遵守目标网站的 robots.txt 规则。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_ENABLED": {
+    "description": "是否启用研究证据、Subagent 交接和最终报告质量评估。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_MODEL": {
+    "description": "质量评估模型逻辑别名；建议与研究主模型分离，避免同源偏差。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_MODEL_MAX_TOKENS": {
+    "description": "质量评估模型单次响应的最大输出 Token 数；自托管大模型建议 8192。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_TEMPERATURE": {
+    "description": "质量评估模型采样温度，取值范围 0 到 2；取值越低评估输出越稳定。 删除或注释该行时使用服务提供商默认温度。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_FAIL_OPEN": {
+    "description": "质量评估异常时是否放行研究流程；true 表示评估器故障不阻断研究。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_RIGOR": {
+    "description": "质量评估严格度；可选值为 permissive、balanced、strict。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "QUALITY_EVALUATION_MIN_SOURCES": {
+    "description": "质量门禁要求的最少独立来源数量。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_REVIEW_ENABLED": {
+    "description": "是否在最终报告写作后运行成品 Reviewer → Revisor 闭环；默认关闭以保持旧行为。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_SECTION_CONCURRENCY": {
+    "description": "分章节报告的写作并发数（单位：模型调用）；默认 2，范围 1–6。 同时控制引言和结论的并发；仅作用于分章节报告，填 1 可串行执行。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_REVIEW_MODEL_MAX_TOKENS": {
+    "description": "Reviewer 单次结构化输出 Token 上限；Revisor 继续使用 FINAL_REPORT_MODEL_MAX_TOKENS。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_REVIEW_MAX_INPUT_CHARS": {
+    "description": "Reviewer 输入字符预算。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_REVIEW_MAX_REVISIONS": {
+    "description": "最多执行的 Revisor 修订轮数（0 到 3）。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_REVIEW_FAIL_OPEN": {
+    "description": "Reviewer 服务不可用时是否交付带 degraded 标记的草稿。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EVALUATION_MODEL": {
+    "description": "离线评测模型逻辑别名。离线评测使用受限 Service Key，不使用 Master Key。 原生 Judge 从 /model/info 冻结窗口和价格；该 Service Key 需有目录读取及此模型调用权限。 每份独立评估账本最多 60 次物理调用、1 美元、1800 秒；已有运行预算更严格时采用较小值。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EVALUATION_MODEL_MAX_TOKENS": {
+    "description": "离线评测模型单次响应的最大输出 Token 数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EVALUATION_EVIDENCE_MAX_CHARS": {
+    "description": "单次离线评测允许输入的最大证据字符数。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 120000
+  },
+  "EVALUATION_RESEARCH_TIMEOUT_SECONDS": {
+    "description": "本地 AgentScope 评估单题研究等待上限，单位秒，默认 1800，必须大于 0；超时仅取消本题新建运行。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 1800
+  },
+  "EVALUATION_CALLBACK_HOST": {
+    "description": "独立本地评估使用 Gateway 时的内部回调监听地址；默认留空，不启动监听器。 必须使 Gateway 的 SANDBOX_API_INTERNAL_URL 指向该地址对应的可达服务。 宿主机建议 127.0.0.1；0.0.0.0 仅用于受信隔离容器网络，端点仍要求现有 HMAC 签名。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EVALUATION_CALLBACK_PORT": {
+    "description": "内部回调服务端口（不是管理控制台端口），默认 2024；不得占用已有 API 服务端口。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 2024
+  },
+  "EVALUATION_LOCAL_WORKERS": {
+    "description": "仅独立评估使用的可信进程内协作执行器，默认 false。 设为 true 使用 collaborator 模式，仍需 PostgreSQL、远程 RocketMQ 与 Gateway；模型和工具仍经 Gateway 治理。 此模式用于联网研究抽测，不代表 Docker Worker 进程隔离验收。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "EVALUATION_ACCESS_TOKEN": {
+    "description": "本地评估的 IAM Access Token；仅在未启用合法开发认证旁路时必填，填写原始 Token，不带 Bearer 前缀。 账号须具备创建研究权限；仅写入本地配置，不提交真实值，运行期间继续执行会话与权限检查。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "FRONTEND_ALLOWED_ORIGINS": {
+    "description": "允许访问 FastAPI 的前端来源，多个地址使用英文逗号分隔。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "ENABLE_MEMORY": {
+    "description": "是否启用长期记忆功能。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEM0_PROVIDER": {
+    "description": "Mem0 存储提供方式；platform 表示托管平台，其他模式需与项目实现保持一致。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEM0_API_KEY": {
+    "description": "Mem0 API Key；启用托管长期记忆时填写。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "MEMORY_APP_ID": {
+    "description": "长期记忆应用标识，用于隔离不同应用的数据。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEM0_MEMORY_PROJECT_ID": {
+    "description": "Mem0 记忆项目标识；使用托管项目时填写。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_AGENT_ID": {
+    "description": "写入长期记忆时使用的 Agent 标识。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_ADVANCED_ENABLED": {
+    "description": "是否启用高级记忆 schema-v2；默认关闭以保持兼容。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_DECAY_ENABLED": {
+    "description": "Mem0 Platform 项目级 decay 的期望状态；仅由显式 maintenance configure-decay 命令应用。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_LEGACY_RECALL_ENABLED": {
+    "description": "schema-v2 启用时是否继续召回不可变更的 legacy 记忆；默认关闭，避免旧偏好与新偏好并列注入。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_RUN_END_MAINTENANCE_ENABLED": {
+    "description": "是否在每次 run 结束后异步调度完整维护；默认关闭，推荐使用 daily CLI/系统定时器。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_MUTATION_LOCK_TIMEOUT_SECONDS": {
+    "description": "同一用户并发写记忆时的最长等待秒数；超时后记忆写入仍按 advisory fail-open 跳过。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_REFLECTION_ENABLED": {
+    "description": "是否生成并保存研究反思记忆。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_MAINTENANCE_MAX_INPUT_CHARS": {
+    "description": "reflection/profile/conflict 提示词的最大输入字符预算。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_PROFILE_ENABLED": {
+    "description": "是否维护用户或领域画像记忆。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_SOFT_FORGETTING_ENABLED": {
+    "description": "是否启用软遗忘，降低旧记忆权重而不是直接删除。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MEMORY_VERIFIED_INSIGHTS_ENABLED": {
+    "description": "是否保存通过验证的研究洞见。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TOKEN_USAGE_ACCOUNTING_ENABLED": {
+    "description": "是否启用独立于 Trace/Langfuse/Prometheus 的最小 Token 核算持久化。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TOKEN_USAGE_ESTIMATION_ENABLED": {
+    "description": "Provider 成功响应未返回 usage 时，是否启用输入/输出 Token 估算补位。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGFUSE_ENABLED": {
+    "description": "是否启用 Langfuse Trace 上报。 原生 AgentScope 使用内容最小化的 Middleware 与 OTLP/HTTP 导出，无需 LangChain callback。 启用时须同时填写公钥、私钥和服务地址；默认关闭。团队 Worker 使用自己的受信环境配置。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGFUSE_PUBLIC_KEY": {
+    "description": "Langfuse 公钥。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGFUSE_SECRET_KEY": {
+    "description": "Langfuse 私钥；不得提交到版本库或暴露给浏览器。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGFUSE_BASE_URL": {
+    "description": "Langfuse 服务地址，可替换为自托管地址。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGFUSE_ENVIRONMENT": {
+    "description": "Langfuse 环境名称，用于区分开发、测试和生产数据。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "OTEL_ENABLED": {
+    "description": "是否通过 OTLP/HTTP 导出不含正文的应用 Trace。 该通道不会附加提示词、响应正文或消息预览。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "OTEL_SERVICE_NAME": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "OTEL_EXPORTER_OTLP_ENDPOINT": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LANGSMITH_ENABLED": {
+    "description": "是否启用 LangSmith Trace；启用后还需配置 LANGSMITH_API_KEY。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LANGSMITH_API_KEY": {
+    "description": "LangSmith 接口密钥。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "PROMETHEUS_ENABLED": {
+    "description": "是否启用 Prometheus 指标端点。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "PROMETHEUS_METRICS_PATH": {
+    "description": "Prometheus 指标暴露路径。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "PROMETHEUS_HOST_PORT": {
+    "description": "LITELLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 应用侧 trace 设置 OTEL_ENABLED=true 与 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 详见 deploy/README.md。注意：LiteLLM 的 /metrics 无鉴权，生产环境建议 移除 litellm-proxy 的宿主机端口映射。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "GRAFANA_HOST_PORT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "GRAFANA_ADMIN_PASSWORD": {
+    "description": "",
+    "bootstrap": false,
+    "secret": true
+  },
+  "OTEL_COLLECTOR_HOST_PORT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "JAEGER_HOST_PORT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "ENABLE_ASYNC_RESEARCH": {
+    "description": "是否启用异步研究任务模式。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "ASYNC_RESEARCH_MODE": {
+    "description": "异步研究模式：collaborator 为 Lead 委派（默认）；teams 为 Lead 建队、成员派发与自主认领。 仅 ENABLE_ASYNC_RESEARCH=true 时生效；创建运行时冻结，恢复不会随环境配置切换。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TEAM_EXECUTION_MODE": {
+    "description": "团队默认执行方式：direct 直接执行（默认）；plan_approval 先规划并由 Lead 审核。 仅 teams 模式生效，Lead 启动成员时可单独覆盖；不替代用户的工具和出网审批。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RUNS_DIR": {
+    "description": "运行数据保存目录，包含 manifest、公开事件和任务活动日志。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "PUBLISHER_ENABLED": {
+    "description": "API 是否接受异步发布任务。独立 Worker 必须共享同一个 RUNS_DIR。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": true
+  },
+  "PUBLISHER_POLL_INTERVAL_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 1.0
+  },
+  "PUBLISHER_LEASE_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 180.0
+  },
+  "PUBLISHER_MAX_CONCURRENT_JOBS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 2
+  },
+  "PUBLISHER_MAX_ATTEMPTS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 3
+  },
+  "PUBLISHER_MAX_INPUT_CHARS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 500000
+  },
+  "PUBLISHER_MAX_OUTPUT_BYTES": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "PUBLISHER_MAX_PDF_PAGES": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 100
+  },
+  "PUBLISHER_MAX_PPTX_SLIDES": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "PUBLISHER_SSE_IDLE_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 60.0
+  },
+  "PUBLISHER_HEARTBEAT_INTERVAL_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 10.0
+  },
+  "PUBLISHER_HEARTBEAT_STALE_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 45.0
+  },
+  "RUNS_DIR_MAX_BYTES": {
+    "description": "`.runs` 目录的建议容量上限，供 Prometheus 容量告警使用；0 表示不限制。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RETENTION_SWEEP_INTERVAL_SECONDS": {
+    "description": "终态运行目录的保留清扫周期（秒）；0 关闭自动清扫。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RUN_RETENTION_DAYS": {
+    "description": "终态运行目录保留天数；0 永久保留。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "API_RUN_CREATE_PER_MINUTE": {
+    "description": "每个登录主体每分钟最多创建的 run 数；0 关闭。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_CONCURRENT_RUNS_PER_USER": {
+    "description": "每个登录主体在本进程内最多并发运行数；0 关闭。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_CONCURRENT_SSE_CONNECTIONS": {
+    "description": "本进程允许的 SSE 并发连接总数；0 关闭。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_REQUEST_BODY_BYTES": {
+    "description": "API 请求体上限（字节），默认 2 MiB。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "INFLIGHT_RUN_MEMORY_RETENTION_SECONDS": {
+    "description": "终态 run 在进程内继续保留的秒数；完整事件始终从磁盘事件流回放。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_INFLIGHT_RUNS_IN_MEMORY": {
+    "description": "进程内 RunRecord 数量软上限；超限时优先淘汰最早结束的终态 run。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "INFLIGHT_EVENT_BUFFER_SIZE": {
+    "description": "每个进程内 run 保留的最近事件数；磁盘 public_events.jsonl 不受此限制。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "REPORT_TIME_RESERVE_RATIO": {
+    "description": "优雅停机时将运行中任务落为 interrupted 并取消任务的总预算（秒）。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SHUTDOWN_DRAIN_TIMEOUT_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RUN_RECOVERY_SWEEP_ON_STARTUP": {
+    "description": "启动时是否扫描非终态 manifest，并将租约已失效的孤儿 run 标记为 interrupted。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TASK_STATE_BACKEND": {
+    "description": "异步任务状态存储后端；当前推荐使用 file。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TASK_TIMEOUT_SECONDS": {
+    "description": "单个异步任务的最大运行时间，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_IN_FLIGHT_TASKS": {
+    "description": "单个运行允许同时处于执行中的最大异步任务数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "TASK_CHECKPOINT_ENABLED": {
+    "description": "是否为异步 Researcher 保存并恢复检查点。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "EVENT_LOG_ENABLED": {
+    "description": "是否写入异步任务内部事件日志。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAX_PERSISTENT_TEAMMATES": {
+    "description": "可长期保持在线的 Teammate 最大数量。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_POLL_INTERVAL_MS": {
+    "description": "文件邮箱轮询间隔，单位为毫秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_LOCK_TIMEOUT_SECONDS": {
+    "description": "获取文件邮箱锁的最大等待时间，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_CLAIM_LEASE_SECONDS": {
+    "description": "邮箱消息认领租约时长，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_MAX_DELIVERY_ATTEMPTS": {
+    "description": "单条邮箱消息允许的最大投递次数。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_ACKED_RETENTION_SECONDS": {
+    "description": "已确认邮箱消息的保留时间，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "MAILBOX_COMPACTION_THRESHOLD": {
+    "description": "邮箱消息数量达到该阈值后触发压缩整理。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LEADER_HEARTBEAT_SECONDS": {
+    "description": "Leader 心跳发送间隔，单位为秒。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LEADER_LEASE_SECONDS": {
+    "description": "Leader 租约有效期，单位为秒，通常应大于心跳间隔。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "APP_ENV": {
+    "description": "运行环境。production 下强制校验 JWT 密钥与 SMTP；development 下可自动生成临时 JWT 密钥。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LOCAL_DEV_AUTH_BYPASS": {
+    "description": "本地开发认证旁路：仅在 APP_ENV=development 生效，返回合成的 researcher/developer 身份。",
+    "bootstrap": true,
+    "secret": false,
+    "type": "boolean"
+  },
+  "IAM_TRUSTED_PROXY_COUNT": {
+    "description": "FastAPI 前方可信代理的跳数。代码默认 0（只信 socket 对端地址）； 值为 1 对应“仅经过本项目 nginx”一跳。若直接暴露 2024 端口必须保持 0， 否则客户端可伪造 X-Forwarded-For 轮换限流身份。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 0
+  },
+  "IAM_JWT_ISSUER": {
+    "description": "JWT 签发方。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_ACCESS_SIGNING_KEY": {
+    "description": "Access / Refresh 各自独立的 Ed25519 密钥（PEM）。生产环境必须显式提供。 可用 python -c \"from security.rbac.keys import generate_signing_keypair as g; print(*g(), sep='---')\" 生成。当前签名私钥 + kid；IAM_JWT_*_VERIFY_KEYS 为可选的 {kid: 公钥} JSON，用于平滑轮换。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_ACCESS_KID": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_ACCESS_VERIFY_KEYS": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_REFRESH_SIGNING_KEY": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_REFRESH_KID": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_JWT_REFRESH_VERIFY_KEYS": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_TOKEN_DIGEST_SECRET": {
+    "description": "一次性邮箱令牌和 Refresh Token 摘要使用的独立 HMAC Secret；生产环境必填。",
+    "bootstrap": true,
+    "secret": true
+  },
+  "IAM_ACCESS_TOKEN_TTL": {
+    "description": "令牌与会话有效期（秒）。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_REFRESH_IDLE_TTL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_SESSION_ABSOLUTE_TTL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_REFRESH_REUSE_GRACE": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_SSE_REAUTH_INTERVAL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_EMAIL_VERIFY_TTL": {
+    "description": "一次性邮箱令牌有效期（秒）。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_PASSWORD_RESET_TTL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "IAM_MAIL_BACKEND": {
+    "description": "邮件后端：console（开发，打印链接）或 smtp（生产）。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "console"
+  },
+  "IAM_SMTP_HOST": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "IAM_SMTP_PORT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 587
+  },
+  "IAM_SMTP_STARTTLS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": true
+  },
+  "IAM_SMTP_USER": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "IAM_SMTP_PASSWORD": {
+    "description": "",
+    "bootstrap": false,
+    "secret": true
+  },
+  "IAM_MAIL_FROM": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": "no-reply@localhost"
+  },
+  "IAM_PUBLIC_BASE_URL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": "http://localhost:3000"
+  },
+  "IAM_OPEN_REGISTRATION": {
+    "description": "是否开放注册。production 下开放注册必须配置 SMTP。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "IAM_LOGIN_RATE_LIMIT": {
+    "description": "分布式限流：每个窗口内每个身份（IP/邮箱）允许的次数，窗口长度 IAM_RATE_LIMIT_WINDOW（秒）。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 10
+  },
+  "IAM_REGISTER_RATE_LIMIT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 5
+  },
+  "IAM_RESEND_RATE_LIMIT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 3
+  },
+  "IAM_RESET_RATE_LIMIT": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 5
+  },
+  "IAM_RATE_LIMIT_WINDOW": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 600
+  },
+  "IAM_BOOTSTRAP_ADMIN_EMAIL": {
+    "description": "引导首个管理员（可重复执行；已存在管理员时为空操作）。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "IAM_BOOTSTRAP_ADMIN_PASSWORD": {
+    "description": "",
+    "bootstrap": true,
+    "secret": true
+  },
+  "LITELLM_MASTER_KEY": {
+    "description": "LiteLLM Master Key，只供 API 控制面创建、续期和封禁 Run Key。 LiteLLM 要求以 sk- 开头。示例值仅适用于本地开发，生产环境必须替换为强随机值。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LITELLM_SERVICE_KEY": {
+    "description": "uv run --env-file .env python -m open_deep_research.models.mint_service_key 默认授权评估模型、嵌入模型及已配置的资料元数据、知识问答和重排模型； 重复传入 --model 可改为显式允许列表，例如 --model if-evaluation-v1 仅用于评估。 将输出的 key 填到下方，并用原 Compose 项目及覆盖文件重建使用该密钥的容器。 Virtual Key 仅在签发它的 LiteLLM 数据库中有效；切换项目或数据库后需重新铸造。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "LITELLM_SERVICE_BUDGET_MICRO_USD": {
+    "description": "Service Key 的预算上限，单位为微美元，默认 20000000（20 美元）； 重置周期默认 30d，格式为正整数加 s、m、h、d 或 mo。两项仅铸造时生效， 修改这里不会更新已签发密钥，须另行更新网关中的密钥策略或重新铸造。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_SERVICE_BUDGET_DURATION": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_BASE_URL": {
+    "description": "应用访问 LiteLLM 的 OpenAI 兼容地址。本机直接运行使用 localhost； Docker Compose 会自动覆盖为 http://litellm-proxy:4000/v1。 宿主机端口必须与实际映射一致：根 Compose 使用 LITELLM_PROXY_HOST_PORT（默认 4000）， Web 验收覆盖使用 WEB_E2E_LITELLM_PORT（默认 4107）；这些均为模型服务接口端口。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LITELLM_DATABASE_PASSWORD": {
+    "description": "仅用于本地 Compose 的 LiteLLM PostgreSQL 密码；生产环境使用独立托管数据库强密码。",
+    "bootstrap": true,
+    "secret": true
+  },
+  "APP_DATABASE_PASSWORD": {
+    "description": "Compose 的应用数据库密码。app-db 同时承载 IAM 与 pgvector 文档索引， 与 LiteLLM 自身数据库严格分离。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "DOCUMENT_RESEARCH_ENABLED": {
+    "description": "非 Compose 部署默认关闭，依赖不健康时 Web Research 仍可单独运行。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "DOCUMENT_DATABASE_URL": {
+    "description": "文档 DSN；未填写时回退 IAM_DATABASE_URL。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "DOCUMENT_STORAGE_DIR": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "DOCUMENT_MAX_FILE_BYTES": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "DOCUMENT_MAX_COUNT_PER_USER": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 500
+  },
+  "DOCUMENT_MAX_BYTES_PER_USER": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer"
+  },
+  "DOCUMENT_EMBEDDING_MODEL": {
+    "description": "嵌入模型别名，需在 LiteLLM 中配置；默认 if-embedding-v1。索引与查询必须使用相同模型。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "if-embedding-v1"
+  },
+  "DOCUMENT_EMBEDDING_REVISION": {
+    "description": "索引模型配置版本，默认 v1。同一别名更换底层模型时必须改为新版本（如 v2），完整重建并审核发布。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "v1"
+  },
+  "DOCUMENT_EMBEDDING_DIMENSIONS": {
+    "description": "当前索引固定为 1536 维；修改维度需要单独的数据迁移，不能仅修改本配置。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 1536
+  },
+  "DOCUMENT_EMBEDDING_BATCH_SIZE": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 64
+  },
+  "DOCUMENT_TRIGRAM_MIN_SCORE": {
+    "description": "中文/标题 pg_trgm 候选通道的最低 word_similarity 分数（0-1）。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 0.08
+  },
+  "DOCUMENT_WORKER_POLL_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 2
+  },
+  "DOCUMENT_WORKER_HEARTBEAT_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 30
+  },
+  "DOCUMENT_METADATA_SUGGESTION_MODEL": {
+    "description": "DOCLING_TIMEOUT_SECONDS=600 DOCLING_MAX_CONCURRENT_TASKS=2 DOCLING_POLL_SECONDS=2 DOCLING_OCR_LANG=ch_sim,en 可选的元数据建议模型别名；留空时仅执行确定性提取。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "DOCUMENT_SOFFICE_PATH": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": "soffice"
+  },
+  "DOCUMENT_OFFICE_PREVIEW_TIMEOUT_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 180.0
+  },
+  "DOCUMENT_TABLE_ROW_GROUP_SIZE": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 40
+  },
+  "KNOWLEDGE_RERANK_MODEL": {
+    "description": "独立知识检索及问答使用 LITELLM_SERVICE_KEY，授权下方模型与嵌入模型，并允许读取 /model/info 能力目录。 研究运行仍使用所属 Run Key；缺少密钥或模型授权时返回明确错误，不回退到服务密钥。 重排模型默认使用下方别名；研究运行未指定该角色时使用摘要模型。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "KNOWLEDGE_ANSWER_MODEL": {
+    "description": "独立问答模型别名；留空时使用 DOCUMENT_METADATA_SUGGESTION_MODEL，均为空时不可回答。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "KNOWLEDGE_MODEL_CALLS_PER_USER_DAY": {
+    "description": "每用户每日物理模型调用上限，单位为次，UTC 日界；默认 0 表示不限。嵌入、重排、回答及格式修复均计数。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 0
+  },
+  "DOCUMENT_WORKER_LEASE_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 300
+  },
+  "DOCUMENT_WORKER_MAX_ATTEMPTS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 3
+  },
+  "DOCUMENT_WORKER_METRICS_PORT": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false,
+    "type": "integer"
+  },
+  "DOCUMENT_OCR_ENABLED": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": true
+  },
+  "DOCUMENT_OCR_MODE": {
+    "description": "local: Worker 内置 PaddleOCR；remote: 调用下方 HTTP OCR 服务（JSON base64 协议）。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "local"
+  },
+  "DOCUMENT_OCR_URL": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "DOCUMENT_OCR_API_KEY": {
+    "description": "",
+    "bootstrap": false,
+    "secret": true
+  },
+  "DOCUMENT_OCR_TIMEOUT_SECONDS": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 120
+  },
+  "DOCUMENT_OCR_FILE_TYPE": {
+    "description": "PaddleOCR 服务 fileType：0=image，1=服务端支持的其他文件类型。 远程服务需能从 document-worker 容器访问；请求体为 JSON，file 为 base64 字符串。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 0
+  },
+  "DOCUMENT_OCR_DPI": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 300
+  },
+  "LITELLM_RUN_TEAM_ID": {
+    "description": "预先在 LiteLLM 中创建的 Run Team ID。每个研究 Run 的短期 Key都归属该 Team。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_RUN_KEY_ENCRYPTION_KEY": {
+    "description": "MODEL_BACKEND=litellm 时必填。生成一个 32 字节随机值并进行 URL-safe Base64编码： python -c \"import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())\" 生产环境不得使用示例固定值，也不得在部署后随意更换，否则旧 Run Key无法解密。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD": {
+    "description": "管理员控制的单 Run 成本预算，单位为 micro-USD（1 美元 = 1,000,000 micro-USD）。 以下本地示例表示：默认每个 Run 最多 5 美元，管理员硬上限 20 美元。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_RUN_BUDGET_MAX_MICRO_USD": {
+    "description": "",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_RUN_KEY_TTL_SECONDS": {
+    "description": "Run Key有效期，单位为秒；获取 Lease或恢复 Run时会自动续期。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 86400
+  },
+  "LITELLM_POLICY_REVISION": {
+    "description": "Key与路由策略修订号。策略含义变化时递增，不要原地改写旧版本语义。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "v1"
+  },
+  "MODEL_BACKEND": {
+    "description": "新 Run 使用的模型 Backend。旧 Run仍按 Manifest 中冻结的值恢复。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "FINAL_REPORT_STREAM_ENABLED": {
+    "description": "可选：终稿长文写作经网关流式生成（Phase 1）。开启后首包超时（默认 15s） 与空闲超时替代整段 180s 超时；部署不支持流式或首包超时会自动降级回 非流式路径。不影响工具调用与结构化输出，不进 Run 冻结契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_CONTROL_SUBNET": {
+    "description": "将 Docker 控制网络与 Docling 所在的局域网网段隔离，避免路由冲突。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "KNOWLEDGE_WORKER_POLL_SECONDS": {
+    "description": "知识库任务队列轮询间隔，单位：秒。处理事实候选提取、资料导入与导出。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 5
+  },
+  "KNOWLEDGE_EXPORT_TTL_HOURS": {
+    "description": "导出归档和待导入上传文件的保留时间，单位：小时；过期文件会清理，需重新提交。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 24
+  },
+  "KNOWLEDGE_IMPORT_MAX_BYTES": {
+    "description": "导入归档大小上限，单位：字节；同时限制上传文件大小与 ZIP 解压后总大小。默认 10 GiB。 经过代理部署时，代理的请求体大小限制也应与此值匹配，并预留 multipart 封装空间。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "KNOWLEDGE_BACKUP_INTERVAL_HOURS": {
+    "description": "周期备份间隔，单位：小时；仅 knowledge-backup 的 loop 模式读取。默认每天一次。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 24
+  },
+  "KNOWLEDGE_BACKUP_KEEP_DAILY": {
+    "description": "每日备份保留数量，默认保留 30 个有备份的日期；loop 模式会执行保留策略并清理过期快照。 仓库没有每日成功备份时，此值不代表一定具备最近连续 30 天的恢复点。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 30
+  },
+  "RESTIC_REPOSITORY": {
+    "description": "RustFS 示例端口映射：9010 为 S3 接口，9011 为 Web 控制台；以实际部署映射为准。 正确示例：s3:http://rustfs.example.internal:9010/insight-forge 带独立目录前缀的示例：s3:http://rustfs.example.internal:9010/insight-forge/knowledge-backups 不要填写控制台网址，也不要包含 /rustfs/console/browser/ 等页面路径。 http 仅适用于可信内网；使用 https 时应配置服务端证书及客户端信任链。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "RESTIC_PASSWORD": {
+    "description": "Restic 仓库加密密码，与 RustFS 登录密码、S3 Secret Key 是不同概念。 首次初始化仓库时设置；恢复和后续备份必须使用同一仓库密码。 请使用独立密码并另行安全保管；仅有 S3 文件和访问密钥无法替代此密码进行解密。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "AWS_ACCESS_KEY_ID": {
+    "description": "RustFS 签发的 S3 Access Key ID（访问密钥标识）；不能留空。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "AWS_SECRET_ACCESS_KEY": {
+    "description": "与 Access Key ID 配对的 Secret Access Key（访问密钥），不要提交到示例文件或代码仓库。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "AWS_DEFAULT_REGION": {
+    "description": "S3 签名使用的区域；需匹配 RustFS 服务端配置，未自定义区域时通常使用 us-east-1。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "KNOWLEDGE_RESTORE_DATABASE_URL": {
+    "description": "灾备恢复演练的目标 PostgreSQL 连接串；仅 restore 命令需要，常规备份可留空。 必须先创建独立空数据库；程序拒绝恢复到源数据库或已包含业务表的数据库。 示例：postgresql://restore_user:替换为密码@app-db:5432/insightforge_restore_check 连接串内密码如含 @、:、/ 等特殊字符，需要进行 URL 编码；不要在示例文件填写真实密码。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "COORDINATION_DATABASE_URL": {
+    "description": "RocketMQ 团队协调：ENABLE_ASYNC_RESEARCH=true 时必填。 协调状态 PostgreSQL DSN，格式 postgresql://用户名:密码@主机:5432/数据库； 默认无值。Docker Compose 自动指向 app-db，迁移使用 alembic upgrade head。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "ROCKETMQ_ENDPOINT": {
+    "description": "RocketMQ 5.x Proxy 的 gRPC 服务接口，格式 主机:端口；默认无值，常见服务端口 8081（不是管理控制台）。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "ROCKETMQ_TOPIC_PREFIX": {
+    "description": "部署独占的 Topic/消费组前缀，默认 insightforge；不同数据库不可共用该前缀。 需预建 <前缀>_coordination_events_v1 和 <前缀>_coordination_control_v1，消息类型 TRANSACTION。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "ROCKETMQ_TLS": {
+    "description": "Proxy TLS 开关，默认 false；Proxy 启用 TLS 时设置 true。",
+    "bootstrap": true,
+    "secret": false,
+    "type": "boolean"
+  },
+  "ROCKETMQ_ACCESS_KEY": {
+    "description": "Broker/Proxy 开启鉴权时必填，默认留空；填写实际凭据到本地 .env，不提交版本库。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "ROCKETMQ_SECRET_KEY": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_DATABASE_SCHEMA": {
+    "description": "框架表所在 PostgreSQL schema 名。框架与业务表同库时必须使用独立 schema （默认 agentscope_runtime）；业务表（含同名 knowledge_bases）不受影响。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_STORAGE_AUTO_CREATE": {
+    "description": "是否允许服务启动时自动建表（create_all）。仅开发/演示环境设为 true； 生产必须为 false（默认），schema 变更走显式迁移命令，禁止隐式迁移。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_BUS_TABLE_PREFIX": {
+    "description": "持久总线（队列/日志/锁/注册表）的表名前缀，避免与业务表同名。一般不改。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_ENDPOINT": {
+    "description": "RocketMQ 广播（完整 PG 模式可启用；留空时仅进程内通知）。 填写 Proxy 的 gRPC 服务接口，格式 主机:端口；不是 NameServer 的 9876 或管理控制台。 本项目指定服务器的 NameServer 为 172.22.121.109:9876，对应已验证 Proxy 为 172.22.121.109:8081。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_TOPIC_PREFIX": {
+    "description": "默认 insightforge_as；须预建 <前缀>_broadcast_wake_v1（NORMAL 类型），不同业务库独占前缀。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_GROUP": {
+    "description": "启用远程广播时必填：每个并行运行实例使用独立、预建的消费组；重启可复用。 不同实例共用消费组会负载均衡，无法确保所有实例收到广播。示例：insightforge_as_api_01。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_ACCESS_KEY": {
+    "description": "Proxy 启用鉴权时必填，默认空；真实值仅保存在本地配置中。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_SECRET_KEY": {
+    "description": "",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_ROCKETMQ_TLS": {
+    "description": "Proxy 是否启用 TLS，默认 false；按服务器配置填写。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_DRAIN_TIMEOUT_SECONDS": {
+    "description": "停止接收后等待在途请求/命令的时间，单位秒，默认 30；超时取消后仍等待 finally 保存完成。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 30
+  },
+  "RESEARCH_ENGINE": {
+    "description": "研究引擎仅支持 native（默认值）；旧 QueryEngine 运行仅可读取，不能恢复执行。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_NATIVE_RESOURCES": {
+    "description": "原生资源默认 host，用于本地工具与模型；Web 研究必须选择 gateway， 并配置 AS_DATABASE_URL、LiteLLM 控制凭据及 Sandbox Gateway/Controller。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_TEAM_WORKER_IMAGE": {
+    "description": "可信团队控制进程镜像（不是执行用户 shell 的沙箱镜像）；开启异步研究时必填。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "AS_TEAM_WORKER_ENV_FILE": {
+    "description": "Controller 可读取的专用环境文件绝对路径；包含 AS_DATABASE_URL、远程 MQ、IAM 与根签名配置。 不应使用沙箱环境文件，也不要将此文件提交到 Git；默认留空并拒绝启动团队容器。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_TEAM_WORKER_NETWORK": {
+    "description": "现有 Docker 网络名称，默认留空使用 Docker 默认网络；需能访问 API/Gateway/PG 和远程 MQ。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_TEAM_WORKER_MOUNTS": {
+    "description": "Docker --mount 参数的 JSON 数组，默认 []；生产须共享 RUNS_DIR 工件目录与策略文件。 示例：[\"type=bind,source=/srv/insightforge/runs,target=/app/.runs\"]",
+    "bootstrap": true,
+    "secret": false
+  },
+  "AS_TEAM_CONTROLLER_MOUNTS": {
+    "description": "Controller 使用 Docker SDK 启动可信团队；挂载数组格式为 target/source/type/read_only。 默认空数组；生产必须共享 API 的 RUNS_DIR 卷，资料检索另需资料卷与数据库配置。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "[]"
+  },
+  "QUALITY_EVALUATION_MIN_SCORE": {
+    "description": "高级配置参数：QUALITY_EVALUATION_MIN_SCORE。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LOG_LEVEL": {
+    "description": "高级配置参数：LOG_LEVEL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "INFO"
+  },
+  "SANDBOX_TASK_TOKEN": {
+    "description": "高级配置参数：SANDBOX_TASK_TOKEN。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "AS_DATABASE_URL": {
+    "description": "高级配置参数：AS_DATABASE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "TASK_ACTIVITY_PREVIEW_ENABLED": {
+    "description": "高级配置参数：TASK_ACTIVITY_PREVIEW_ENABLED。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "AS_RECOVERY_DATABASE_URL": {
+    "description": "高级配置参数：AS_RECOVERY_DATABASE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "LITELLM_RUN_KEY_RECONCILE_INTERVAL_SECONDS": {
+    "description": "高级配置参数：LITELLM_RUN_KEY_RECONCILE_INTERVAL_SECONDS。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 300
+  },
+  "IAM_DATABASE_URL": {
+    "description": "高级配置参数：IAM_DATABASE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": true,
+    "secret": false
+  },
+  "DOCLING_SERVE_API_KEY": {
+    "description": "高级配置参数：DOCLING_SERVE_API_KEY。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": true
+  },
+  "DOCLING_OCR_LANG": {
+    "description": "高级配置参数：DOCLING_OCR_LANG。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "DOCLING_SERVE_URL": {
+    "description": "高级配置参数：DOCLING_SERVE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "SANDBOX_API_INTERNAL_URL": {
+    "description": "高级配置参数：SANDBOX_API_INTERNAL_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "SANDBOX_GATEWAY_PHYSICAL_PROCESS": {
+    "description": "高级配置参数：SANDBOX_GATEWAY_PHYSICAL_PROCESS。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "MEM0_CONFIG_PATH": {
+    "description": "高级配置参数：MEM0_CONFIG_PATH。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "LITELLM_TEAM_DEFAULT_BUDGET_MICRO_USD": {
+    "description": "高级配置参数：LITELLM_TEAM_DEFAULT_BUDGET_MICRO_USD。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "LITELLM_TEAM_DEFAULT_BUDGET_DURATION": {
+    "description": "高级配置参数：LITELLM_TEAM_DEFAULT_BUDGET_DURATION。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": ""
+  },
+  "ANTHROPIC_BASE_URL": {
+    "description": "高级配置参数：ANTHROPIC_BASE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "GET_API_KEYS_FROM_CONFIG": {
+    "description": "高级配置参数：GET_API_KEYS_FROM_CONFIG。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "DASHSCOPE_BASE_URL": {
+    "description": "高级配置参数：DASHSCOPE_BASE_URL。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_GATEWAY_CONTAINER": {
+    "description": "高级配置参数：SANDBOX_GATEWAY_CONTAINER。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "sandbox-gateway"
+  },
+  "SANDBOX_SERVICE_MEMORY_RESERVE_BYTES": {
+    "description": "高级配置参数：SANDBOX_SERVICE_MEMORY_RESERVE_BYTES。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "1073741824"
+  },
+  "SANDBOX_GATEWAY_PROXY_PORT": {
+    "description": "高级配置参数：SANDBOX_GATEWAY_PROXY_PORT。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 8080
+  },
+  "SANDBOX_GATEWAY_PORT": {
+    "description": "高级配置参数：SANDBOX_GATEWAY_PORT。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 8081
+  },
+  "SANDBOX_PROFILE_ID": {
+    "description": "高级配置参数：SANDBOX_PROFILE_ID。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "PATH": {
+    "description": "高级配置参数：PATH。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "LANG": {
+    "description": "高级配置参数：LANG。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "C.UTF-8"
+  },
+  "INSIGHTFORGE_TASK_WORKSPACE_ROOT": {
+    "description": "高级配置参数：INSIGHTFORGE_TASK_WORKSPACE_ROOT。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "/workspace/work"
+  },
+  "AS_TEAM_PROJECT": {
+    "description": "高级配置参数：AS_TEAM_PROJECT。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_LOG_PATH": {
+    "description": "高级配置参数：SANDBOX_LOG_PATH。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_TASK_PAYLOAD_PATH": {
+    "description": "高级配置参数：SANDBOX_TASK_PAYLOAD_PATH。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  },
+  "SANDBOX_RESULT_PATH": {
+    "description": "高级配置参数：SANDBOX_RESULT_PATH。用途及默认值遵循对应服务配置契约。",
+    "bootstrap": false,
+    "secret": false
+  }
+}

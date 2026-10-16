@@ -1,17 +1,12 @@
 # 原生 E2E 覆盖配置。与根目录 docker-compose.yaml 合并使用。
 # 必须先填写专用 Worker 环境文件并构建 API 镜像；仅启动本次需要的服务。
 services:
-  app-db:
-    # 正式团队 Worker 位于 default 网络，需要访问同一恢复库；不发布数据库宿主端口。
-    networks:
-      - default
-      - document-internal
   api:
-    image: insightforge-api:local
+    image: marketscout-api:local
     environment:
       RESEARCH_ENGINE: native
       AS_NATIVE_RESOURCES: gateway
-      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
       AS_ROCKETMQ_ENDPOINT: ${AS_ROCKETMQ_ENDPOINT:?填写远程RocketMQ的gRPC代理地址}
       AS_ROCKETMQ_GROUP: ${AS_ROCKETMQ_GROUP:-insightforge-native-api}
@@ -26,10 +21,10 @@ services:
       sandbox-controller:
         condition: service_started
   native-migrate:
-    image: insightforge-api:local
+    image: marketscout-api:local
     env_file: .env
     environment:
-      AS_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
     command: ["python", "-c", "import asyncio; from open_deep_research.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
     depends_on:
@@ -37,11 +32,11 @@ services:
         condition: service_completed_successfully
     restart: "no"
     networks:
-      - document-internal
+      - default
   sandbox-controller:
     environment:
       SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}-sandbox-gateway
-      AS_TEAM_WORKER_IMAGE: insightforge-api:local
+      AS_TEAM_WORKER_IMAGE: marketscout-api:local
       AS_TEAM_PROJECT: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}
       AS_TEAM_WORKER_ENV_FILE: /run/native-team.env
       AS_TEAM_WORKER_NETWORK: ${COMPOSE_PROJECT_NAME:-marketscout-agentscope}_default

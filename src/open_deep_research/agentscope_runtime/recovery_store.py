@@ -79,6 +79,8 @@ def _no_credentials(value):
                 "authorization",
                 "secret_key",
             }:
+                if isinstance(item, str) and item.startswith(("credential:", "os.environ/")):
+                    continue
                 raise ValueError(
                     "checkpoint contains a credential field; use a reference"
                 )
@@ -479,6 +481,73 @@ class RecoveryStore:
         self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None,
         partial_fetches=False,
     ):
+        from open_deep_research.platform import runtime as platform_runtime
+        metered = platform_runtime.enabled() and kind in {"model_attempt", "gateway:model"}
+        state = None
+        if platform_runtime.enabled():
+            state, _ = await self.load(lease.run_id, lease.user_id)
+            if state.application.get("identity", {}).get("session_id"):
+                from open_deep_research.agentscope_runtime.production import authorize_run_owner
+                from security.rbac.permissions import RESEARCH_RUN_CREATE
+                principal = await authorize_run_owner(lease.user_id, state.application)
+                if principal is None or not principal.has(RESEARCH_RUN_CREATE.code):
+                    raise PermissionError("run_owner_no_longer_authorized")
+        quota_record = None
+        if metered:
+            from open_deep_research.platform import quota
+            from open_deep_research.platform.integration import check_credentials
+            snapshot = state.application.get("configuration", {}).get("contract", {}).get("metadata", {}).get("platform_snapshot")
+            if snapshot:
+                await check_credentials(snapshot, lease.user_id)
+            if "cost_micro_usd" not in (reserve or {}):
+                raise ValueError("managed_model_call_requires_cost_reservation")
+            quota_record = await quota.reserve(platform_runtime.billing_owner() or lease.user_id, self._monthly_key(lease.run_id, key),
+                reserve["cost_micro_usd"], kind)
+        try:
+            result = await self._begin_operation(lease, key, kind, payload, replay_safe=replay_safe,
+                reserve=reserve, observation=observation, partial_fetches=partial_fetches)
+        except (BudgetExhausted, DeadlineExceeded, ValueError):
+            if quota_record and quota_record["status"] == "reserved":
+                await quota.release(self._monthly_key(lease.run_id, key))
+            raise
+        except BaseException:
+            if metered:
+                await quota.mark_unknown(self._monthly_key(lease.run_id, key))
+            raise
+        if metered and result.get("replayed"):
+            await self._sync_monthly(lease, key)
+        return result
+
+    @staticmethod
+    def _monthly_key(run_id, key):
+        return f"run:{run_id}:{digest(key)}"
+
+    async def _sync_monthly(self, lease, key):
+        from open_deep_research.platform import runtime as platform_runtime
+        if not platform_runtime.enabled():
+            return
+        async with self.engine.connect() as conn:
+            op = (await conn.execute(select(self.ops).where(self.ops.c.run_id == lease.run_id,
+                self.ops.c.key == key))).mappings().one_or_none()
+        if not op or op["kind"] not in {"model_attempt", "gateway:model"}:
+            return
+        from open_deep_research.platform import quota
+        identity = self._monthly_key(lease.run_id, key)
+        receipt = op["result"] or {}
+        outcome = receipt.get("outcome") or {}
+        uncertain = not receipt.get("usage_correction") and (receipt.get("uncertain") or receipt.get("cost_status") == "unknown" or outcome.get("cost_status") == "unknown" or outcome.get("usage_status") == "unknown")
+        if op["state"] == "committed" and not uncertain:
+            if receipt.get("usage_correction"):
+                await quota.correct(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
+            else:
+                await quota.settle(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
+        else:
+            await quota.mark_unknown(identity)
+
+    async def _begin_operation(
+        self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None,
+        partial_fetches=False,
+    ):
         fingerprint = digest(payload)
         unknown = False
         async with self.transaction(lease) as (conn, row):
@@ -587,6 +656,7 @@ class RecoveryStore:
         _no_credentials(result)
         async with self.transaction(lease) as (conn, row):
             await self._commit_operation(conn, row, lease, key, result, actual=actual)
+        await self._sync_monthly(lease, key)
 
     async def _commit_operation(self, conn, row, lease, key, result, *, actual=None):
         """Commit within the caller's fenced transaction, including reconciliation."""
@@ -691,6 +761,7 @@ class RecoveryStore:
             await self._event(conn, row, "research.usage_reconciled",
                               {"operation_key": key, "usage": actual},
                               event_id=digest([lease.run_id, key, "usage_correction"]))
+        await self._sync_monthly(lease, key)
 
     async def resolve_operation(self, lease, key, *, result=None, not_executed=False):
         """Apply externally verified resolution and settlement in one transaction."""
@@ -724,6 +795,13 @@ class RecoveryStore:
                 await self._commit_operation(conn, row, lease, key, result)
             await self._event(conn, row, "research.operation_resolved",
                               {"operation_key": key, "not_executed": not_executed})
+        from open_deep_research.platform import runtime as platform_runtime
+        if platform_runtime.enabled() and op["kind"] in {"model_attempt", "gateway:model"}:
+            if not_executed:
+                from open_deep_research.platform import quota
+                await quota.release(self._monthly_key(lease.run_id, key))
+            else:
+                await self._sync_monthly(lease, key)
 
     async def events(self, run_id, user_id, *, after=0):
         await self.load(run_id, user_id)

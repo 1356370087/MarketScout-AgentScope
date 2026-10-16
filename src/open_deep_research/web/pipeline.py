@@ -349,18 +349,35 @@ def evidence_from_chunks(
     objective: str,
     document_by_id: dict[str, ExtractedDocument],
     chunks: list[DocumentChunk],
+    *,
+    evidence_fidelity: bool = False,
 ) -> list[EvidenceRecord]:
     """Create bounded claim evidence while quarantining instruction-shaped chunks."""
     evidence: list[EvidenceRecord] = []
     for chunk in chunks:
-        sentences = _safe_evidence_sentences(chunk.text)
+        if evidence_fidelity:
+            from .passages import passages
+            sentences = passages(chunk.text)
+        else:
+            sentences = _safe_evidence_sentences(chunk.text)
         document = document_by_id[chunk.document_id]
         locator = (
             f"page {chunk.page}"
             if chunk.page
             else f"chars {chunk.start_offset}-{chunk.end_offset}"
         )
-        for excerpt in _select_evidence_sentences(objective, sentences):
+        # Source paragraphs preserve argument/default context that individual
+        # sentences (or translated lexical overlap) can lose.
+        for excerpt in _select_evidence_sentences(objective, sentences, limit=6 if evidence_fidelity else 3):
+            if evidence_fidelity:
+                from .passages import source_excerpt
+                excerpt = source_excerpt(document.markdown, excerpt,
+                    span=(chunk.start_offset, chunk.end_offset) if chunk.end_offset else None)
+                if excerpt is None:
+                    continue
+                if not chunk.page:
+                    start = document.markdown.find(excerpt)
+                    locator = f"chars {start}-{start + len(excerpt)}"
             evidence.append(
                 EvidenceRecord(
                     evidence_id=stable_id("ev", f"{chunk.chunk_id}:{excerpt}"),
@@ -401,13 +418,19 @@ def _complete_model_evidence(record: EvidenceRecord) -> bool:
 def merge_evidence_records(
     primary: list[EvidenceRecord],
     deterministic: list[EvidenceRecord],
+    *,
+    evidence_fidelity: bool = False,
 ) -> list[EvidenceRecord]:
     """Keep model claims while filling omitted chunk facts with grounded evidence."""
     merged: list[EvidenceRecord] = []
     seen: set[tuple[str, str]] = set()
-    grounded_primary = [
-        record for record in primary if _complete_model_evidence(record)
-    ]
+    if evidence_fidelity:
+        from .passages import valid_passage
+        grounded_primary = [record.model_copy(update={"claim": record.supporting_excerpt})
+                            for record in primary if valid_passage(record.supporting_excerpt)]
+        deterministic = [record for record in deterministic if valid_passage(record.supporting_excerpt)]
+    else:
+        grounded_primary = [record for record in primary if _complete_model_evidence(record)]
     for record in [*grounded_primary, *deterministic]:
         excerpt_key = " ".join(record.supporting_excerpt.split()).casefold()
         key = (record.source_url, excerpt_key)
@@ -494,6 +517,7 @@ class WebResearchPipeline:
         render_dynamic: DynamicRenderAdapter | None = None,
         external_extractors: list[ExternalExtractAdapter] | None = None,
         evidence_extractor: EvidenceAdapter | None = None,
+        chunk_selector: Callable | None = None,
         fetch_backends: dict[str, ExternalExtractAdapter] | None = None,
         backend_order: list[str] | None = None,
         allow_url: Callable[[str], bool] | None = None,
@@ -510,6 +534,7 @@ class WebResearchPipeline:
         self.render_dynamic = render_dynamic
         self.external_extractors = external_extractors or []
         self.evidence_extractor = evidence_extractor
+        self.chunk_selector = chunk_selector
         self.fetch_backends = dict(fetch_backends or {})
         if render_dynamic:
             self.fetch_backends["playwright"] = render_dynamic
@@ -938,6 +963,7 @@ class WebResearchPipeline:
         saved_progress = await self.result_cache.progress() if self.result_cache is not None else {}
         inspection_ids = sorted(r["requirement_id"] for r in self.evidence_context.get("requirements", [])
                                 if r.get("kind", "factual") == "factual") or ["__default__"]
+        focus = stable_id("focus", repr((inspection_ids, " ".join(request.objective.casefold().split()))))
         document_progress = {}
         all_chunks: list[DocumentChunk] = []
         for document in unique_documents if self.extract_evidence else []:
@@ -950,36 +976,76 @@ class WebResearchPipeline:
                 "processed_chunks": previous.get("processed_chunks", []),
                 "blocked_chunks": previous.get("blocked_chunks", []),
                 "inspections": {rid: dict(previous.get("inspections", {}).get(rid, {})) for rid in inspection_ids},
+                **({"focus_inspections": dict(previous.get("focus_inspections", {}))} if self.settings.evidence_fidelity else {}),
             }
             if self.result_cache is not None:
                 inspections = document_progress[document.document_id]["inspections"]
-                checked = set.intersection(*(set(row.get("processed_chunks", [])) | set(row.get("blocked_chunks", []))
-                                             for row in inspections.values()))
+                if self.settings.evidence_fidelity:
+                    checked = set(previous.get("focus_inspections", {}).get(focus, [])) | set(previous.get("blocked_chunks", []))
+                else:
+                    checked = set.intersection(*(set(row.get("processed_chunks", [])) | set(row.get("blocked_chunks", []))
+                                                 for row in inspections.values()))
                 document_chunks = [chunk for chunk in document_chunks if chunk.chunk_id not in checked]
             all_chunks.extend(
-                select_chunks(
+                document_chunks if self.chunk_selector is not None else select_chunks(
                     request.objective,
                     document_chunks,
                     self.settings.max_chunks_per_document,
                 )
             )
-        selected_chunks = select_chunks(
-            request.objective, all_chunks, self.settings.max_chunks_per_iteration
-        )
         document_by_id = {
             document.document_id: document for document in unique_documents
         }
+        selected_chunks = select_chunks(request.objective, all_chunks, self.settings.max_chunks_per_iteration)
+        if self.chunk_selector is not None and all_chunks:
+            async def select_semantically():
+                objective = self.evidence_context.get("objective") or request.objective
+                if objective != request.objective:
+                    objective += "\nCurrent targeted reading question: " + request.objective
+                return await self.chunk_selector(objective, document_by_id, all_chunks,
+                    self.settings.max_chunks_per_iteration, self.settings.max_chunks_per_document)
+            try:
+                if self.result_cache is not None:
+                    selected_ids = await self.result_cache.compute("chunk_selection", {
+                        "version": 1, "context": self.evidence_context, "focus": focus,
+                        "chunks": sorted(c.chunk_id for c in all_chunks),
+                    }, select_semantically)
+                else:
+                    selected_ids = await select_semantically()
+                by_id = {chunk.chunk_id: chunk for chunk in all_chunks}
+                semantic: list[DocumentChunk] = []
+                per_document: Counter[str] = Counter()
+                for identity in dict.fromkeys(selected_ids):
+                    chunk = by_id.get(identity)
+                    if chunk is not None and per_document[chunk.document_id] < self.settings.max_chunks_per_document:
+                        semantic.append(chunk)
+                        per_document[chunk.document_id] += 1
+                    if len(semantic) >= self.settings.max_chunks_per_iteration:
+                        break
+                if semantic:
+                    selected_chunks = semantic
+            except Exception as exc:
+                from open_deep_research.agentscope_runtime.search_providers import preserve_control_error
+                preserve_control_error(exc)
+                # A selector outage does not certify coverage. The normal
+                # research gate still sees only actually extracted evidence.
+                if self.progress:
+                    await self.progress("inspection_updated", metrics={"semantic_selection_fallback": 1})
         deterministic_evidence = evidence_from_chunks(
             request.objective,
             document_by_id,
             selected_chunks,
+            evidence_fidelity=self.settings.evidence_fidelity,
         )
         model_checked = False
         if self.evidence_extractor and self.extract_evidence and selected_chunks:
             try:
                 async def extract():
+                    objective = self.evidence_context.get("objective") or request.objective
+                    if self.settings.evidence_fidelity:
+                        objective += "\nCurrent targeted reading question: " + request.objective
                     values = await self.evidence_extractor(
-                        self.evidence_context.get("objective") or request.objective,
+                        objective,
                         document_by_id, selected_chunks,
                     )
                     if getattr(self.evidence_extractor, "last_failure", False):
@@ -990,7 +1056,8 @@ class WebResearchPipeline:
                     model_evidence = [EvidenceRecord.model_validate(value) for value in await extract()]
                 else:
                     values = await self.result_cache.compute("extraction", {
-                        "version": 1, "context": self.evidence_context,
+                        "version": 3 if self.settings.evidence_fidelity else 1, "context": self.evidence_context,
+                        **({"focus": focus} if self.settings.evidence_fidelity else {}),
                         "documents": sorted(doc.content_hash for doc in unique_documents),
                         "chunks": sorted(chunk.chunk_id for chunk in selected_chunks),
                     }, extract)
@@ -1006,6 +1073,7 @@ class WebResearchPipeline:
             evidence = merge_evidence_records(
                 model_evidence,
                 deterministic_evidence,
+                evidence_fidelity=self.settings.evidence_fidelity,
             )
         else:
             evidence = deterministic_evidence
@@ -1028,20 +1096,22 @@ class WebResearchPipeline:
         ]
         if self.result_cache is not None and self.extract_evidence:
             for chunk in selected_chunks:
-                item = document_progress[chunk.document_id]
-                item["visited_chunks"].append(chunk.chunk_id)
+                progress_row = document_progress[chunk.document_id]
+                progress_row["visited_chunks"].append(chunk.chunk_id)
                 if inspect_untrusted_content(chunk.text):
-                    item["blocked_chunks"].append(chunk.chunk_id)
+                    progress_row["blocked_chunks"].append(chunk.chunk_id)
                 elif model_checked:
-                    item["processed_chunks"].append(chunk.chunk_id)
-                for inspection in item["inspections"].values():
+                    progress_row["processed_chunks"].append(chunk.chunk_id)
+                    if self.settings.evidence_fidelity:
+                        progress_row["focus_inspections"][focus] = sorted(set(progress_row["focus_inspections"].get(focus, [])) | {chunk.chunk_id})
+                for inspection in progress_row["inspections"].values():
                     for field in ("visited_chunks", "processed_chunks", "blocked_chunks"):
-                        if chunk.chunk_id in item[field]:
+                        if chunk.chunk_id in progress_row[field]:
                             inspection[field] = sorted(set(inspection.get(field, [])) | {chunk.chunk_id})
-            for item in document_progress.values():
+            for progress_row in document_progress.values():
                 for key in ("visited_chunks", "processed_chunks", "blocked_chunks"):
-                    item[key] = sorted(set(item[key]))
-                item["inspection_complete"] = len(item["processed_chunks"]) >= item["total_chunks"]
+                    progress_row[key] = sorted(set(progress_row[key]))
+                progress_row["inspection_complete"] = len(progress_row["processed_chunks"]) >= progress_row["total_chunks"]
             updated = await self.result_cache.progress({
                 "documents": document_progress,
                 "candidates": {record.evidence_id: {**record.model_dump(mode="json"), "requirement_ids": inspection_ids} for record in evidence},

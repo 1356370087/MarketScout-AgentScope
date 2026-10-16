@@ -8,6 +8,8 @@ results marked "未完成重排" instead of pretending the corpus is empty.
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import json
 import os
 import re
@@ -105,7 +107,7 @@ async def rerank_segments(
         service_key = knowledge_service_key()
     except KnowledgeCredentialError as exc:
         raise RerankUnavailableError(str(exc)) from exc
-    base_url = (os.getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
+    base_url = (config_getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
     try:
         from open_deep_research.agentscope_runtime.service_models import service_text
 

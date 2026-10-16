@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import json
 import logging
@@ -444,7 +446,7 @@ def task_activity_publisher_from_config(
 
 def gateway_physical_process() -> bool:
     """Return whether this process is the sandbox Gateway itself."""
-    return os.getenv("SANDBOX_GATEWAY_PHYSICAL_PROCESS", "").strip().lower() in {
+    return config_getenv("SANDBOX_GATEWAY_PHYSICAL_PROCESS", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -473,7 +475,7 @@ async def _publish_via_internal_api(
             TaskActivityPublishRequest,
         )
 
-        base_url = os.getenv("SANDBOX_API_INTERNAL_URL", "").rstrip("/")
+        base_url = config_getenv("SANDBOX_API_INTERNAL_URL", "").rstrip("/")
         root_key = Configuration.from_runnable_config(config).sandbox_root_signing_key
         metadata = (config.get("metadata") if isinstance(config, dict) else None) or {}
         run_id = str(metadata.get("run_id") or "").strip()

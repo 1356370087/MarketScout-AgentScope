@@ -8,6 +8,7 @@ explicit JWT keys, a database URL and (when registration is open) SMTP; the
 from __future__ import annotations
 
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
@@ -17,12 +18,12 @@ MailBackend = Literal["console", "smtp"]
 
 def _flag(name: str, default: str = "false") -> bool:
     """Return whether an env var is set to a truthy value."""
-    return os.environ.get(name, default).strip().lower() in TRUE_VALUES
+    return config_environment.get(name, default).strip().lower() in TRUE_VALUES
 
 
 def _int(name: str, default: int) -> int:
     """Parse an env var as int, falling back to ``default`` on any error."""
-    raw = os.environ.get(name)
+    raw = config_environment.get(name)
     if not raw:
         return default
     try:
@@ -54,10 +55,10 @@ JWT_ALGORITHM = "EdDSA"
 class IAMSettings:
     """Resolved identity/RBAC configuration sourced from the environment."""
 
-    app_env: str = field(default_factory=lambda: os.environ.get("APP_ENV", "development"))
-    issuer: str = field(default_factory=lambda: os.environ.get("IAM_JWT_ISSUER", "open-deep-research"))
+    app_env: str = field(default_factory=lambda: config_environment.get("APP_ENV", "development"))
+    issuer: str = field(default_factory=lambda: config_environment.get("IAM_JWT_ISSUER", "open-deep-research"))
 
-    database_url: str = field(default_factory=lambda: os.environ.get("IAM_DATABASE_URL", ""))
+    database_url: str = field(default_factory=lambda: config_environment.get("IAM_DATABASE_URL", ""))
 
     # TTL knobs.
     access_token_ttl: int = field(default_factory=lambda: _int("IAM_ACCESS_TOKEN_TTL", ACCESS_TOKEN_TTL))
@@ -70,25 +71,25 @@ class IAMSettings:
 
     # JWT keys (PEM-encoded Ed25519). Current signing key + kid, plus an
     # optional kid -> public-key verification map for smooth rotation.
-    access_signing_key_pem: str = field(default_factory=lambda: os.environ.get("IAM_JWT_ACCESS_SIGNING_KEY", ""))
-    access_signing_kid: str = field(default_factory=lambda: os.environ.get("IAM_JWT_ACCESS_KID", ""))
-    access_verify_keys_json: str = field(default_factory=lambda: os.environ.get("IAM_JWT_ACCESS_VERIFY_KEYS", ""))
-    refresh_signing_key_pem: str = field(default_factory=lambda: os.environ.get("IAM_JWT_REFRESH_SIGNING_KEY", ""))
-    refresh_signing_kid: str = field(default_factory=lambda: os.environ.get("IAM_JWT_REFRESH_KID", ""))
-    refresh_verify_keys_json: str = field(default_factory=lambda: os.environ.get("IAM_JWT_REFRESH_VERIFY_KEYS", ""))
+    access_signing_key_pem: str = field(default_factory=lambda: config_environment.get("IAM_JWT_ACCESS_SIGNING_KEY", ""))
+    access_signing_kid: str = field(default_factory=lambda: config_environment.get("IAM_JWT_ACCESS_KID", ""))
+    access_verify_keys_json: str = field(default_factory=lambda: config_environment.get("IAM_JWT_ACCESS_VERIFY_KEYS", ""))
+    refresh_signing_key_pem: str = field(default_factory=lambda: config_environment.get("IAM_JWT_REFRESH_SIGNING_KEY", ""))
+    refresh_signing_kid: str = field(default_factory=lambda: config_environment.get("IAM_JWT_REFRESH_KID", ""))
+    refresh_verify_keys_json: str = field(default_factory=lambda: config_environment.get("IAM_JWT_REFRESH_VERIFY_KEYS", ""))
 
     # SMTP / mail.
     mail_backend: MailBackend = field(
-        default_factory=lambda: cast(MailBackend, os.environ.get("IAM_MAIL_BACKEND", "console"))
+        default_factory=lambda: cast(MailBackend, config_environment.get("IAM_MAIL_BACKEND", "console"))
     )
-    smtp_host: str = field(default_factory=lambda: os.environ.get("IAM_SMTP_HOST", ""))
+    smtp_host: str = field(default_factory=lambda: config_environment.get("IAM_SMTP_HOST", ""))
     smtp_port: int = field(default_factory=lambda: _int("IAM_SMTP_PORT", 587))
-    smtp_user: str = field(default_factory=lambda: os.environ.get("IAM_SMTP_USER", ""))
-    smtp_password: str = field(default_factory=lambda: os.environ.get("IAM_SMTP_PASSWORD", ""))
-    mail_from: str = field(default_factory=lambda: os.environ.get("IAM_MAIL_FROM", "no-reply@localhost"))
+    smtp_user: str = field(default_factory=lambda: config_environment.get("IAM_SMTP_USER", ""))
+    smtp_password: str = field(default_factory=lambda: config_environment.get("IAM_SMTP_PASSWORD", ""))
+    mail_from: str = field(default_factory=lambda: config_environment.get("IAM_MAIL_FROM", "no-reply@localhost"))
     smtp_starttls: bool = field(default_factory=lambda: _flag("IAM_SMTP_STARTTLS", "true"))
-    public_base_url: str = field(default_factory=lambda: os.environ.get("IAM_PUBLIC_BASE_URL", "http://localhost:3000"))
-    token_digest_secret: str = field(default_factory=lambda: os.environ.get("IAM_TOKEN_DIGEST_SECRET", ""))
+    public_base_url: str = field(default_factory=lambda: config_environment.get("IAM_PUBLIC_BASE_URL", "http://localhost:3000"))
+    token_digest_secret: str = field(default_factory=lambda: config_environment.get("IAM_TOKEN_DIGEST_SECRET", ""))
 
     # Behaviour toggles.
     local_dev_bypass: bool = field(default_factory=lambda: _flag("LOCAL_DEV_AUTH_BYPASS", "false"))
@@ -108,8 +109,8 @@ class IAMSettings:
     rate_limit_window: int = field(default_factory=lambda: _int("IAM_RATE_LIMIT_WINDOW", 600))
 
     # Bootstrap administrator (created on first migration run when set).
-    bootstrap_admin_email: str = field(default_factory=lambda: os.environ.get("IAM_BOOTSTRAP_ADMIN_EMAIL", ""))
-    bootstrap_admin_password: str = field(default_factory=lambda: os.environ.get("IAM_BOOTSTRAP_ADMIN_PASSWORD", ""))
+    bootstrap_admin_email: str = field(default_factory=lambda: config_environment.get("IAM_BOOTSTRAP_ADMIN_EMAIL", ""))
+    bootstrap_admin_password: str = field(default_factory=lambda: config_environment.get("IAM_BOOTSTRAP_ADMIN_PASSWORD", ""))
 
     @property
     def is_production(self) -> bool:
@@ -140,4 +141,4 @@ def local_dev_bypass_enabled() -> bool:
     """
     if not _flag("LOCAL_DEV_AUTH_BYPASS", "false"):
         return False
-    return os.environ.get("APP_ENV", "development").strip().lower() == "development"
+    return config_environment.get("APP_ENV", "development").strip().lower() == "development"

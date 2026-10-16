@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import json
 import os
@@ -662,7 +664,7 @@ async def stage_import(
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > int(
-                    os.getenv("KNOWLEDGE_IMPORT_MAX_BYTES", str(10 * 1024**3))
+                    config_getenv("KNOWLEDGE_IMPORT_MAX_BYTES", str(10 * 1024**3))
                 ):
                     raise HTTPException(413, "archive_too_large")
                 dest.write(chunk)
@@ -718,7 +720,7 @@ async def confirm_import(
         if (
             not path.exists()
             or time.time() - path.stat().st_mtime
-            > int(os.getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
+            > int(config_getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
         ):
             raise HTTPException(410, "import_expired")
         identifier = await enqueue(
@@ -771,7 +773,7 @@ async def download_export(
     if (
         not path.exists()
         or time.time() - path.stat().st_mtime
-        > int(os.getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
+        > int(config_getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
     ):
         raise HTTPException(410, "export_expired")
     return FileResponse(

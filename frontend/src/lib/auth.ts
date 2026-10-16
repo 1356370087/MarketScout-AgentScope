@@ -46,7 +46,8 @@ export async function authFetch<T>(path: string, init: RequestInit = {}): Promis
       window.location.replace("/login");
     }
     const body = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(String(body.detail ?? body.message ?? `request_failed:${response.status}`));
+    const detail = body.detail;
+    throw new Error(Array.isArray(detail) ? detail.map((item: { msg?: string; loc?: unknown[] }) => `${item.loc?.join(".") ?? ""} ${item.msg ?? "输入无效"}`).join("；") : String(detail ?? body.message ?? `request_failed:${response.status}`));
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

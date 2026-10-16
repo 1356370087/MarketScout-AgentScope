@@ -1,36 +1,6 @@
+name: marketscout
+
 services:
-  app-db:
-    image: pgvector/pgvector:pg17
-    environment:
-      POSTGRES_DB: insightforge
-      POSTGRES_USER: insightforge
-      POSTGRES_PASSWORD: ${APP_DATABASE_PASSWORD:-insightforge-local-only}
-    volumes:
-      - app-db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U insightforge -d insightforge"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-    networks:
-      - document-internal
-    restart: unless-stopped
-
-  litellm-db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: litellm
-      POSTGRES_USER: litellm
-      POSTGRES_PASSWORD: ${LITELLM_DATABASE_PASSWORD:-litellm-local-only}
-    volumes:
-      - litellm-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-    restart: unless-stopped
-
   litellm-redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -45,9 +15,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.litellm
-    env_file: .env
     environment:
-      LITELLM_DATABASE_URL: postgresql://litellm:${LITELLM_DATABASE_PASSWORD:-litellm-local-only}@litellm-db:5432/litellm
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
+      PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      STORE_MODEL_IN_DB: "true"
+      LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL:?请配置远程 LiteLLM PostgreSQL 连接}
       LITELLM_REDIS_HOST: litellm-redis
       LITELLM_REDIS_PORT: "6379"
       # 网关侧 OTel 默认关闭；启用 trace 时设置：
@@ -67,14 +41,13 @@ services:
     ports:
       - "${LITELLM_PROXY_HOST_PORT:-4000}:4000"
     depends_on:
-      litellm-db:
-        condition: service_healthy
       litellm-redis:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - default
-      - document-internal
+    volumes:
+      - platform-config:/data/platform-config
 
   document-migrate:
     build:
@@ -82,13 +55,9 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
-      IAM_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      IAM_DATABASE_URL: ${IAM_DATABASE_URL:?请配置远程 IAM PostgreSQL 连接}
     command: ["alembic", "upgrade", "head"]
-    networks:
-      - document-internal
-    depends_on:
-      app-db:
-        condition: service_healthy
+    networks: [default]
     restart: "no"
 
   api:
@@ -98,22 +67,25 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
+      PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
+      PLATFORM_SETUP_TOKEN: ${PLATFORM_SETUP_TOKEN:-}
       RUNS_DIR: /data/runs
       # 用量/追踪 SQLite 落在共享卷上，容器重建后历史 run 的用量面板仍然可用
       # （写入者只有 api 进程，不违反多 worker SQLite 写入告诫）。
       TRACE_STORE_PATH: /data/runs/traces.sqlite3
       FRONTEND_ALLOWED_ORIGINS: http://localhost:8080
-      # 本地部署免 IAM：跳过自托管认证（无需 IAM_DATABASE_URL）。
-      # 如需完整认证，改为 "false" 并提供 Postgres 的 IAM_DATABASE_URL。
-      LOCAL_DEV_AUTH_BYPASS: "true"
-      IAM_DATABASE_URL: postgresql+asyncpg://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      # 后台配置、个人凭据及配额统一使用真实 IAM 账号。
+      LOCAL_DEV_AUTH_BYPASS: "false"
+      IAM_DATABASE_URL: ${IAM_DATABASE_URL:?请配置远程 IAM PostgreSQL 连接}
       DOCUMENT_RESEARCH_ENABLED: ${DOCUMENT_RESEARCH_ENABLED:-true}
-      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
       SANDBOX_ENABLED: ${SANDBOX_ENABLED:-false}
       ENABLE_ASYNC_RESEARCH: ${ENABLE_ASYNC_RESEARCH:-false}
       # 异步团队与 IAM 共用 PostgreSQL 实例；凭据仅注入 API，不进入 Researcher 容器。
-      COORDINATION_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      COORDINATION_DATABASE_URL: ${COORDINATION_DATABASE_URL:?请配置远程团队 PostgreSQL 连接}
       ROCKETMQ_ENDPOINT: ${ROCKETMQ_ENDPOINT:-}
       ROCKETMQ_TOPIC_PREFIX: ${ROCKETMQ_TOPIC_PREFIX:-insightforge}
       ROCKETMQ_TLS: ${ROCKETMQ_TLS:-false}
@@ -156,13 +128,13 @@ services:
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     volumes:
+      - platform-config:/data/platform-config
       - research-runs:/data/runs
       - document-data:/data/documents
       - sandbox-control:/run/insightforge
     networks:
       - default
       - sandbox-control
-      - document-internal
     depends_on:
       litellm-proxy:
         condition: service_healthy
@@ -173,10 +145,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.document-worker
-    env_file: .env
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
+      PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
+      IAM_DATABASE_URL: ${IAM_DATABASE_URL:?请配置远程 IAM PostgreSQL 连接}
       DOCUMENT_RESEARCH_ENABLED: "true"
-      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
       LITELLM_BASE_URL: http://litellm-proxy:4000/v1
       LITELLM_SERVICE_KEY: ${LITELLM_SERVICE_KEY:-}
@@ -189,12 +164,11 @@ services:
       DOCUMENT_WORKER_METRICS_PORT: ${DOCUMENT_WORKER_METRICS_PORT:-9109}
     expose: ["9109"]
     volumes:
+      - platform-config:/data/platform-config
       - document-data:/data/documents
-    # Remote PaddleOCR runs on the configured LAN endpoint. The default
-    # network provides that egress; document-internal remains the DB network.
+    # 默认网络用于连接远程 PostgreSQL、模型代理及 Docling/OCR 服务。
     networks:
       - default
-      - document-internal
     depends_on:
       document-migrate:
         condition: service_completed_successfully
@@ -213,18 +187,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: .env
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
+      PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
+      IAM_DATABASE_URL: ${IAM_DATABASE_URL:?请配置远程 IAM PostgreSQL 连接}
+      LITELLM_BASE_URL: http://litellm-proxy:4000/v1
       DOCUMENT_RESEARCH_ENABLED: "true"
-      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
     command: ["python", "-m", "open_deep_research.knowledge.maintenance"]
     healthcheck:
       disable: true
     volumes:
+      - platform-config:/data/platform-config
       - document-data:/data/documents
-    networks:
-      - document-internal
+    networks: [default]
     depends_on:
       document-migrate:
         condition: service_completed_successfully
@@ -236,7 +214,7 @@ services:
       context: .
       dockerfile: Dockerfile.knowledge-backup
     environment:
-      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
       RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
       RESTIC_PASSWORD: ${RESTIC_PASSWORD:-}
@@ -251,10 +229,6 @@ services:
       - knowledge-backup-restore:/restore
     networks:
       - default
-      - document-internal
-    depends_on:
-      app-db:
-        condition: service_healthy
     restart: unless-stopped
 
   publisher-worker:
@@ -262,6 +236,8 @@ services:
       context: .
       dockerfile: Dockerfile.publisher-worker
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
       RUNS_DIR: /data/runs
       PUBLISHER_ENABLED: ${PUBLISHER_ENABLED:-true}
       PUBLISHER_POLL_INTERVAL_SECONDS: ${PUBLISHER_POLL_INTERVAL_SECONDS:-1}
@@ -276,6 +252,7 @@ services:
       PUBLISHER_HEARTBEAT_INTERVAL_SECONDS: ${PUBLISHER_HEARTBEAT_INTERVAL_SECONDS:-10}
       PUBLISHER_HEARTBEAT_STALE_SECONDS: ${PUBLISHER_HEARTBEAT_STALE_SECONDS:-45}
     volumes:
+      - platform-config:/data/platform-config
       - research-runs:/data/runs
     network_mode: none
     read_only: true
@@ -290,12 +267,14 @@ services:
 
   frontend:
     restart: unless-stopped
+    environment:
+      RESEARCH_API_ORIGIN: http://api:2024
     build:
       context: frontend
       args:
         NEXT_PUBLIC_RESEARCH_API_BASE: /api/research
-        # 与 api 服务的 LOCAL_DEV_AUTH_BYPASS 保持一致，前端跳过登录页。
-        NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS: "true"
+        # 与 API 保持一致，管理后台与工作台共享真实登录会话。
+        NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS: "false"
     depends_on:
       api:
         condition: service_healthy
@@ -321,18 +300,22 @@ services:
       context: .
       dockerfile: Dockerfile.sandbox-controller
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
       SANDBOX_ENABLED: "true"
       ENABLE_ASYNC_RESEARCH: "true"
       SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
       SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
       SANDBOX_CONTROLLER_SOCKET: /run/insightforge/sandbox-controller.sock
-      SANDBOX_GATEWAY_CONTAINER: insightforge-sandbox-gateway
+      SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME:-marketscout}-sandbox-gateway
       SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
     network_mode: none
     depends_on:
       sandbox-gateway:
-        condition: service_healthy
+        # 首次启动时沙箱等待配置发布；API 必须能先提供初始化与配置页面。
+        condition: service_started
     volumes:
+      - platform-config:/data/platform-config:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - sandbox-control:/run/insightforge
     read_only: true
@@ -344,11 +327,13 @@ services:
 
   sandbox-gateway:
     profiles: ["sandbox"]
-    container_name: insightforge-sandbox-gateway
+    container_name: ${COMPOSE_PROJECT_NAME:-marketscout}-sandbox-gateway
     build:
       context: .
       dockerfile: Dockerfile.sandbox-gateway
     environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
       SANDBOX_ENABLED: "true"
       ENABLE_ASYNC_RESEARCH: "true"
       SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
@@ -361,7 +346,7 @@ services:
       SANDBOX_GATEWAY_FAKE_PROVIDER: ${SANDBOX_GATEWAY_FAKE_PROVIDER:-false}
       # 企业资料检索在 Gateway 内使用 Run Key；连接与 API 相同的资料库和向量模型。
       DOCUMENT_RESEARCH_ENABLED: ${DOCUMENT_RESEARCH_ENABLED:-true}
-      DOCUMENT_DATABASE_URL: postgresql://insightforge:${APP_DATABASE_PASSWORD:-insightforge-local-only}@app-db:5432/insightforge
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_EMBEDDING_MODEL: ${DOCUMENT_EMBEDDING_MODEL:-if-embedding-v1}
       DOCUMENT_EMBEDDING_DIMENSIONS: ${DOCUMENT_EMBEDDING_DIMENSIONS:-1536}
       APP_ENV: ${APP_ENV:-production}
@@ -369,7 +354,6 @@ services:
     networks:
       - default
       - sandbox-control
-      - document-internal
     read_only: true
     tmpfs:
       - /tmp:size=256m,noexec,nosuid,nodev
@@ -384,10 +368,12 @@ services:
       start_period: 20s
       retries: 3
     restart: unless-stopped
+    volumes:
+      - platform-config:/data/platform-config:ro
 
   sandbox-worker-image:
     profiles: ["sandbox-build"]
-    image: insightforge-sandbox-worker:local
+    image: marketscout-sandbox-worker:local
     build:
       context: .
       dockerfile: Dockerfile.sandbox-worker
@@ -462,18 +448,15 @@ services:
     restart: unless-stopped
 
 volumes:
+  platform-config:
   knowledge-backup-restore:
-  app-db-data:
   document-data:
   research-runs:
   sandbox-control:
-  litellm-data:
   prometheus-data:
   grafana-data:
 
 networks:
-  document-internal:
-    internal: true
   sandbox-control:
     internal: true
     ipam:

@@ -10,6 +10,7 @@ credential.
 from __future__ import annotations
 
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 
 from open_deep_research.documents.settings import get_document_settings
 
@@ -24,7 +25,7 @@ class KnowledgeBudgetExceeded(RuntimeError):
 
 def knowledge_service_key() -> str:
     """Return the service key reserved for knowledge-side model calls."""
-    key = os.getenv("LITELLM_SERVICE_KEY", "").strip()
+    key = config_getenv("LITELLM_SERVICE_KEY", "").strip()
     if not key:
         raise KnowledgeCredentialError("knowledge_service_key_unavailable")
     return key
@@ -33,7 +34,7 @@ def knowledge_service_key() -> str:
 def daily_model_call_budget() -> int:
     """Per-user knowledge model-call cap per day; 0 disables the cap."""
     try:
-        return max(0, int(os.getenv("KNOWLEDGE_MODEL_CALLS_PER_USER_DAY", "0")))
+        return max(0, int(config_getenv("KNOWLEDGE_MODEL_CALLS_PER_USER_DAY", "0")))
     except ValueError:
         return 0
 
@@ -42,11 +43,11 @@ def daily_model_call_budget() -> int:
 
 def answer_model() -> str:
     """Model route used for single-turn answers (empty = unconfigured)."""
-    return os.getenv("KNOWLEDGE_ANSWER_MODEL", "").strip() or (
+    return config_getenv("KNOWLEDGE_ANSWER_MODEL", "").strip() or (
         get_document_settings().metadata_suggestion_model
     )
 
 
 def rerank_model() -> str:
     """Model route used for semantic reranking (empty = unconfigured)."""
-    return os.getenv("KNOWLEDGE_RERANK_MODEL", "").strip()
+    return config_getenv("KNOWLEDGE_RERANK_MODEL", "").strip()

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import builtins
 import os
@@ -453,7 +455,7 @@ def create_memory_store(config: Any) -> MemoryStore:
     """Build the configured backend, preserving the existing no-op fallback."""
     if not getattr(config, "enable_memory", False):
         return NoopMemoryStore()
-    api_key = os.environ.get("MEM0_API_KEY")
+    api_key = config_environment.get("MEM0_API_KEY")
     provider = getattr(config, "memory_provider", "platform")
     if provider == "platform":
         if not api_key:
@@ -464,8 +466,14 @@ def create_memory_store(config: Any) -> MemoryStore:
         )
     if provider == "oss":
         import json
+        from open_deep_research.platform import runtime as platform_runtime
+        if platform_runtime.enabled():
+            settings = (platform_runtime.snapshot() or {}).get("document", {}).get("memory", {})
+            if not settings:
+                raise ValueError("managed_memory_configuration_required")
+            return OSSMem0Store(config=platform_runtime.resolve_secret_references(settings))
 
-        path = os.environ.get("MEM0_CONFIG_PATH")
+        path = config_environment.get("MEM0_CONFIG_PATH")
         oss_config: dict[str, Any] = {}
         if path:
             with open(path, encoding="utf-8") as handle:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -69,6 +71,9 @@ LEGACY_SANDBOX_HTTP_CONFIG_KEYS = frozenset(
 )
 PROTECTED_HTTP_METADATA_KEYS = frozenset(
     {
+        "platform_revision_id",
+        "profile_revision_id",
+        "platform_snapshot",
         "owner",
         "knowledge_manifest",
         "selected_source_snapshots",
@@ -94,7 +99,7 @@ def validate_http_configurable(configurable: Mapping[str, Any]) -> None:
             + ";see=docs/07-Docker沙箱隔离修复SPEC.md"
         )
     protected = set(PROTECTED_HTTP_CONFIG_KEYS)
-    if os.getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() in {
+    if config_getenv("GET_API_KEYS_FROM_CONFIG", "false").lower() in {
         "1",
         "true",
         "yes",

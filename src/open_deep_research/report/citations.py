@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from .references import numbered_source_urls
 
 
+def body_without_references(markdown: str) -> str:
+    """Remove reference-only sections in the supported report languages."""
+    return re.split(r"(?im)^\s*#{1,6}\s*(?:Sources|References|来源|参考资料|参考文献|参考来源)\s*$", markdown, maxsplit=1)[0]
+
+
 @dataclass
 class CitationCheck:
     """Invalid targets and whether the body contains a verifiable citation."""
@@ -16,7 +21,7 @@ class CitationCheck:
     has_body_citation: bool = False
 
 
-def check_citations(markdown: str, allowed_urls: set[str], evidence_ids: set[str]) -> CitationCheck:
+def check_citations(markdown: str, allowed_urls: set[str], evidence_ids: set[str], *, strict_body: bool = False) -> CitationCheck:
     """Check rendered targets, IDs and body presence using shared normalization."""
     # Lazy import keeps existing helper compatibility without a module cycle.
     from .orchestrator import (
@@ -34,6 +39,8 @@ def check_citations(markdown: str, allowed_urls: set[str], evidence_ids: set[str
             if _reference_identity(target) not in allowed:
                 result.errors.append(("source_not_allowlisted", target, "fenced_code" if code else "prose"))
     body = _prose_without_sources(markdown)
+    if strict_body:
+        body = body_without_references(body)
     # Literal inline code cannot supply a citation or masquerade as a marker.
     body = re.sub(r"(`+).*?\1", "", body)
     prose = "".join(region for code, region in _markdown_regions(markdown) if not code)

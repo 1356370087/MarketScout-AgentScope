@@ -1,0 +1,79 @@
+{
+  "version": "1",
+  "cases": [
+    {
+      "id": "postgres-incremental-backup",
+      "question": "仅使用 PostgreSQL 官方文档，核实 PostgreSQL 17 的增量备份支持：说明如何生成增量备份、恢复前如何合并、与常规基础备份的关系和主要限制。至少引用3个不同的官方文档页面并给出可核验链接。报告使用中文，控制在1000字左右，不需要性能跑分或市场分析。",
+      "selection": {"mode": "web"},
+      "allowed_domains": ["www.postgresql.org", "postgresql.org"],
+      "reference_sources": [
+        "https://www.postgresql.org/docs/17/app-pgbasebackup.html",
+        "https://www.postgresql.org/docs/17/app-pgcombinebackup.html",
+        "https://www.postgresql.org/docs/17/continuous-archiving.html#BACKUP-INCREMENTAL-BACKUP",
+        "https://www.postgresql.org/docs/17/runtime-config-wal.html#RUNTIME-CONFIG-WAL-SUMMARIZATION"
+      ],
+      "required_facts": [
+        "--incremental 必须提供同一服务器先前备份的 backup_manifest。",
+        "WAL summarization 必须启用，summarize_wal 默认 off，所需 LSN 范围的摘要必须保留。",
+        "pg_combinebackup 按从旧到新顺序接收完整备份链，首项为全量备份，输出为合成全量备份。",
+        "增量备份不能直接恢复使用，合并之外仍要满足适用的 WAL 与恢复流程要求。",
+        "--clone 的文件系统限制不能扩张成整个增量备份功能的平台限制。"
+      ],
+      "negative_controls": [
+        "pg_basebackup --incremental 不需要提供此前备份的 manifest。",
+        "summarize_wal 默认开启，合并完备份后不需要 WAL 恢复。",
+        "PostgreSQL 增量备份只能在 Btrfs、XFS 和 APFS 上使用。"
+      ]
+    },
+    {
+      "id": "qdrant-filterable-index",
+      "question": "仅依据所选 Qdrant 官方页面，说明 payload 索引与 HNSW 向量索引在带过滤条件的检索中分别承担什么职责，以及创建顺序为何重要。核实：数据摄取后才建立 payload 索引，若希望利用新增的 filter-aware 边是否需要重建 HNSW；给出官方说明的重建方法，并区分未建立 payload 索引与完全不能执行过滤查询。中文约800字，引用原文，不比较吞吐量或编造性能数字。",
+      "selection": {"mode": "specific", "sources": [
+        {"type": "url", "url": "https://qdrant.tech/documentation/manage-data/indexing/"},
+        {"type": "url", "url": "https://qdrant.tech/documentation/search/filtering/"}
+      ]},
+      "allowed_domains": ["qdrant.tech"],
+      "reference_sources": [
+        "https://qdrant.tech/documentation/manage-data/indexing/",
+        "https://qdrant.tech/documentation/search/filtering/"
+      ],
+      "required_facts": [
+        "向量索引加速向量检索，payload 索引加速过滤，二者职责不同。",
+        "应在数据摄取前创建 payload 索引，以使随后生成的 HNSW 获得 filter-aware 边。",
+        "数据摄取后建立 payload 索引，为利用新的 filter-aware 边需要重建 HNSW，这不是缺乏依据的猜测。",
+        "官方给出的重建方法是小幅修改 HNSW 配置，例如 ef_construct 加 1，促使优化器重新索引。",
+        "没有 payload 索引不等同于过滤能力不存在；需区分查询代价与显式 strict mode 限制。"
+      ],
+      "negative_controls": [
+        "建立 payload 索引即可自动让所有已有 HNSW 图具有 filter-aware 边，无需重建。",
+        "Qdrant 没有 payload 索引就绝对不能进行任何过滤查询。"
+      ]
+    },
+    {
+      "id": "python-taskgroup-cancellation",
+      "question": "仅依据所选 Python 3.14 官方文档，说明 asyncio.TaskGroup 中一个子任务抛出普通异常时，其余任务及外层上下文的处理过程，异常如何传播；再解释 CancelledError 与普通异常的区别、清理后是否应重新抛出，以及 KeyboardInterrupt/SystemExit 的特殊处理。核实并纠正‘取消异常可以安全吞掉而不影响 TaskGroup’这一说法。中文约800字，不做性能比较。",
+      "selection": {"mode": "specific", "sources": [
+        {"type": "url", "url": "https://docs.python.org/3.14/library/asyncio-task.html"},
+        {"type": "url", "url": "https://docs.python.org/3.14/library/asyncio-exceptions.html"}
+      ]},
+      "allowed_domains": ["docs.python.org"],
+      "reference_sources": [
+        "https://docs.python.org/3.14/library/asyncio-task.html#task-groups",
+        "https://docs.python.org/3.14/library/asyncio-task.html#task-cancellation",
+        "https://docs.python.org/3.14/library/asyncio-exceptions.html#asyncio.CancelledError"
+      ],
+      "required_facts": [
+        "TaskGroup 首次遇到非 CancelledError 的任务异常时会取消其余任务，并等待它们结束。",
+        "符合条件的普通异常在清理等待后以 ExceptionGroup 或 BaseExceptionGroup 组合传播。",
+        "CancelledError 直接继承 BaseException，不应等同于普通 Exception。",
+        "清理完成后一般应重新抛出 CancelledError，吞掉它可能破坏 TaskGroup/timeout 的结构化并发行为。",
+        "KeyboardInterrupt 和 SystemExit 会在取消并等待其余任务后重新抛出原异常，而不是按通常方式组合。"
+      ],
+      "negative_controls": [
+        "TaskGroup 中一个子任务失败不会取消同组其他任务。",
+        "CancelledError 是普通 Exception 子类，吞掉它对结构化并发没有影响。",
+        "KeyboardInterrupt 永远作为普通成员封装进 ExceptionGroup。"
+      ]
+    }
+  ]
+}

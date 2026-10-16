@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-const publicPages = ["/login", "/register", "/verify-email", "/forgot-password", "/reset-password"];
+const publicPages = ["/login", "/register", "/verify-email", "/forgot-password", "/reset-password", "/setup"];
 
 export function proxy(request: NextRequest) {
   if (process.env.NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS === "true") return NextResponse.next();

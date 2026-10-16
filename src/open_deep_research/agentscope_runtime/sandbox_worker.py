@@ -1,5 +1,7 @@
 """Capability-only native Researcher composition inside a sandbox container."""
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import os
 
 from pydantic import SecretStr
@@ -27,8 +29,8 @@ from open_deep_research.tools.base import ToolExecutionZone
 
 async def execute_worker(payload, config):
     """Run the native loop; all model/tool effects remain behind the Gateway."""
-    token = os.environ.get("SANDBOX_TASK_TOKEN")
-    url = os.environ.get("SANDBOX_GATEWAY_URL")
+    token = config_environment.get("SANDBOX_TASK_TOKEN")
+    url = config_environment.get("SANDBOX_GATEWAY_URL")
     if not token or not url:
         raise ValueError("sandbox_gateway_capability_missing")
     if payload.researcher_state.get("query_state_snapshot"):

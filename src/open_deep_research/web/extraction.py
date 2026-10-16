@@ -66,11 +66,17 @@ def _metadata_from_html(soup: BeautifulSoup) -> dict[str, str | None]:
     }
 
 
-def extract_html(candidate: CandidateSource, raw: RawFetch) -> ExtractedDocument:
+def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity: bool = False) -> ExtractedDocument:
     """Extract main HTML content, metadata, and Markdown."""
     content_type = raw.result.content_type or "text/html"
     text = _decode_body(raw.body, None)
     soup = BeautifulSoup(text, "html.parser")
+    # Documentation uses asides for normative tips/warnings as well as
+    # sidebars. Only the latter are page chrome (e.g. Qdrant filtering).
+    content_root = (
+        soup.select_one("#docContent, #main-content")
+        or soup.find("article") or soup.find("main") or soup.select_one('[role="main"]')
+    ) if evidence_fidelity else None
     metadata = _metadata_from_html(soup)
     for selector in (
         "script",
@@ -85,18 +91,25 @@ def extract_html(candidate: CandidateSource, raw: RawFetch) -> ExtractedDocument
         "embed",
     ):
         for node in soup.select(selector):
+            if selector == "aside" and content_root is not None and content_root in node.parents:
+                continue
             node.decompose()
     for node in soup.select(
         "[class*='advert'],[class*='recommend'],[id*='advert'],[id*='recommend']"
     ):
         node.decompose()
     main = (
+        (soup.select_one("#docContent, #main-content") if evidence_fidelity else None)
+        or
         soup.find("article")
         or soup.find("main")
-        or soup.find(attrs={"role": "main"})
+        or soup.select_one('[role="main"]')
         or soup.body
         or soup
     )
+    if evidence_fidelity:
+        for node in main.select(".navheader, .navfooter, .breadcrumb, .breadcrumbs, [aria-label='Breadcrumb']"):
+            node.decompose()
     markdown = markdownify(str(main), heading_style="ATX").strip()
     visible_chars = len(re.sub(r"\s+", "", markdown))
     flags: list[str] = []
@@ -110,7 +123,7 @@ def extract_html(candidate: CandidateSource, raw: RawFetch) -> ExtractedDocument
     elif visible_chars < 600:
         flags.append("thin_content")
     canonical_tag = soup.find(
-        "link", attrs={"rel": lambda value: value and "canonical" in value}
+        "link", attrs={"rel": lambda value: bool(value and "canonical" in value)}
     )
     canonical = candidate.canonical_url
     if canonical_tag and canonical_tag.get("href"):
@@ -136,6 +149,7 @@ def extract_html(candidate: CandidateSource, raw: RawFetch) -> ExtractedDocument
         content_type=content_type,
         markdown=markdown,
         extractor="beautifulsoup+markdownify",
+        extractor_version="2" if evidence_fidelity else "1",
         content_hash=digest,
         quality_flags=flags,
     )
@@ -195,7 +209,7 @@ def extract_document(
         "application/xhtml+xml",
         "",
     }:
-        return extract_html(candidate, raw)
+        return extract_html(candidate, raw, evidence_fidelity=settings.evidence_fidelity)
     raise ValueError(f"unsupported_content_type:{content_type}")
 
 
@@ -241,9 +255,23 @@ def chunk_document(
     chunks: list[DocumentChunk] = []
     start = 0
     heading: str | None = None
+    if settings.evidence_fidelity:
+        from .passages import blocks
+        boundaries = [end for _, end, _ in blocks(text)]
     while start < len(text):
         end = min(len(text), start + settings.chunk_chars)
-        if end < len(text):
+        if settings.evidence_fidelity and end < len(text):
+            # Prefer entire paragraphs, parameter definitions, tables and code.
+            prior = [point for point in boundaries if start < point <= end]
+            if prior:
+                end = prior[-1]
+            else:
+                # Oversized prose may exceed a chunk, but never cut a line in
+                # half. A structural block remains readable via its source.
+                boundary = text.rfind("\n", start + 1, end)
+                if boundary > start:
+                    end = boundary + 1
+        elif end < len(text):
             boundary = max(
                 text.rfind("\n\n", start, end),
                 text.rfind("。", start, end),
@@ -275,5 +303,11 @@ def chunk_document(
             )
         if end >= len(text):
             break
-        start = max(start + 1, end - settings.chunk_overlap_chars)
+        next_start = max(start + 1, end - settings.chunk_overlap_chars)
+        if settings.evidence_fidelity:
+            # Overlap starts at a source block boundary, not in the middle of
+            # a sentence or table row. Do not repeat a whole chunk forever.
+            following = [point for point in boundaries if start < point <= next_start]
+            next_start = following[-1] if following else end
+        start = next_start
     return chunks

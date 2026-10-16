@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 from open_deep_research.agentscope_runtime.recovery_store import (
     digest,
 )
-from open_deep_research.budgets import BudgetExhausted
+from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
 from open_deep_research.tools.base import ToolEffect, ToolResult
 from open_deep_research.tools.governance import (
     GovernedToolCallResult,
@@ -226,6 +226,7 @@ class RecoverySession:
         key = key or self.key(kind)
         if self.problem:
             raise self.problem
+        record = None
         try:
             record = await self.store.begin_operation(
                 self.lease,
@@ -257,6 +258,14 @@ class RecoverySession:
             )
             await self.hit("operation_committed")
             return result
+        except DeadlineExceeded as exc:
+            # Only a gateway model's typed pre-dispatch refusal proves this
+            # outer model operation had no effect. Tool/transport timeouts may
+            # already have effects and must keep their existing isolation.
+            if record is not None and kind.startswith("model:") and self.model_accounting == "gateway":
+                await self.store.resolve_operation(self.lease, key, not_executed=True)
+            self.problem = exc
+            raise
         except BudgetExhausted as exc:
             action = digest([self.lease.run_id, key, "budget"])
             self.problem = ApprovalPending(
@@ -694,6 +703,8 @@ class RecoveryStages:
         heartbeat = asyncio.create_task(renew())
         try:
             with self.session.scope(stage, state.revision_count):
+                if stage == "memory_extract_and_write" and state.completion_outcome.get("reason") == "deadline_exceeded":
+                    return None
                 external_effect = (
                     stage == "memory_extract_and_write"
                     and getattr(self.inner, "write_memory", None) is not None

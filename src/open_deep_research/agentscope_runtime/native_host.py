@@ -7,6 +7,8 @@ Historical QueryEngine artifacts can be read, but never resumed or executed.
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import asyncio
 import os
 from contextlib import asynccontextmanager
@@ -24,7 +26,7 @@ NATIVE_ENGINE = "native"
 
 def research_engine() -> str:
     """Only AgentScope executes research; archived engines remain read-only."""
-    value = os.environ.get("RESEARCH_ENGINE", NATIVE_ENGINE).strip().lower()
+    value = config_environment.get("RESEARCH_ENGINE", NATIVE_ENGINE).strip().lower()
     if value != NATIVE_ENGINE:
         raise RuntimeError(f"unsupported RESEARCH_ENGINE: {value}")
     return value
@@ -138,7 +140,7 @@ async def build_native_research_service(*, runs_dir, database_url=None, admissio
     if database_url is None:
         database_url = "sqlite+aiosqlite:///" + (runs_dir / "native-recovery.db").as_posix()
     runtime = None
-    production = resource_provider is None and os.environ.get("AS_NATIVE_RESOURCES", "host") == "gateway"
+    production = resource_provider is None and config_environment.get("AS_NATIVE_RESOURCES", "host") == "gateway"
     if production:
         from open_deep_research.agentscope_runtime.app import ASRuntime
         from open_deep_research.agentscope_runtime.production_resources import (

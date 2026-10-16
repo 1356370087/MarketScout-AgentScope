@@ -1,5 +1,7 @@
 """Restic disaster recovery: consistent database/files, checksums and empty-target restore."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import argparse
 import asyncio
 import hashlib
@@ -45,7 +47,7 @@ def restic(*args, cwd=None):
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
     )
-    missing = [key for key in required if not os.getenv(key)]
+    missing = [key for key in required if not config_getenv(key)]
     if missing:
         raise ValueError("Missing backup configuration: " + ", ".join(missing))
     return command(["restic", *args], cwd=cwd)
@@ -265,7 +267,7 @@ async def main():
         if not args.destination:
             raise ValueError("restore_destination_required")
         await restore(
-            args.snapshot, args.destination, os.getenv("KNOWLEDGE_RESTORE_DATABASE_URL")
+            args.snapshot, args.destination, config_getenv("KNOWLEDGE_RESTORE_DATABASE_URL")
         )
     else:
         while True:
@@ -280,11 +282,11 @@ async def main():
                 "--group-by",
                 "tags",
                 "--keep-daily",
-                os.getenv("KNOWLEDGE_BACKUP_KEEP_DAILY", "30"),
+                config_getenv("KNOWLEDGE_BACKUP_KEEP_DAILY", "30"),
                 "--prune",
             )
             await asyncio.sleep(
-                float(os.getenv("KNOWLEDGE_BACKUP_INTERVAL_HOURS", "24")) * 3600
+                float(config_getenv("KNOWLEDGE_BACKUP_INTERVAL_HOURS", "24")) * 3600
             )
 
 

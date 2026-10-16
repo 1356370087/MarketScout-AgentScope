@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 from collections import OrderedDict
@@ -78,7 +80,7 @@ async def embed_texts(
     """Embed texts through the configured LiteLLM alias in bounded batches."""
     if not texts:
         return []
-    base_url = (os.getenv("LITELLM_BASE_URL") or "").rstrip("/")
+    base_url = (config_getenv("LITELLM_BASE_URL") or "").rstrip("/")
     if not base_url:
         raise EmbeddingError("document_embedding_gateway_unconfigured")
     query_operation = operation != "ingest"
@@ -109,6 +111,8 @@ async def embed_texts(
         attempt = await reserve_attempt("embedding", settings.embedding_model) if operation == "knowledge_query" else None
         try:
             async def call(**kwargs):
+                from open_deep_research.platform.accounting import transport_options
+                kwargs = {**transport_options(), **kwargs}
                 return await client.embeddings.create(model=settings.embedding_model, input=batch, **kwargs)
 
             if operation == "query":
@@ -117,7 +121,8 @@ async def embed_texts(
                     raise EmbeddingError("document_query_accounting_unavailable")
                 response = await accounting.invoke(settings.embedding_model, batch, call)
             else:
-                response = await call()
+                from open_deep_research.platform.accounting import call as metered_call
+                response = await metered_call(settings.embedding_model, {"input": batch}, 0, "embedding", call)
         except BaseException as error:
             await settle_attempt(attempt, error=error)
             raise

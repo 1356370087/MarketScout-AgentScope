@@ -1,5 +1,7 @@
 """Sequential, budgeted native experiments with immutable conditions and artifacts."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
+
 import hashlib
 import json
 import os
@@ -27,7 +29,7 @@ def environment(values):
         key.upper(): json.dumps(value) if not isinstance(value, str) else value
         for key, value in values.items()
     }
-    previous = {key: os.environ.get(key) for key in overrides}
+    previous = {key: config_environment.get(key) for key in overrides}
     os.environ.update(overrides)
     try:
         yield
@@ -88,7 +90,7 @@ def configuration(case, mode, *, model=None):
             enable_async_research=False,
             model_backend="litellm",
         )
-    elif os.getenv("EVALUATION_LOCAL_WORKERS", "false").lower() == "true":
+    elif config_getenv("EVALUATION_LOCAL_WORKERS", "false").lower() == "true":
         values.update(enable_async_research=True, async_research_mode="collaborator")
     return values
 
@@ -106,7 +108,7 @@ async def frozen_catalog(values, *, production=False):
         raise ValueError("missing_evaluation_service_credentials")
     client = LiteLLMModelCatalogClient(
         base_url=judge.base_url,
-        api_key=os.getenv("LITELLM_MASTER_KEY") or judge.api_key,
+        api_key=config_getenv("LITELLM_MASTER_KEY") or judge.api_key,
     )
     try:
         catalog = await client.load()
@@ -221,6 +223,10 @@ def effective_configuration(values):
         )
 
 
+from open_deep_research.platform.runtime import database_configuration
+
+
+@database_configuration
 async def run_dataset(
     dataset_path,
     directory,
@@ -465,6 +471,7 @@ def validate_dataset(dataset_path, directory):
     return results
 
 
+@database_configuration
 async def rescore(
     source, destination, *, budget_usd=20, judge_repeats=1, dataset_path=None
 ):

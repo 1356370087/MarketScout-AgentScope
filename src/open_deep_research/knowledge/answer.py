@@ -9,6 +9,8 @@ instead of showing fabricated citations.
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import json
 import os
 import re
@@ -103,7 +105,7 @@ async def _call_answer_model(question: str, evidence: list[dict[str, Any]], *, o
         service_key = knowledge_service_key()
     except KnowledgeCredentialError as exc:
         raise AnswerUnavailableError(str(exc)) from exc
-    base_url = (os.getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
+    base_url = (config_getenv("LITELLM_BASE_URL") or "http://litellm-proxy:4000/v1").rstrip("/")
     try:
         from open_deep_research.agentscope_runtime.service_models import service_text
 

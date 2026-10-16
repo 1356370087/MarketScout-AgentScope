@@ -13,15 +13,24 @@ from open_deep_research.completion import CompletionDecision, ResearchCompletion
 class BusinessCompletion(MiddlewareBase):
     """Ask native ReAct for bounded remediation; never implement another loop."""
 
-    def __init__(self, limit, facts, *, min_sources=1):
+    def __init__(self, limit, facts, *, min_sources=1, accept_covered_on_exit=False):
         self.limit, self.facts = limit, facts
         self.reasoning_calls = 0
         self.finished = False
         self.policy = ResearchCompletionPolicy(min_sources=min_sources)
         self.result = None
+        self.accept_covered_on_exit = accept_covered_on_exit
 
     def evaluate(self, *, explicit=False, exhausted=False):
         context = self.facts()
+        if (self.accept_covered_on_exit and exhausted and not explicit
+                and context.has_remaining_budget and not context.research_stop_reason
+                and not context.cancelled and not context.active_task_count
+                and not context.unresolved_conflicts and not context.uncovered_requirements):
+            verified = self.policy.evaluate(replace(context, explicit_completion_succeeded=True))
+            if verified.action is CompletionDecision.COMPLETE:
+                self.result = replace(verified, reason="coverage_complete_at_iteration_limit")
+                return self.result
         context = replace(
             context,
             explicit_completion_succeeded=explicit,

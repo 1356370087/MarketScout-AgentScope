@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import permissions as P
+from .platform_permissions import ADMIN_GRANTS, DEVELOPER_GRANTS
 
 # Stable role codes for the system roles.
 VIEWER_CODE = "viewer"
@@ -73,6 +74,7 @@ DEVELOPER = RoleDefinition(
     DEVELOPER_CODE, "Developer",
     "Researcher capabilities plus own observability, diagnostics and advanced tools.",
     permissions=(
+        *DEVELOPER_GRANTS,
         P.RESEARCH_RUN_READ_OWN.code,
         P.RESEARCH_TASK_ACTIVITY_READ_OWN.code,
         P.RESEARCH_RUN_CREATE.code,
@@ -100,6 +102,7 @@ ADMIN = RoleDefinition(
     ADMIN_CODE, "Administrator",
     "Manage users, roles, permissions and audit. No cross-user run access.",
     permissions=(
+        *ADMIN_GRANTS,
         P.IAM_USERS_READ.code,
         P.IAM_USERS_WRITE.code,
         P.IAM_ROLES_READ.code,

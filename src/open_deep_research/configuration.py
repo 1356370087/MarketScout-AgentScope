@@ -1,5 +1,7 @@
 """Configuration management for the Open Deep Research system."""
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import hashlib
 import json
 import os
@@ -16,11 +18,11 @@ from open_deep_research.quality.policy import (
     rigor_from_legacy_min_score,
 )
 
-RUN_CONFIG_SCHEMA_VERSION = 18
+RUN_CONFIG_SCHEMA_VERSION = 19
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
-QUALITY_POLICY_VERSION = "quality-gate-v5"
+QUALITY_POLICY_VERSION = "quality-gate-v6"
 RUN_CONFIG_FROZEN_FIELDS = (
     "model_backend",
     "litellm_policy_revision",
@@ -331,14 +333,15 @@ def _resolve_quality_rigor(
     configured_rigor = configurable.get("quality_evaluation_rigor")
     configured_legacy = configurable.get("quality_evaluation_min_score")
 
-    if frozen or prefer_configurable:
+    from open_deep_research.platform.runtime import enabled as platform_configuration_enabled
+    if frozen or prefer_configurable or platform_configuration_enabled():
         explicit_rigor = configured_rigor
         legacy_score = configured_legacy
     else:
-        explicit_rigor = os.environ.get(
+        explicit_rigor = config_environment.get(
             "QUALITY_EVALUATION_RIGOR", configured_rigor
         )
-        legacy_score = os.environ.get(
+        legacy_score = config_environment.get(
             "QUALITY_EVALUATION_MIN_SCORE", configured_legacy
         )
 
@@ -1597,7 +1600,10 @@ class Configuration(BaseModel):
             "with a versioned model group."
         ),
     )
-    quality_evaluation_model_max_tokens: int = Field(default=2048, ge=256)
+    quality_evaluation_model_max_tokens: int = Field(
+        default=8192, ge=256,
+        description="质量评估单次结构化输出的 Token 上限；默认 8192，为逐项覆盖、证据绑定及前置条件核验保留空间。",
+    )
     quality_evaluation_temperature: Optional[float] = Field(
         default=None,
         ge=0.0,
@@ -1683,13 +1689,13 @@ class Configuration(BaseModel):
         },
     )
     report_review_model_max_tokens: int = Field(
-        default=3072,
+        default=8192,
         ge=256,
         description="Maximum structured output tokens for one final report review.",
         metadata={
             "x_oap_ui_config": {
                 "type": "number",
-                "default": 3072,
+                "default": 8192,
                 "min": 256,
                 "description": "最终报告 Reviewer 单次结构化输出 Token 上限。",
             }
@@ -2349,16 +2355,35 @@ class Configuration(BaseModel):
                 if frozen
                 and field_name in RUN_CONFIG_FROZEN_FIELDS
                 and field_name in configurable
-                else os.environ.get(
+                else config_environment.get(
                     field_name.upper(), configurable.get(field_name)
                 )
             )
             for field_name in field_names
         }
+        from open_deep_research.platform import runtime as platform_runtime
+        if platform_runtime.enabled():
+            from open_deep_research.platform.catalog import managed_runtime_keys, is_secret, DERIVED_RUNTIME_FIELDS
+            platform_snapshot = metadata.get("platform_snapshot") or platform_runtime.snapshot() or {}
+            managed_values = platform_snapshot.get("document", {}).get("runtime", {})
+            for field_name in managed_runtime_keys():
+                # HTTP callers are checked by the platform resolver before reaching this
+                # boundary. Frozen runs also retain fields outside the legacy field list.
+                values[field_name] = configurable.get(field_name, managed_values.get(field_name))
+            for field_name in DERIVED_RUNTIME_FIELDS:
+                values[field_name] = configurable.get(field_name)
+            if platform_snapshot.get("policy_path"):
+                from pathlib import Path
+                from open_deep_research.platform.components import config_directory
+                policy_location = Path(platform_snapshot["policy_path"])
+                values["sandbox_policy_path"] = str(policy_location if policy_location.is_absolute() else config_directory() / policy_location)
+            for field_name in field_names:
+                if is_secret(field_name):
+                    values[field_name] = platform_runtime.getenv(field_name.upper())
         for field_name in ("search_providers", "openai_search_model", "anthropic_search_model"):
             # Blank optional example values mean unset, so per-run UI choices
             # remain usable. Explicit []/null still keep environment precedence.
-            if not (frozen and field_name in configurable) and os.environ.get(field_name.upper(), "").strip() == "":
+            if not platform_runtime.enabled() and not (frozen and field_name in configurable) and config_environment.get(field_name.upper(), "").strip() == "":
                 values[field_name] = configurable.get(field_name)
         if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 15:
             # 旧运行没有授权知识模型角色，不从新部署环境补入额外模型。
@@ -2374,14 +2399,17 @@ class Configuration(BaseModel):
             values.update(research_efficiency_mode="baseline", max_supplement_rounds=2,
                           max_no_progress_rounds=2, research_context_target_tokens=24_000,
                           handoff_context_target_tokens=8_000)
-        rigor, _warning = _resolve_quality_rigor(config or {})
+        rigor_config = config or {}
+        if platform_runtime.enabled() and values.get("quality_evaluation_rigor") is not None:
+            rigor_config = {**rigor_config, "configurable": {**configurable, "quality_evaluation_rigor": values["quality_evaluation_rigor"]}}
+        rigor, _warning = _resolve_quality_rigor(rigor_config)
         if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 18:
             values["report_time_reserve_ratio"] = 1.0
         values["quality_evaluation_rigor"] = rigor
         # Explicit env-var overrides for fields with non-standard env names
-        if os.environ.get("MEM0_PROVIDER") and "memory_provider" not in (configurable or {}):
+        if not platform_runtime.enabled() and config_environment.get("MEM0_PROVIDER") and "memory_provider" not in (configurable or {}):
             values["memory_provider"] = os.environ["MEM0_PROVIDER"]
-        if os.environ.get("MEM0_MEMORY_PROJECT_ID") and "memory_project_id" not in (configurable or {}):
+        if not platform_runtime.enabled() and config_environment.get("MEM0_MEMORY_PROJECT_ID") and "memory_project_id" not in (configurable or {}):
             values["memory_project_id"] = os.environ["MEM0_MEMORY_PROJECT_ID"]
         return cls(**{k: v for k, v in values.items() if v is not None})
 
@@ -2456,6 +2484,8 @@ def run_config_fingerprint(config: RuntimeConfig) -> str:
         ),
         "config": frozen_run_config_values(config),
     }
+    if payload["schema_version"] >= 19 and config.get("metadata", {}).get("platform_snapshot"):
+        payload["platform_snapshot"] = config["metadata"]["platform_snapshot"]
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -2478,6 +2508,14 @@ def freeze_run_config(
         "metadata": dict(config.get("metadata", {})),
     }
     metadata = frozen["metadata"]
+    from open_deep_research.platform import runtime as platform_runtime
+    if platform_runtime.enabled() and metadata.get("runtime_config_frozen") is not True and not metadata.get("platform_snapshot"):
+        from copy import deepcopy
+        current = platform_runtime.snapshot()
+        if current is not None:
+            metadata["platform_snapshot"] = deepcopy(current)
+            metadata["platform_revision_id"] = current["revision_id"]
+            metadata["profile_revision_id"] = current.get("profile_revision_id", current["revision_id"])
     if metadata.get("runtime_config_frozen") is True:
         schema_version = int(
             metadata.get("run_config_schema_version", 1)

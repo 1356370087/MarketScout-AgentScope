@@ -141,14 +141,21 @@ class NativeRuns:
         from open_deep_research.configuration import Configuration
 
         # Admission is deployment policy, not a client-overridable run option.
-        cfg = Configuration.from_runnable_config(None)
+        from open_deep_research.platform import runtime as platform_runtime
+        if platform_runtime.enabled():
+            from open_deep_research.platform.integration import prepare_run
+            cfg, prepared = await prepare_run(self.prepare_config, request, principal)
+        else:
+            cfg = Configuration.from_runnable_config(None)
+            prepared = None
         async with self.store.engine.connect() as connection:
             active = await connection.scalar(select(func.count()).select_from(self.store.runs).where(
                 self.store.runs.c.user_id == owner,
                 self.store.runs.c.snapshot["status"].as_string().not_in({"completed", "failed", "cancelled"}),
             ))
         self.admission.enforce_creation(principal, cfg, active)
-        prepared = await self.prepare_config(request, principal)
+        if prepared is None:
+            prepared = await self.prepare_config(request, principal)
         from open_deep_research.logging_config import current_request_id
         prepared["metadata"] = {
             **request.metadata, **prepared.get("metadata", {}),
@@ -308,12 +315,17 @@ class NativeRuns:
     async def _execute(self, recovery):
         try:
             config = RunConfig.restore(recovery.snapshot.application["configuration"])
-            async with self.pipeline_factory(
-                recovery.snapshot, config, recovery
-            ) as pipeline:
-                await recovery.consume_decisions(pipeline)
-                async for _ in pipeline.reply_stream():
-                    pass
+            from open_deep_research.platform import runtime as platform_runtime
+            snapshot = config.compatibility_projection().get("metadata", {}).get("platform_snapshot")
+            owner = recovery.lease.user_id
+            secrets = await platform_runtime.credential_values(snapshot, owner) if snapshot else None
+            with platform_runtime.scope(snapshot, owner, secrets):
+                async with self.pipeline_factory(
+                    recovery.snapshot, config, recovery
+                ) as pipeline:
+                    await recovery.consume_decisions(pipeline)
+                    async for _ in pipeline.reply_stream():
+                        pass
         except asyncio.CancelledError:
             # Shutdown retains the durable inflight operation; explicit cancel
             # has already fenced the executor in RecoveryStore.request_cancel.

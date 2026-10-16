@@ -8,9 +8,9 @@ import { refreshBrowserSession } from "../auth";
 export const researchApi = {
   listRuns: (status?: string) => apiFetch<{ items: Array<Record<string, unknown>>; next_cursor?: string }>(`/runs?limit=50${status ? `&status=${encodeURIComponent(status)}` : ""}`),
   getRun: (id: string) => apiFetch<RunSnapshot>(`/runs/${encodeURIComponent(id)}`),
-  createRun: (query: string, configurable: Record<string, unknown>, title?: string, sourceSelection?: SourceSelection, publicationTheme?: PublicationTheme) => apiFetch<{ run_id: string }>("/runs", {
+  createRun: (query: string, configurable: Record<string, unknown>, title?: string, sourceSelection?: SourceSelection, publicationTheme?: PublicationTheme, configuration?: { profile_revision_id: string; expected_platform_revision: string }) => apiFetch<{ run_id: string }>("/runs", {
     method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-    body: JSON.stringify({ title, messages: [{ role: "user", content: query }], configurable, source_selection: sourceSelection, ...(publicationTheme ? { publication_theme: publicationTheme } : {}) }),
+    body: JSON.stringify({ title, messages: [{ role: "user", content: query }], configurable, source_selection: sourceSelection, ...(publicationTheme ? { publication_theme: publicationTheme } : {}), ...configuration }),
   }),
   humanAction: (runId: string, actionId: string, action: string, message = "", options: { source_selection?: SourceSelection; expected_version?: number } = {}) => apiFetch(`/runs/${runId}/human-actions/${actionId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, message, ...options }) }),
   feedback: (runId: string, payload: Record<string, unknown>) => apiFetch(`/runs/${runId}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),

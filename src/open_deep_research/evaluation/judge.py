@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 from dataclasses import dataclass, field
@@ -47,15 +49,15 @@ class JudgeConfig:
         """Resolve a versioned model group and the restricted evaluation key."""
         return cls(
             model=(
-                os.getenv("EVALUATION_MODEL")
-                or os.getenv("QUALITY_EVALUATION_MODEL")
+                config_getenv("EVALUATION_MODEL")
+                or config_getenv("QUALITY_EVALUATION_MODEL")
                 or "if-evaluation-v1"
             ).strip(),
-            api_key=(os.getenv("LITELLM_SERVICE_KEY") or "").strip() or None,
-            base_url=(os.getenv("LITELLM_BASE_URL") or "").strip() or None,
+            api_key=(config_getenv("LITELLM_SERVICE_KEY") or "").strip() or None,
+            base_url=(config_getenv("LITELLM_BASE_URL") or "").strip() or None,
             max_tokens=int(
-                os.getenv("EVALUATION_MODEL_MAX_TOKENS")
-                or os.getenv("QUALITY_EVALUATION_MODEL_MAX_TOKENS")
+                config_getenv("EVALUATION_MODEL_MAX_TOKENS")
+                or config_getenv("QUALITY_EVALUATION_MODEL_MAX_TOKENS")
                 or "8192"
             ),
             max_retries=0,

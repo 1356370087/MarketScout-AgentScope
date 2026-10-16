@@ -1,5 +1,7 @@
 """FastAPI composition for AgentScope research and read-only historical runs."""
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import os
 
 from dotenv import load_dotenv
@@ -30,6 +32,11 @@ from open_deep_research.knowledge.workspace_router import router as workspace_ro
 from open_deep_research.logging_config import configure_logging
 from open_deep_research.sandbox.internal_api import build_internal_sandbox_router
 from security.rbac import mount_rbac, register_ownership_checker
+from open_deep_research.platform.router import router as platform_router, setup_router
+from open_deep_research.platform.model_routes import router as platform_model_router
+from open_deep_research.platform.store import PlatformError
+from open_deep_research.platform.quota import QuotaExceeded
+from fastapi.responses import JSONResponse
 
 load_dotenv()
 configure_logging()
@@ -60,11 +67,40 @@ _lifecycle = ApplicationLifecycle(
     admission=lambda: _admission,
 )
 app = FastAPI(title="InsightForge", version="0.1.0", lifespan=_lifecycle.lifespan)
+
+
+@app.exception_handler(PlatformError)
+@app.exception_handler(QuotaExceeded)
+async def platform_error(_request, exc):
+    return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+
+app.include_router(platform_router)
+app.include_router(platform_model_router)
+app.include_router(setup_router)
+
+
+@app.middleware("http")
+async def platform_configuration_context(request, call_next):
+    from open_deep_research.platform import runtime as platform_runtime
+    if not platform_runtime.enabled() or request.url.path.startswith(("/setup", "/auth", "/admin", "/platform", "/healthz", "/readyz")):
+        return await call_next(request)
+    try:
+        snapshot = await platform_runtime.refresh()
+        secrets = await platform_runtime.credential_values(snapshot, None)
+    except PlatformError as exc:
+        if request.url.path == "/capabilities" and exc.detail == "platform_configuration_required":
+            return await call_next(request)
+        return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "platform_configuration_unavailable"})
+    with platform_runtime.scope(snapshot, secrets=secrets):
+        return await call_next(request)
 app.middleware("http")(request_id_middleware)
 app.middleware("http")(request_body_limit_middleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[item.strip() for item in os.environ.get(
+    allow_origins=[item.strip() for item in config_environment.get(
         "FRONTEND_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
     ).split(",") if item.strip()],
     allow_credentials=True,

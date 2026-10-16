@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 import argparse
 import asyncio
 import os
@@ -53,7 +55,7 @@ async def _main() -> None:
     parser.add_argument("--gateway-host", default="sandbox-gateway")
     parser.add_argument("--gateway-port", type=int, default=8080)
     args = parser.parse_args()
-    token = os.environ.get("SANDBOX_TASK_TOKEN", "")
+    token = config_environment.get("SANDBOX_TASK_TOKEN", "")
     if not token:
         raise SystemExit("SANDBOX_TASK_TOKEN is required")
     shim = ProxyShim(args.gateway_host, args.gateway_port, token)

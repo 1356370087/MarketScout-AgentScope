@@ -45,9 +45,17 @@ Never invent
 URLs or IDs. Return only the requested report or structured output. Write in
 the user's requested language. Introductions and conclusions must preserve
 citations and qualifications and must not introduce new facts.
+Source headings and their governing conditions restrict the statements below
+them. Do not generalize a named strategy, version or deployment to all cases.
+Each named parameter or probe in a requirement needs its own behavior and
+conditions; mentioning its name or another parameter's behavior is not coverage.
+Read JSON escapes as the encoded characters. Evaluate the actual draft_markdown
+value, not its transport representation. Before alleging a code transcription
+defect, verify that the exact defective characters occur in that draft value.
 """
 
 EVIDENCE_MESSAGE = "report_evidence"
+CONTEXT_MESSAGE = "report_context"
 WRITING_COVERAGE_RULES = """An input-budget omission is not a missing research fact.
 Do not infer that the full accepted inventory lacks evidence from records omitted
 in this call. Required evidence groups are checked by the runtime before writing.
@@ -104,13 +112,27 @@ def writing_messages(
     from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
     payload = dict(payload)
     version = payload.pop("_run_schema_version", 18)
-    protect_coverage = payload.pop("_quality_policy_version", None) == "quality-gate-v5" and version >= 18
+    quality_policy = payload.pop("_quality_policy_version", None)
+    protect_coverage = quality_policy in {"quality-gate-v5", "quality-gate-v6"} and version >= 18
     return [
         SystemMessage(content=WRITING_RULES + ("\n" + CONTEXT_RULES if version >= 18 else "")
                       + ("\n" + WRITING_COVERAGE_RULES if protect_coverage else "")
+                      + ("\nWhen answering a procedure, preserve required inputs, enabling conditions, "
+                         "step order, result and applicability limits supplied by the evidence. A required "
+                         "argument or prerequisite is not an optional example. Keep table values attached "
+                         "to their row and column labels; distinguish optional acceleration modes from "
+                         "limits of the whole feature. Do not replace supported facts with invented caveats. "
+                         "Cite substantive body claims and do not claim a source count from the bibliography alone. "
+                         "The existence of a configuration option does not establish its default. A factual default "
+                         "requires explicit evidence for the relevant deployment; otherwise state the supported "
+                         "condition without claiming a default. Keep corrections within the user's scope."
+                         if quality_policy == "quality-gate-v6" else "")
                       + "\n" + template.format(**placeholders) + "\n" + guidance),
+        # JSON preserves the actual code/draft characters. XML-escaping a
+        # draft made Reviewers mistake the transport's &gt; for a code defect.
         HumanMessage(content=research_context_xml(payload.get("coverage_contract"), payload=payload)
-                     if version >= 18 else json.dumps(payload, ensure_ascii=False, default=str)),
+                     if version >= 18 and quality_policy != "quality-gate-v6"
+                     else json.dumps(payload, ensure_ascii=False, default=str), name=CONTEXT_MESSAGE),
         HumanMessage(
             content=json.dumps({"records": records, **({"protect_coverage": True} if protect_coverage else {})}, ensure_ascii=False, default=str),
             name=EVIDENCE_MESSAGE,
@@ -192,7 +214,7 @@ def fit_writing_messages(
         raise ReportInputBudgetExceeded("report_evidence_context_exceeds_budget")
     from open_deep_research.quality.context import context_payload
     for message in fixed:
-        if message.type == "human" and str(message.content).startswith("<research_context"):
+        if message.type == "human" and (message.name == CONTEXT_MESSAGE or str(message.content).startswith("<research_context")):
             payload = context_payload(str(message.content))
             required = set(payload.get("required_evidence_ids", []))
             if required - {row.get("evidence_id") for row in selected}:

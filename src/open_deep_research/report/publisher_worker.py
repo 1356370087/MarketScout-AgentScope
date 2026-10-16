@@ -571,10 +571,18 @@ class PublisherWorker:
         job: PublicationJob,
     ) -> None:
         """Render one claimed job while renewing its lease."""
+        worker = self
+        if job.platform_revision_id:
+            from open_deep_research.platform.components import config_directory
+            from open_deep_research.platform import runtime as platform_runtime
+            path = config_directory() / job.platform_revision_id / "publisher.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            with platform_runtime.scope({"revision_id": job.platform_revision_id, "document": {"runtime": {}, "services": payload["services"]}}):
+                worker = PublisherWorker(get_publisher_settings(), worker_id=self.worker_id)
         stop = asyncio.Event()
-        renewal = asyncio.create_task(self._renew_lease_loop(store, job, stop))
+        renewal = asyncio.create_task(worker._renew_lease_loop(store, job, stop))
         try:
-            await self._process_claimed(store, job)
+            await worker._process_claimed(store, job)
         finally:
             stop.set()
             renewal.cancel()
@@ -582,6 +590,14 @@ class PublisherWorker:
 
     async def run_once(self) -> int:
         """Claim and process one bounded worker batch."""
+        from open_deep_research.platform import runtime as platform_runtime
+        from open_deep_research.platform.workers import acknowledge, publisher_ready
+        if platform_runtime.enabled():
+            acknowledge("publisher-worker")
+            if not publisher_ready():
+                await self._heartbeat(force=True)
+                return 0
+            self.settings = get_publisher_settings()
         if not self.settings.enabled:
             return 0
         if not self._startup_reconciled:
@@ -636,6 +652,9 @@ def _install_signal_handlers(worker: PublisherWorker) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
+    if not args.healthcheck:
+        from open_deep_research.platform.workers import initialize
+        await initialize("publisher-worker")
     settings = get_publisher_settings()
     if args.healthcheck:
         return 0 if worker_available(settings) else 1

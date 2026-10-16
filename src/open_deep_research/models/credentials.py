@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 import re
 import secrets
 import time
@@ -62,12 +63,12 @@ class RunKeySettings:
     @classmethod
     def from_env(cls) -> RunKeySettings:
         """Load and strictly validate protected Run Key settings."""
-        base_url = (os.getenv("LITELLM_BASE_URL") or "").strip()
-        master_key = (os.getenv("LITELLM_MASTER_KEY") or "").strip()
-        team_id = (os.getenv("LITELLM_RUN_TEAM_ID") or "").strip()
-        encoded_key = (os.getenv("LITELLM_RUN_KEY_ENCRYPTION_KEY") or "").strip()
-        default_raw = (os.getenv("LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD") or "").strip()
-        maximum_raw = (os.getenv("LITELLM_RUN_BUDGET_MAX_MICRO_USD") or "").strip()
+        base_url = (config_getenv("LITELLM_BASE_URL") or "").strip()
+        master_key = (config_getenv("LITELLM_MASTER_KEY") or "").strip()
+        team_id = (config_getenv("LITELLM_RUN_TEAM_ID") or "").strip()
+        encoded_key = (config_getenv("LITELLM_RUN_KEY_ENCRYPTION_KEY") or "").strip()
+        default_raw = (config_getenv("LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD") or "").strip()
+        maximum_raw = (config_getenv("LITELLM_RUN_BUDGET_MAX_MICRO_USD") or "").strip()
         missing = [
             name
             for name, value in (
@@ -97,7 +98,7 @@ class RunKeySettings:
         try:
             default_budget = int(default_raw)
             maximum_budget = int(maximum_raw)
-            ttl_seconds = int(os.getenv("LITELLM_RUN_KEY_TTL_SECONDS", "86400"))
+            ttl_seconds = int(config_getenv("LITELLM_RUN_KEY_TTL_SECONDS", "86400"))
         except ValueError as exc:
             raise LiteLLMKeyConfigurationError("LiteLLM numeric policy values are invalid") from exc
         if default_budget < 1 or maximum_budget < 1 or ttl_seconds < 60:
@@ -114,7 +115,7 @@ class RunKeySettings:
             default_budget_micro_usd=default_budget,
             maximum_budget_micro_usd=maximum_budget,
             ttl_seconds=ttl_seconds,
-            policy_revision=os.getenv("LITELLM_POLICY_REVISION", "v1"),
+            policy_revision=config_getenv("LITELLM_POLICY_REVISION", "v1"),
         )
 
     def resolve_budget(self, requested_micro_usd: int | None) -> int:
@@ -441,11 +442,14 @@ def team_budget_policies_from_env() -> dict[str, TeamBudgetPolicy]:
     default one is configured; roles absent from the map keep using the global
     Run team (pre-existing behavior).
     """
+    from open_deep_research.platform.runtime import enabled as platform_enabled
+    if platform_enabled():
+        return {}
     policies: dict[str, TeamBudgetPolicy] = {}
-    default_raw = os.getenv("LITELLM_TEAM_DEFAULT_BUDGET_MICRO_USD", "").strip()
+    default_raw = config_getenv("LITELLM_TEAM_DEFAULT_BUDGET_MICRO_USD", "").strip()
     for role in _TEAM_ROLES:
         prefix_role = f"LITELLM_TEAM_{role.upper()}_"
-        budget_raw = os.getenv(f"{prefix_role}BUDGET_MICRO_USD", "").strip()
+        budget_raw = config_getenv(f"{prefix_role}BUDGET_MICRO_USD", "").strip()
         if not budget_raw:
             budget_raw = default_raw
         if not budget_raw:
@@ -461,8 +465,8 @@ def team_budget_policies_from_env() -> dict[str, TeamBudgetPolicy]:
                 f"LITELLM_TEAM_{role.upper()}_BUDGET_MICRO_USD must be positive"
             )
         duration = (
-            os.getenv(f"{prefix_role}BUDGET_DURATION", "").strip()
-            or os.getenv("LITELLM_TEAM_DEFAULT_BUDGET_DURATION", "").strip()
+            config_getenv(f"{prefix_role}BUDGET_DURATION", "").strip()
+            or config_getenv("LITELLM_TEAM_DEFAULT_BUDGET_DURATION", "").strip()
             or "30d"
         )
         if not _TEAM_BUDGET_DURATION_PATTERN.match(duration):
@@ -473,8 +477,8 @@ def team_budget_policies_from_env() -> dict[str, TeamBudgetPolicy]:
 
         def _limit(name: str) -> int | None:
             raw = (
-                os.getenv(f"{prefix_role}{name}", "").strip()
-                or os.getenv(f"LITELLM_TEAM_DEFAULT_{name}", "").strip()
+                config_getenv(f"{prefix_role}{name}", "").strip()
+                or config_getenv(f"LITELLM_TEAM_DEFAULT_{name}", "").strip()
             )
             if not raw:
                 return None

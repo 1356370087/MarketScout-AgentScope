@@ -175,6 +175,11 @@ PERMISSIONS: tuple[Permission, ...] = (
     IAM_AUDIT_READ,
 )
 
+from .platform_permissions import CATALOG as PLATFORM_PERMISSION_CATALOG
+
+PERMISSIONS += tuple(Permission(code, name, name, "platform")
+                     for code, name in PLATFORM_PERMISSION_CATALOG.items())
+
 PERMISSION_CODES: frozenset[str] = frozenset(p.code for p in PERMISSIONS)
 _PERMISSION_INDEX: dict[str, Permission] = {p.code: p for p in PERMISSIONS}
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 import tomllib
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -310,7 +311,7 @@ class SandboxPolicyBundle(BaseModel):
 
 def _preset_egress_allowlist() -> list[str]:
     """Return the env-configured preset egress allow patterns."""
-    raw = os.environ.get(EGRESS_ALLOWLIST_ENV, "")
+    raw = config_environment.get(EGRESS_ALLOWLIST_ENV, "")
     return sorted(
         {
             item.strip().lower()
@@ -326,8 +327,8 @@ def load_policy_bundle(path: str | Path) -> SandboxPolicyBundle:
     if not policy_path.is_file():
         raise ValueError(f"sandbox_policy_not_found:{policy_path}")
     with policy_path.open("rb") as handle:
-        bundle = SandboxPolicyBundle.model_validate(tomllib.load(handle))
-    preset = _preset_egress_allowlist()
+        bundle = SandboxPolicyBundle.model_validate(json.load(handle) if policy_path.suffix == ".json" else tomllib.load(handle))
+    preset = [] if policy_path.suffix == ".json" else _preset_egress_allowlist()
     if preset:
         # Merge at load time so every consumer (profile resolution, run
         # digest freeze, tool-governance allowlist) sees one policy view.

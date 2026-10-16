@@ -63,7 +63,12 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
             "protocol_version": 2, "logical_operation_id": body["logical_operation_id"],
             "requested_model": spec, "status": "completed",
             "message": {"role": "assistant", "content": payload["draft_markdown"]},
-            "structured": {"decision": "revise", "dimensions": {name: .9 for name in ("coverage", "citation_correctness", "contradictions", "unsupported_claims", "redundancy", "executive_readability")}} if role == "report_review" else None,
+            "structured": {"decision": "revise", "coverage": [
+                {"requirement_id":row["requirement_id"], "status":"covered", "explanation":"fixture"}
+                for row in fields.get("coverage_contract", {}).get("requirements", [])],
+                "issue_resolutions": [{"issue_id":row["issue_id"], "status":"retained", "explanation":"fixture"}
+                    for row in fields.get("previous_issues", [])],
+                "dimensions": {name: .9 for name in ("coverage", "citation_correctness", "contradictions", "unsupported_claims", "redundancy", "executive_readability")}} if role == "report_review" else None,
             "finish_reason": "stop",
             "usage": {"input_tokens": 10000, "output_tokens": 10},
         })

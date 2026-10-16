@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { authenticatedRequest } from "./authenticated-request";
 
 const email = process.env.E2E_ADMIN_EMAIL;
 const password = process.env.E2E_ADMIN_PASSWORD;
@@ -9,10 +10,16 @@ test.describe("self-hosted IAM", () => {
   test("logs in through BFF, exposes no JWT, and opens admin control plane", async ({ page, context }) => {
     await page.goto("/login");
     await page.getByLabel("工作邮箱").fill(email!);
-    await page.getByLabel("密码").fill(password!);
+    await page.getByLabel("密码", { exact: true }).fill(password!);
     await page.getByRole("button", { name: "进入研究台" }).click();
     await expect(page).toHaveURL(/\/research\/new$/);
-    await expect(page.getByText("E2E Administrator")).toBeVisible();
+    if ((page.viewportSize()?.width ?? 1440) < 768) {
+      await page.getByRole("button", { name: "打开导航" }).click();
+    }
+    const identityResponse = await authenticatedRequest(page).get("/api/iam/auth/me");
+    expect(identityResponse.ok()).toBeTruthy();
+    const identity = await identityResponse.json();
+    await expect(page.getByText(identity.display_name || identity.email, { exact: true }).filter({ visible: true })).toBeVisible();
 
     const cookies = await context.cookies();
     expect(cookies.find((cookie) => cookie.name === "odr.access")?.httpOnly).toBe(true);
@@ -20,10 +27,11 @@ test.describe("self-hosted IAM", () => {
     const browserStorage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
     expect(browserStorage).not.toContain("eyJ");
 
-    if ((page.viewportSize()?.width ?? 1440) < 768) {
-      await page.getByRole("button", { name: "打开导航" }).click();
+    await page.getByRole("link", { name: "切换到管理后台" }).filter({ visible: true }).click();
+    if ((page.viewportSize()?.width ?? 1440) < 740) {
+      await page.getByRole("button", { name: "切换管理导航" }).click();
     }
-    await page.getByRole("link", { name: "管理后台" }).click();
+    await page.getByRole("link", { name: "成员与权限", exact: true }).click();
     await expect(page.getByRole("heading", { name: "成员与权限" })).toBeVisible();
     await expect(page.getByText("管理权限不包含读取其他用户的研究内容")).toBeVisible();
   });
@@ -32,10 +40,14 @@ test.describe("self-hosted IAM", () => {
     test.skip(process.env.E2E_RUN_RESEARCH !== "true", "Set E2E_RUN_RESEARCH=true for the paid live model run");
     await page.goto("/login");
     await page.getByLabel("工作邮箱").fill(email!);
-    await page.getByLabel("密码").fill(password!);
+    await page.getByLabel("密码", { exact: true }).fill(password!);
     await page.getByRole("button", { name: "进入研究台" }).click();
     await page.getByLabel("研究问题").fill("请比较 2025 年 PostgreSQL 17 与 16 在 JSON 与查询规划方面的关键变化，并给出可核验来源。");
     await page.getByRole("button", { name: /启动研究/ }).click();
+    const capabilities = await (await authenticatedRequest(page).get("/api/research/capabilities")).json();
+    if (capabilities.managed_configuration) {
+      await page.getByRole("button", { name: "确认配置并启动" }).click();
+    }
     await expect(page).toHaveURL(/\/research\/[^/]+$/);
     await expect(page.getByText(/已连接|连接中|运行中/).first()).toBeVisible({ timeout: 20_000 });
   });

@@ -11,7 +11,7 @@ from open_deep_research.agentscope_runtime.recovery_store import (
     UnknownOperation,
     digest,
 )
-from open_deep_research.budgets import BudgetExhausted
+from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
 from open_deep_research.sandbox.crypto import (
     NonceReplayCache,
     SandboxDerivedKeys,
@@ -151,7 +151,7 @@ class SQLGatewayLedger:
         if getattr(self, "research_cache", None) is not None:
             progress = await self.research_cache.progress()
             from open_deep_research.configuration import QUALITY_POLICY_VERSION
-            if getattr(self, "config", {}).get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5":
+            if getattr(self, "config", {}).get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
                 result["evidence_requirement_ids"] = list(progress.get("tasks", {}).get(request.task_id, {}).get("requirements", []))
             budget = await session.store.budget(session.lease.run_id, session.lease.user_id)
             deadlines = [v for v in (budget.get("deadline"), progress.get("tasks", {}).get(request.task_id, {}).get("deadline_at")) if v is not None]
@@ -301,6 +301,8 @@ def build_gateway_ledger_router(resolve, root_key):
     async def reserve(request: BudgetReserveRequest):
         try:
             return await (await authorize(request)).reserve(request)
+        except DeadlineExceeded:
+            raise HTTPException(408, "deadline_exceeded") from None
         except BudgetExhausted as exc:
             raise HTTPException(
                 429, "budget_exhausted:" + exc.dimension.value
@@ -310,6 +312,8 @@ def build_gateway_ledger_router(resolve, root_key):
     async def tool_reserve(request: ToolBudgetReserveRequest):
         try:
             return await (await authorize(request)).reserve_tool(request)
+        except DeadlineExceeded:
+            raise HTTPException(408, "deadline_exceeded") from None
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from None
         except BudgetExhausted as exc:

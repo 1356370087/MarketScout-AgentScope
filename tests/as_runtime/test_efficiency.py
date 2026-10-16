@@ -77,6 +77,42 @@ async def test_rejected_handoff_retains_diagnostic_artifact_without_admission(ca
     assert "agent_state" not in original
 
 
+@pytest.mark.asyncio
+async def test_supervisor_can_assign_every_scope_despite_short_leaf_iteration_limit():
+    from tests.as_runtime.test_research_migration import Models, cfg, contract, evidence, tool_call
+    from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
+    from open_deep_research.quality.gate import HandoffAssessment
+    from open_deep_research.quality.contract import build_research_coverage_contract
+    coverage = build_research_coverage_contract([{"role": "user", "content": f"Explain {topic}."}
+        for topic in ("storage", "indexing", "filtering", "cancellation", "exceptions")]).model_dump(mode="json")
+    ids = [row["requirement_id"] for row in coverage["requirements"] if row["kind"] == "factual"]
+    assert len(ids) == 5
+    coverage.update(schema_version=4, delegation_scopes={f"S{i+1:02d}": [rid] for i, rid in enumerate(ids)})
+    scripts = [[tool_call("ConductResearch", call_id=f"c{i}", research_topic="Explain the assigned scope.", scope_id=scope)]
+               for i, scope in enumerate(coverage["delegation_scopes"])]
+    scripts.append([tool_call("ResearchComplete", call_id="done")])
+    models = Models({"supervisor": scripts})
+    config = cfg(quality_evaluation_enabled=True, quality_evaluation_min_sources=1, max_researcher_iterations=2)
+    config["metadata"]["quality_policy_version"] = "quality-gate-v6"
+
+    class Worker:
+        async def run(self, assignment, contract, feedback):
+            return ResearchHandoff(**assignment.model_dump(), compressed_research="Grounded finding.", evidence_registry=[evidence()])
+
+    class Quality:
+        async def handoff(self, outcome, contract):
+            return HandoffAssessment(accepted=True, relevance=5, source_quality=5, evidence_coverage=5, groundedness=5,
+                reason="Supported.", requirement_coverage=[{"requirement_id": rid, "status": "supported",
+                    "evidence_ids": ["ev1"], "explanation": "Direct evidence."} for rid in outcome.requirement_ids])
+
+    findings, state = await Supervisor(models, lambda: config, Worker(), run_id="all-scopes", quality=Quality(), completion_policy=True).run("brief", coverage)
+    assert len(findings) == 5
+    assert set(state["middle_context"]["coverage_ledger"]) == set(ids)
+    assert state["middle_context"]["business_completion"]["action"] == "complete"
+    import json
+    assert "remaining_scopes" in json.dumps(models.created[0][2].calls, default=str)
+
+
 def test_v16_fingerprint_and_behavior_survive_new_defaults(monkeypatch):
     frozen = freeze_run_config({"configurable": {"enable_memory": False}})
     frozen["metadata"]["run_config_schema_version"] = 16
@@ -444,6 +480,54 @@ async def test_finite_corpus_batches_same_domain_and_advances_chunks(cache):
         clear_run_web_cache("efficiency")
 
 
+@pytest.mark.asyncio
+async def test_targeted_question_can_reinspect_cached_passage_without_refetch(cache):
+    from open_deep_research.agentscope_runtime.search_providers import candidate
+    from open_deep_research.web.extraction import text_document
+    from open_deep_research.web.models import EvidenceRecord, SearchBatch, SearchRequest
+    from open_deep_research.web.pipeline import WebPipelineSettings, WebResearchPipeline, clear_run_web_cache
+
+    url = "https://example.org/backup-procedure"
+    item = candidate("specific_url", url, "Backup procedure", "", 1, "fixed")
+    document = text_document(item, "A backup manifest from the same server is required. All input backups must be ordered from oldest to newest.")
+    fetches, objectives = [], []
+
+    async def discover(request):
+        return SearchBatch(candidates=[item])
+
+    async def fetch(target):
+        fetches.append(target)
+        return document
+
+    async def extract(objective, documents, chunks):
+        objectives.append(objective)
+        return [EvidenceRecord(evidence_id=c.chunk_id, claim=c.text, supporting_excerpt=c.text,
+            document_id=c.document_id, chunk_id=c.chunk_id, locator="whole procedure", source_url=url) for c in chunks]
+
+    pipeline = WebResearchPipeline(search=discover, settings=WebPipelineSettings(cache_namespace="focus-regression",
+        finite_corpus=True, evidence_fidelity=True, respect_robots_txt=False), backend_order=["fixture"],
+        fetch_backends={"fixture": fetch}, evidence_extractor=extract, result_cache=cache, allow_url=lambda target: target == url)
+    try:
+        await pipeline.run(SearchRequest(objective="Explain backup creation.", queries=[]))
+        assert len(objectives) == 1
+        await pipeline.run(SearchRequest(objective="Verify the required manifest and input ordering.", queries=[]))
+        assert len(objectives) == 2
+        assert "required manifest" in objectives[-1]
+        await pipeline.run(SearchRequest(objective="Verify the required manifest and input ordering.", queries=[]))
+        assert len(objectives) == 2
+        assert fetches == [url]
+        progress = await cache.progress()
+        assert len(progress["documents"][document.document_id]["focus_inspections"]) == 2
+        # Another owned requirement may need the same source passage. The first
+        # task's inspection cannot mark it already checked for the second one.
+        pipeline.evidence_context = {"requirements": [{"requirement_id": "second-owned-fact", "kind": "factual"}]}
+        await pipeline.run(SearchRequest(objective="Verify the required manifest and input ordering.", queries=[]))
+        assert len(objectives) == 3
+        assert fetches == [url]
+    finally:
+        clear_run_web_cache("focus-regression")
+
+
 @pytest.mark.parametrize("budget", [256, 512, 1800])
 def test_projection_pages_remain_valid_and_never_modify_authoritative_records(budget):
     import json
@@ -679,18 +763,16 @@ async def test_oversized_evidence_text_is_readable_by_reference(cache):
 
 
 @pytest.mark.asyncio
-async def test_report_recovery_partial_status_is_not_overwritten(monkeypatch):
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_report_recovery_partial_status_is_not_overwritten(monkeypatch, wrapped):
     from open_deep_research.agentscope_runtime.report import NativeReportWriter
     from open_deep_research.report import orchestrator
 
     async def report(state, config):
+        decision = {"action": "complete_partial", "reason": "report_evidence_recovery", "gaps": ["COV-1"]}
         return {
             "final_report": "Partial report",
-            "completion_decision": {
-                "action": "complete_partial",
-                "reason": "report_evidence_recovery",
-                "gaps": ["COV-1"],
-            },
+            "completion_decision": {"type": "override", "value": decision} if wrapped else decision,
         }
 
     monkeypatch.setattr(orchestrator, "build_report", report)

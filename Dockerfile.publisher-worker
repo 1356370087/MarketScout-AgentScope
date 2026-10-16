@@ -8,11 +8,11 @@ RUN apt-get update \
     && pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked uv sync --frozen --no-dev
 RUN groupadd --system --gid 10001 insightforge \
     && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \
-    && mkdir -p /data/runs \
-    && chown -R insightforge:insightforge /data/runs
+    && mkdir -p /data/runs /data/platform-config \
+    && chown -R insightforge:insightforge /data/runs /data/platform-config
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 RUNS_DIR=/data/runs
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
   CMD python -m open_deep_research.report.publisher_worker --healthcheck

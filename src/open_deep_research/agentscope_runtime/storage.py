@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import environment as config_environment
+
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,7 @@ def runtime_data_dir() -> Path:
     """Use the application data volume, including non-root container deployments."""
     import os
 
-    return Path(os.environ.get("RUNS_DIR") or RUNTIME_REPO_ROOT / ".runs").resolve()
+    return Path(config_environment.get("RUNS_DIR") or RUNTIME_REPO_ROOT / ".runs").resolve()
 
 
 def _sqlite_demo_path() -> Path:

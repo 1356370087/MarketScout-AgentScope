@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 
@@ -29,8 +31,8 @@ class TeamRuntime:
         async with self.lock:
             if self.service is not None:
                 return self.service
-            dsn = os.getenv("COORDINATION_DATABASE_URL", "")
-            endpoint = os.getenv("ROCKETMQ_ENDPOINT", "")
+            dsn = config_getenv("COORDINATION_DATABASE_URL", "")
+            endpoint = config_getenv("ROCKETMQ_ENDPOINT", "")
             if not dsn or not endpoint:
                 raise RuntimeError("COORDINATION_DATABASE_URL and ROCKETMQ_ENDPOINT are required")
             self.pool = await asyncpg.create_pool(
@@ -42,10 +44,10 @@ class TeamRuntime:
                     await db.fetchval("SELECT count(*) FROM research_coordination_transactions WHERE false")
                 self.transport = RocketMQTransport(
                     TeamStore(self.pool), endpoint=endpoint,
-                    prefix=os.getenv("ROCKETMQ_TOPIC_PREFIX", "insightforge"),
-                    tls=os.getenv("ROCKETMQ_TLS", "false").lower() == "true",
-                    access_key=os.getenv("ROCKETMQ_ACCESS_KEY", ""),
-                    secret_key=os.getenv("ROCKETMQ_SECRET_KEY", ""),
+                    prefix=config_getenv("ROCKETMQ_TOPIC_PREFIX", "insightforge"),
+                    tls=config_getenv("ROCKETMQ_TLS", "false").lower() == "true",
+                    access_key=config_getenv("ROCKETMQ_ACCESS_KEY", ""),
+                    secret_key=config_getenv("ROCKETMQ_SECRET_KEY", ""),
                 )
                 await self.transport.start()
                 self.transport.require_lease = True

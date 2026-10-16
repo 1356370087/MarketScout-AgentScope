@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv
 import re
 from typing import Any
 
@@ -229,23 +230,32 @@ async def _model_refinement(
     try:
         from openai import AsyncOpenAI
 
-        base_url = os.getenv("LITELLM_BASE_URL", "http://litellm-proxy:4000/v1")
-        service_key = os.getenv("LITELLM_SERVICE_KEY", "")
+        base_url = config_getenv("LITELLM_BASE_URL", "http://litellm-proxy:4000/v1")
+        service_key = config_getenv("LITELLM_SERVICE_KEY", "")
         if not service_key:
             return None
-        client = AsyncOpenAI(base_url=base_url, api_key=service_key, timeout=60.0)
+        from open_deep_research.platform import runtime as platform_runtime
+        from open_deep_research.platform.accounting import call as metered_call
+        client = AsyncOpenAI(base_url=base_url, api_key=service_key, timeout=60.0,
+            **({"max_retries": 0} if platform_runtime.enabled() else {}))
         try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            messages = [{"role": "user", "content": prompt}]
+            async def invoke():
+                from open_deep_research.platform.accounting import transport_options
+                return await client.chat.completions.create(model=model, messages=messages,
+                    **({"max_tokens": 1024} if platform_runtime.enabled() else {}), **transport_options())
+            response = await metered_call(model, messages, 1024, "document_metadata", invoke)
         finally:
             await client.close()
         payload = json.loads(response.choices[0].message.content or "{}")
         if isinstance(payload, dict):
             payload["origin"] = "model"
             return payload
-    except Exception:  # noqa: BLE001 - suggestion is best-effort only
+    except Exception as exc:  # noqa: BLE001 - deterministic suggestions survive ordinary model failures
+        from open_deep_research.budgets import BudgetExhausted
+        from open_deep_research.platform.accounting import UncertainServiceCall
+        if isinstance(exc, (BudgetExhausted, UncertainServiceCall)):
+            raise
         return None
     return None
 

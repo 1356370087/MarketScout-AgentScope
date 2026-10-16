@@ -72,6 +72,9 @@ pnpm dev
 
 ### 运行模式与基础设施
 
+- 本项目的 PostgreSQL 统一使用远程服务 `172.22.208.30:5432`，连接用户名为 `postgres`。密码仅保存在未纳入版本控制的本地环境文件中，不写入本文、示例配置或日志。
+- 项目启动、Docker 部署及 E2E 验证不得自行部署或启动本地 PostgreSQL/pgvector 容器；应用数据库、AgentScope 恢复库及 LiteLLM 数据库均连接上述远程服务。先检查远程连通性、目标数据库和所需扩展，再执行迁移。验收使用独立命名的数据库，不清空或覆盖已有业务库；数据库服务由外部维护。
+
 `RESEARCH_ENGINE` 默认且仅接受 `native`。`AS_NATIVE_RESOURCES` 决定资源装配方式，和模型后端、认证旁路是不同设置：
 
 | 模式 | 用途与前提 |
@@ -96,7 +99,7 @@ uv run python -m security.cli bootstrap-admin --email admin@example.com --passwo
 
 ### 容器与后台任务
 
-根 `docker-compose.yaml` 包含应用 PostgreSQL/pgvector、LiteLLM 的 PostgreSQL/Redis/Proxy、业务迁移、API、前端、Nginx、`document-worker`、`knowledge-worker` 和 `publisher-worker`。代理入口为 `http://localhost:8080`；默认 API/前端采用开发认证旁路。`sandbox`、`observability`、`backup` 等 profile 提供可选服务，Docling/OCR 和 RocketMQ 按部署配置接入。
+根 `docker-compose.yaml` 部署 LiteLLM Redis/Proxy、业务迁移、API、前端、Nginx、`document-worker`、`knowledge-worker` 和 `publisher-worker`，PostgreSQL 使用上文指定的远程服务。代理入口为 `http://localhost:8080`；API/前端使用真实 IAM 登录。`sandbox`、`observability`、`backup` 等 profile 提供可选服务，Docling/OCR 和 RocketMQ 按部署配置接入。
 
 `docker compose up --build` 使用根拓扑；完整原生研究的迁移、Gateway、团队 Worker 接线参考 `deploy/compose.native-e2e.yaml` 和 `deploy/compose.web-e2e.yaml`。这些覆盖文件用于对应验证场景，使用前核对环境、挂载与服务清单。观测、发布 Worker 和 OCR 部署说明见 `deploy/README.md`。
 
@@ -195,6 +198,7 @@ pnpm test:e2e
 - 每次 E2E 后关闭本次启动的前端、后端、Worker 与专用容器，确认端口和资源已释放；不关闭用户原先运行的服务。
 - Docker 验证只启动本次需要的服务，不批量启动其他已停止的容器，不删除共享卷来“清理”。
 - 区分单元测试、模拟服务、真实模型、数据库集成与完整部署的验证结论；报告实际执行范围及未满足的环境前提。
+- `tests/as_runtime/` 的 PostgreSQL 集成用例通过 `AS_TEST_DATABASE_URL` 显式连接独立远程验收库，连接格式为 `postgresql+asyncpg://用户:密码@主机:端口/验收库`。凭据从未跟踪的本地配置注入；未提供时相关用例跳过，不代表数据库验收通过，测试夹具不自行启动 PostgreSQL 容器。
 
 ### Agent Evals
 

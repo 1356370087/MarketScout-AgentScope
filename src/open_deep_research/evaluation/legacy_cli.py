@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
+
 import argparse
 import asyncio
 import hashlib
@@ -85,15 +87,15 @@ LOCAL_QUESTIONS = [
 
 
 def _env_int(name: str, default: int) -> int:
-    return int(os.getenv(name, str(default)))
+    return int(config_getenv(name, str(default)))
 
 
 def build_run_config() -> dict[str, Any]:
     """Build the same AgentScope configuration for every local question."""
     run_id = str(uuid.uuid4())
     default_model = "openai:deepseek-v4-flash"
-    summarization_model = os.getenv("SUMMARIZATION_MODEL", default_model)
-    research_model = os.getenv("RESEARCH_MODEL", default_model)
+    summarization_model = config_getenv("SUMMARIZATION_MODEL", default_model)
+    research_model = config_getenv("RESEARCH_MODEL", default_model)
     configurable = {
         "thread_id": run_id,
         # Evaluations must not recall or write cross-run long-term memory.
@@ -102,25 +104,25 @@ def build_run_config() -> dict[str, Any]:
         "allow_clarification": False,
         "enable_human_in_loop": False,
         "max_concurrent_research_units": _env_int("MAX_CONCURRENT_RESEARCH_UNITS", 3),
-        "search_api": os.getenv("SEARCH_API", "tavily"),
+        "search_api": config_getenv("SEARCH_API", "tavily"),
         "max_researcher_iterations": _env_int("MAX_RESEARCHER_ITERATIONS", 4),
         "max_react_tool_calls": _env_int("MAX_REACT_TOOL_CALLS", 8),
         # Quality experiments must exercise the evidence admission path.
         "web_pipeline_mode": "enforced",
         "web_min_source_authority": float(
-            os.getenv("WEB_MIN_SOURCE_AUTHORITY", "0.65")
+            config_getenv("WEB_MIN_SOURCE_AUTHORITY", "0.65")
         ),
-        "web_rerank_model": os.getenv("WEB_RERANK_MODEL", summarization_model),
-        "web_evidence_model": os.getenv("WEB_EVIDENCE_MODEL", summarization_model),
+        "web_rerank_model": config_getenv("WEB_RERANK_MODEL", summarization_model),
+        "web_evidence_model": config_getenv("WEB_EVIDENCE_MODEL", summarization_model),
         "summarization_model": summarization_model,
         "summarization_model_max_tokens": _env_int(
             "SUMMARIZATION_MODEL_MAX_TOKENS", 8192
         ),
         "research_model": research_model,
         "research_model_max_tokens": _env_int("RESEARCH_MODEL_MAX_TOKENS", 10000),
-        "compression_model": os.getenv("COMPRESSION_MODEL", research_model),
+        "compression_model": config_getenv("COMPRESSION_MODEL", research_model),
         "compression_model_max_tokens": _env_int("COMPRESSION_MODEL_MAX_TOKENS", 10000),
-        "final_report_model": os.getenv("FINAL_REPORT_MODEL", research_model),
+        "final_report_model": config_getenv("FINAL_REPORT_MODEL", research_model),
         "final_report_model_max_tokens": _env_int(
             "FINAL_REPORT_MODEL_MAX_TOKENS", 10000
         ),
@@ -142,9 +144,9 @@ def evaluation_runtime_environment() -> Iterator[None]:
         "ENABLE_MEMORY": "false",
         "WEB_PIPELINE_MODE": "enforced",
         "ENABLE_HUMAN_IN_LOOP": "false",
-        "AS_NATIVE_RESOURCES": os.getenv("AS_NATIVE_RESOURCES", "gateway"),
+        "AS_NATIVE_RESOURCES": config_getenv("AS_NATIVE_RESOURCES", "gateway"),
     }
-    previous = {name: os.environ.get(name) for name in overrides}
+    previous = {name: config_environment.get(name) for name in overrides}
     os.environ.update(overrides)
     try:
         yield
@@ -836,7 +838,7 @@ async def run_question(
                 inputs["messages"],
                 config,
                 runs_dir=output_dir / "runtime",
-                timeout=float(os.getenv("EVALUATION_RESEARCH_TIMEOUT_SECONDS", "1800")),
+                timeout=float(config_getenv("EVALUATION_RESEARCH_TIMEOUT_SECONDS", "1800")),
             )
         except Exception as exc:  # noqa: BLE001 -- Save a durable failed research result.
             state = {

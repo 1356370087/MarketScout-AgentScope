@@ -7,5 +7,8 @@
 !alembic.ini
 !src
 !config
+!deploy
+deploy/*
+!deploy/platform_proxy_launcher.py
 src/**/__pycache__
 src/**/*.pyc

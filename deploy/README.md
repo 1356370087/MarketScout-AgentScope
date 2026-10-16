@@ -1,5 +1,7 @@
 # InsightForge monitoring examples
 
+平台管理后台、首次初始化、数据库配置发布和组件应用说明见 [平台管理与数据库配置](platform-management.md)。真实服务默认读取数据库生效版本；本页的业务环境变量示例可作为首次导入材料，发布后通过后台维护。
+
 These files are deployment examples, not a bundled managed monitoring stack.
 
 ## Enable metrics

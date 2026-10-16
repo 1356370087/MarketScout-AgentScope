@@ -70,17 +70,19 @@ async def _run_daily(args: argparse.Namespace, config: Configuration) -> dict[st
     summaries: dict[str, Any] = {}
     try:
         for user_id in user_ids:
-            result = await maintain_user_memories(
-                store,
-                user_id=user_id,
-                config=config,
-                model=model,
-                model_name=config.research_model,
-                model_max_tokens=config.research_model_max_tokens,
-                runnable_config=runnable_config,
-                daily=True,
-                dry_run=args.dry_run,
-            )
+            from open_deep_research.platform.runtime import billing_as
+            with billing_as(user_id):
+                result = await maintain_user_memories(
+                    store,
+                    user_id=user_id,
+                    config=config,
+                    model=model,
+                    model_name=config.research_model,
+                    model_max_tokens=config.research_model_max_tokens,
+                    runnable_config=runnable_config,
+                    daily=True,
+                    dry_run=args.dry_run,
+                )
             summaries[user_id] = result.model_dump()
     finally:
         await model.aclose()
@@ -134,6 +136,21 @@ def main() -> None:
     """Run each maintenance command under its own process-wide file lock."""
     load_dotenv()
     args = _parser().parse_args()
+    from open_deep_research.platform.runtime import enabled as platform_enabled, database_configuration
+    if platform_enabled():
+        @database_configuration
+        async def managed():
+            config = Configuration.from_runnable_config()
+            lock_path = _command_lock_path(config, args.command)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            with portalocker.Lock(str(lock_path), mode="a+b", timeout=0):
+                if args.command == "daily":
+                    return await _run_daily_loop(args, config) if args.loop else await _run_daily(args, config)
+                return await _run_configure_decay(args, config)
+        result = asyncio.run(managed())
+        if result is not None:
+            sys.stdout.write(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+        return
     config = Configuration.from_runnable_config()
     lock_path = _command_lock_path(config, args.command)
     lock_path.parent.mkdir(parents=True, exist_ok=True)

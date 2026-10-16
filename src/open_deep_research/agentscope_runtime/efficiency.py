@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from open_deep_research.configuration import Configuration
+from open_deep_research.configuration import Configuration, QUALITY_POLICY_VERSION
 
 
 def fingerprint(value):
@@ -52,6 +52,21 @@ def research_guidance(config, *, supervisor=False):
         "按需求 ID、证据及已检查片段判断进展；改变查询措辞或新建任务不重置补证额度。"
         "收到 research_stopped 时调用 ResearchComplete，保留已准入证据，明确未完成要求。"
     )
+    from open_deep_research.configuration import QUALITY_POLICY_VERSION
+    if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+        rules += (
+            "\n遇到资料已下载但必要事实缺失时，用 fetch_url 的 objective 明确指出待核实的输入、前提或步骤，"
+            "对同一官方页面定向补读。已处理片段不等于需求已覆盖；不要只改措辞反复进行宽泛搜索。"
+            "回答操作流程时保留必需参数及其取值来源、开启条件、步骤顺序和结果适用限制；"
+            "这些不是可省略的示例，也不能因当前摘录缺失就改成 advisory。"
+            "如果已读来源说操作依赖某个需单独配置的功能，还应定向核实如何开启/取得它以及影响可用性的默认值；"
+            "开放研究可继续读取范围内的官方配置文档，固定来源缺少该信息时如实保留前置条件缺口。"
+            "交接前为每个这种前置功能列出具体启用参数/命令和文档记载的默认值，并分别绑定原文证据；"
+            "只写功能名称、文件位置或必须存在不算完成。未知启用项或默认值必须补读，不能推定为已开启。"
+            "这指所问功能特有的可选子系统；除非用户要求，不追问通用连通性、认证权限或共享容量参数的完整部署配置。"
+            "用户指定产品版本时，优先使用该版本固定文档地址，不用 current/latest 别名替代；"
+            "跨版本材料只能明确标注，不能静默用于证明指定版本行为。"
+        )
     if corpus(config):
         rules += (
             "\n这是固定资料任务：优先一次 web_research(objective=原始事实问题) 批量读取所有所选 URL，"
@@ -110,6 +125,11 @@ def merge_progress(state, patch):
                         )
                     }
                 value["inspections"] = inspections
+                if "focus_inspections" in prior or "focus_inspections" in value:
+                    focuses = dict(prior.get("focus_inspections", {}))
+                    for focus, chunks in value.get("focus_inspections", {}).items():
+                        focuses[focus] = sorted(set(focuses.get(focus, [])) | set(chunks))
+                    value["focus_inspections"] = focuses
             if name in {"candidates", "admitted"}:
                 value = {
                     **prior,
@@ -505,6 +525,12 @@ async def handoff_prompt(models, assignment, contract, evidence, assessments, co
         for rows in by_source.values():
             if rows:
                 ordered.append(rows.pop(0))
+    if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
+        from open_deep_research.quality.planning import prioritize_evidence
+        gaps = (assessments[-1] if assessments else {}).get("gaps", [])
+        ordered = prioritize_evidence(ordered,
+            [row for row in contract.get("requirements", []) if row.get("requirement_id") in assignment.requirement_ids],
+            guidance=" ".join(str(gap.get("reason", "")) + " " + str(gap.get("next_query", "")) for gap in gaps))
     rules = (
         "编写简洁的研究交接。仅将下面证据支持的陈述写成结论，并保留证据 ID 和来源。"
         "用户原始需求是唯一验收范围；任务扩写、建议及假设不能新增必答事实。"

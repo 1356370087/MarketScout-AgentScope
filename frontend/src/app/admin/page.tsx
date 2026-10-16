@@ -1,1 +1,1 @@
-export { default } from "@/features/iam/admin-page";
+export { default } from "@/features/platform/overview-page";

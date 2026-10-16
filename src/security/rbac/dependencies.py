@@ -128,7 +128,15 @@ async def get_current_principal(authorization: str | None = Header(default=None)
 
     token = _extract_bearer(authorization)
     async with session_scope() as db:
-        return await build_principal(db, token)
+        principal = await build_principal(db, token)
+    from open_deep_research.platform import runtime as platform_runtime
+    if platform_runtime.enabled():
+        limits = None
+        if platform_runtime.snapshot():
+            from open_deep_research.platform.store import get_store
+            limits = await get_store().limits(principal.user_id)
+        platform_runtime.bind_request(principal.user_id, limits)
+    return principal
 
 
 async def require_active_user(

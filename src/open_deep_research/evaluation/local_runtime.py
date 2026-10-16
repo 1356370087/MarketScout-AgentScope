@@ -1,5 +1,7 @@
 """Local evaluation research through the same durable AgentScope service as API."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import os
 from contextlib import AsyncExitStack
@@ -16,7 +18,7 @@ async def evaluation_principal():
     from security.rbac.dependencies import get_current_principal, require_permissions
     from security.rbac.permissions import RESEARCH_RUN_CREATE
 
-    token = os.getenv("EVALUATION_ACCESS_TOKEN", "").strip()
+    token = config_getenv("EVALUATION_ACCESS_TOKEN", "").strip()
     principal = await get_current_principal("Bearer " + token if token else None)
     return await require_permissions(RESEARCH_RUN_CREATE.code)(principal)
 
@@ -93,7 +95,7 @@ async def run_native_question(
         options["resource_provider"] = resource_provider
     if (
         resource_provider is None
-        and os.getenv("EVALUATION_LOCAL_WORKERS", "false").lower() == "true"
+        and config_getenv("EVALUATION_LOCAL_WORKERS", "false").lower() == "true"
     ):
         options["external_workers"] = False
     service = await build_native_research_service(**options)
@@ -140,14 +142,14 @@ async def run_native_question(
 
     run_id = None
     try:
-        if resource_provider is None and os.getenv("EVALUATION_CALLBACK_HOST"):
+        if resource_provider is None and config_getenv("EVALUATION_CALLBACK_HOST"):
             from .callbacks import gateway_callbacks
 
             await stack.enter_async_context(
                 gateway_callbacks(
                     service,
                     host=os.environ["EVALUATION_CALLBACK_HOST"],
-                    port=int(os.getenv("EVALUATION_CALLBACK_PORT", "2024")),
+                    port=int(config_getenv("EVALUATION_CALLBACK_PORT", "2024")),
                 )
             )
         request = RunRequest(messages=messages, configurable=config["configurable"])

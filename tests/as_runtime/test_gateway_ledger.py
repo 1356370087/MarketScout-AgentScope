@@ -45,6 +45,57 @@ async def test_web_reservation_carries_host_source_contract(host):
     assert reserved["coverage_contract"] == contract
 
 
+@pytest.mark.parametrize('production_router', [False, True])
+async def test_deadline_refusal_crosses_gateway_without_dispatch_or_orphan_receipt(host, production_router):
+    from pydantic import SecretStr
+    from sqlalchemy import update
+    from open_deep_research.agentscope_runtime.gateway import SandboxBinding, SandboxChatModel
+    from open_deep_research.budgets import DeadlineExceeded
+
+    gateway, ledger, host_client = host
+    if production_router:
+        from open_deep_research.sandbox.internal_api import build_internal_sandbox_router
+        async def resolve(run_id): return ledger
+        app = FastAPI()
+        app.include_router(build_internal_sandbox_router(lambda _:None,
+            native_ledger=resolve, native_root_key=lambda:gateway.configurable.sandbox_root_signing_key))
+        host_client._transport = httpx.ASGITransport(app)
+    paths = []
+    post = gateway.internal.post
+
+    async def expire_before_reserve(path, request):
+        paths.append(path)
+        if path.endswith('/budgets/reserve'):
+            async with ledger.recovery.store.engine.begin() as conn:
+                await conn.execute(update(ledger.recovery.store.runs).values(deadline=time.time()-1))
+        return await post(path, request)
+
+    gateway.internal.post = expire_before_reserve
+    class Provider:
+        async def complete(self, request):
+            pytest.fail("An expired reservation must never dispatch a physical call")
+    gateway.model_gateways['r'] = Provider()
+
+    async def transport(request):
+        wire = GatewayModelRequestV2.model_validate_json(request.content)
+        result = await gateway.invoke_model_operation_v2(wire,
+            GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300,
+                              api_keys={'LITELLM_RUN_KEY':'fixture'}))
+        assert result.status == 'failed' and result.error_code == 'deadline_exceeded'
+        return httpx.Response(200, json=result.model_dump(mode='json'))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport), base_url='http://gateway') as client:
+        model = SandboxChatModel(binding=SandboxBinding('http://gateway','r','t','researcher','researching',SecretStr('fixture')),
+            model='m', client=client, stream=False)
+        with pytest.raises(DeadlineExceeded):
+            await ledger.recovery.model('researcher',[],lambda:model(messages=[UserMsg('user','question')]))
+    assert paths.count('/internal/sandbox/budgets/reserve') == 1
+    assert '/internal/sandbox/operations/transition' not in paths
+    assert await ledger.recovery.store.operation_record(ledger.recovery.lease,'outside:pipeline:model:researcher:0') is None
+    budget = await ledger.recovery.store.budget('r','u')
+    assert not any(budget['reserved'].values()) and not budget['used']
+
+
 @pytest.mark.parametrize("version", ["quality-gate-v4", "quality-gate-v5"])
 async def test_gateway_extraction_owns_only_sql_task_requirements(host, tmp_path, version):
     from types import SimpleNamespace

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import hashlib
 import io
@@ -205,7 +207,7 @@ class DockerControllerRuntime:
         self.configurable = configurable
         self.bundle = load_policy_bundle(configurable.sandbox_policy_path)
         self.keys = SandboxDerivedKeys.from_root(configurable.sandbox_root_signing_key or "")
-        self.gateway_container = gateway_container or os.getenv(
+        self.gateway_container = gateway_container or config_getenv(
             "SANDBOX_GATEWAY_CONTAINER", "sandbox-gateway"
         )
         self.nonces = NonceReplayCache()
@@ -260,7 +262,8 @@ class DockerControllerRuntime:
             or claims.policy_digest != payload.policy_digest
         ):
             raise ValueError("sandbox_task_token_claim_mismatch")
-        expected_policy = policy_digest(self.bundle)
+        bundle = self._bundle_for_digest(payload.policy_digest)
+        expected_policy = policy_digest(bundle)
         signature_payload = {
             "deployment_id": self.bundle.deployment_id,
             "policy_digest": expected_policy,
@@ -271,12 +274,25 @@ class DockerControllerRuntime:
             self.keys.policy_signature,
         ):
             raise ValueError("sandbox_policy_signature_invalid")
-        profile = self.bundle.profiles.get(payload.profile_id)
+        profile = bundle.profiles.get(payload.profile_id)
         if profile is None or profile.provider not in {"docker", "bubblewrap"}:
             raise ValueError("sandbox_profile_not_runnable_by_controller")
         if request.runtime_digest != runtime_digest(profile):
             raise ValueError("sandbox_runtime_digest_mismatch")
         return profile, claims
+
+    def _bundle_for_digest(self, expected):
+        if policy_digest(self.bundle) == expected:
+            return self.bundle
+        from open_deep_research.platform.runtime import enabled as platform_enabled
+        if platform_enabled():
+            from open_deep_research.platform.components import config_directory
+            for path in config_directory().glob("*/sandbox-policy.json"):
+                bundle = load_policy_bundle(path)
+                if bundle.deployment_id == self.bundle.deployment_id and policy_digest(bundle) == expected:
+                    return bundle
+            raise ValueError("sandbox_policy_version_unavailable")
+        return self.bundle
 
     def _labels(self, request: ControllerRunRequest) -> dict[str, str]:
         payload = request.payload
@@ -338,7 +354,9 @@ class DockerControllerRuntime:
     def _profile_for_container(self, container: Any) -> SandboxProfile:
         labels = self._container_labels(container)
         profile_id = labels.get("com.insightforge.sandbox.profile_id", "")
-        profile = self.bundle.profiles.get(profile_id)
+        expected = labels.get("com.insightforge.sandbox.policy_digest")
+        bundle = self._bundle_for_digest(expected) if expected else self.bundle
+        profile = bundle.profiles.get(profile_id)
         if profile is None:
             raise ValueError("sandbox_container_profile_unknown")
         return profile
@@ -450,7 +468,7 @@ class DockerControllerRuntime:
             profile.resources.memory_bytes for profile in self.bundle.profiles.values()
         )
         service_reserve = int(
-            os.getenv("SANDBOX_SERVICE_MEMORY_RESERVE_BYTES", str(1_073_741_824))
+            config_getenv("SANDBOX_SERVICE_MEMORY_RESERVE_BYTES", str(1_073_741_824))
         )
         available = int(self.client.info().get("MemTotal") or 0)
         required = task_memory * maximum_tasks + service_reserve

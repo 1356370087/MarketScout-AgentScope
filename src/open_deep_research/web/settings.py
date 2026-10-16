@@ -25,3 +25,5 @@ class WebPipelineSettings:
     user_agent: str = "OpenDeepResearchBot/0.0.16"
     cache_namespace: str = "default"
     finite_corpus: bool = False
+    # Frozen quality policy selects this behavior; old runs retain v5 extraction.
+    evidence_fidelity: bool = False

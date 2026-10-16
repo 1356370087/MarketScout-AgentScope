@@ -13,6 +13,8 @@ class RunRequest(BaseModel):
 
     messages: list[dict[str, Any]]
     configurable: dict[str, Any] = Field(default_factory=dict)
+    profile_revision_id: str | None = None
+    expected_platform_revision: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     title: str | None = Field(default=None, max_length=160)
     source_selection: SourceSelection = Field(default_factory=SourceSelection)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import asyncio
 import contextlib
 import logging
@@ -46,6 +48,51 @@ class ApplicationLifecycle:
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: FastAPI):
+        from open_deep_research.platform import runtime as platform_runtime
+        if not platform_runtime.enabled():
+            async with self.runtime_lifespan(app):
+                yield
+            return
+        # A configured database and valid signing keys are bootstrap prerequisites.
+        # Models, SMTP and Workers are initialized only after a release is active.
+        await startup_checks()
+        await assert_schema_current("0019_platform_management")
+        from open_deep_research.platform.store import get_store, PlatformError
+        await get_store().state()
+
+        async def manage_runtime():
+            context = None
+            try:
+                while True:
+                    try:
+                        snapshot = await platform_runtime.refresh()
+                        if context is None:
+                            secrets = await platform_runtime.credential_values(snapshot, None)
+                            with platform_runtime.scope(snapshot, None, secrets):
+                                candidate = self.runtime_lifespan(app)
+                                await candidate.__aenter__()
+                            context = candidate
+                            app.state.platform_runtime_error = None
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        app.state.platform_runtime_error = getattr(exc, "detail", None) or type(exc).__name__
+                    await asyncio.sleep(3)
+            finally:
+                if context is not None:
+                    await context.__aexit__(None, None, None)
+
+        manager = asyncio.create_task(manage_runtime(), name="platform-runtime")
+        try:
+            yield
+        finally:
+            manager.cancel()
+            await asyncio.gather(manager, return_exceptions=True)
+            await shutdown_rbac()
+            platform_runtime.reset()
+
+    @contextlib.asynccontextmanager
+    async def runtime_lifespan(self, app: FastAPI):
         """Run startup recovery and gracefully interrupt live work on shutdown."""
         self.shutting_down.clear()
         self.sse_shutdown.clear()
@@ -63,10 +110,14 @@ class ApplicationLifecycle:
 
                 native_service = await build_native_research_service(
                     runs_dir=Configuration.from_runnable_config(None).runs_dir,
-                    database_url=os.getenv("AS_RECOVERY_DATABASE_URL") or None,
+                    database_url=config_getenv("AS_RECOVERY_DATABASE_URL") or None,
                     admission=self.admission(),
                 )
                 self.set_native_service(native_service)
+                from open_deep_research.platform.runtime import enabled as platform_enabled
+                if platform_enabled():
+                    from open_deep_research.platform.history import import_native_usage
+                    app.state.platform_history_import = await import_native_usage(native_service.store)
                 mount_native_research(app, native_service)
                 logger.info(
                     "RESEARCH_ENGINE=native: research run routes served by the native "
@@ -75,7 +126,8 @@ class ApplicationLifecycle:
             document_schema_error: str | None = None
             if get_document_settings().enabled:
                 try:
-                    await assert_schema_current("0018_knowledge_execution")
+                    from open_deep_research.platform.runtime import enabled as platform_enabled
+                    await assert_schema_current("0019_platform_management" if platform_enabled() else "0018_knowledge_execution")
                 except StartupError as exc:
                     if not str(exc).startswith("schema_revision_mismatch:"):
                         raise
@@ -84,7 +136,8 @@ class ApplicationLifecycle:
                     document_schema_error = await initialize_document_schema()
             else:
                 try:
-                    await assert_schema_current("0018_knowledge_execution")
+                    from open_deep_research.platform.runtime import enabled as platform_enabled
+                    await assert_schema_current("0019_platform_management" if platform_enabled() else "0018_knowledge_execution")
                 except StartupError as exc:
                     expected_old_revision = (
                         "schema_revision_mismatch:got=0012_facts:"
@@ -107,7 +160,7 @@ class ApplicationLifecycle:
 
                 startup_grace = min(
                     120.0,
-                    max(0.0, float(os.getenv("SANDBOX_STARTUP_GRACE_SECONDS", "30"))),
+                    max(0.0, float(config_getenv("SANDBOX_STARTUP_GRACE_SECONDS", "30"))),
                 )
                 startup_deadline = time.monotonic() + startup_grace
                 while True:
@@ -147,7 +200,7 @@ class ApplicationLifecycle:
                         native_cleanup=self.native_key_cleanup,
                         runs_dir=configurable.runs_dir,
                         interval_seconds=float(
-                            os.getenv("LITELLM_RUN_KEY_RECONCILE_INTERVAL_SECONDS", "300")
+                            config_getenv("LITELLM_RUN_KEY_RECONCILE_INTERVAL_SECONDS", "300")
                         ),
                     )
                 )

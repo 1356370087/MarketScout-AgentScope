@@ -1,11 +1,14 @@
 """Durable knowledge jobs; one transaction keeps claims and side effects atomic."""
 
+from open_deep_research.platform.runtime import getenv as config_getenv
+
 import argparse
 import asyncio
 import json
 import logging
 import os
 import uuid
+from contextlib import AsyncExitStack
 
 from open_deep_research.documents.database import close_document_pool, get_document_pool
 from open_deep_research.documents.identity import document_owner_id
@@ -69,8 +72,11 @@ async def run_one():
                 )
 
     beat = asyncio.create_task(heartbeat())
+    platform_scope = AsyncExitStack()
     try:
         actor, kb = str(row["actor_id"]), str(row["knowledge_base_id"])
+        from open_deep_research.platform.workers import job_context
+        await platform_scope.enter_async_context(job_context("knowledge", job_id, actor))
         await authz.require_kb_capability(
             actor,
             kb,
@@ -110,6 +116,8 @@ async def run_one():
                 json.dumps(result, default=str),
             )
     except Exception as exc:
+        from open_deep_research.budgets import BudgetExhausted
+        from open_deep_research.platform.accounting import UncertainServiceCall
         log.exception("Knowledge job failed: %s", job_id)
         async with pool.acquire() as c:
             await c.execute(
@@ -119,11 +127,12 @@ async def run_one():
                 attempt,
                 "failed"
                 if attempt >= 3
-                or isinstance(exc, ValueError | authz.AuthorizationError)
+                or isinstance(exc, ValueError | authz.AuthorizationError | BudgetExhausted | UncertainServiceCall)
                 else "queued",
                 type(exc).__name__ + ":" + str(exc)[:250],
             )
     finally:
+        await platform_scope.aclose()
         beat.cancel()
         await asyncio.gather(beat, return_exceptions=True)
     return True
@@ -131,8 +140,20 @@ async def run_one():
 
 async def main(once=False):
     """Run the configured knowledge job and citation maintenance loop."""
+    from open_deep_research.platform.workers import initialize, acknowledge, active_ready
+    await initialize("knowledge-worker")
+    from open_deep_research.platform.runtime import enabled as platform_enabled
+    from open_deep_research.documents.settings import get_document_settings
+    while platform_enabled() and not get_document_settings().configured:
+        await asyncio.sleep(3)
+        await initialize("knowledge-worker")
     try:
         while True:
+            await get_document_pool()
+            acknowledge("knowledge-worker")
+            if not await active_ready():
+                await asyncio.sleep(3)
+                continue
             worked = await run_one()
             pool = await get_document_pool()
             async with pool.acquire() as c:
@@ -146,14 +167,14 @@ async def main(once=False):
             # Expired transfer artifacts are never served beyond this TTL.
             import time
 
-            ttl = int(os.getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
+            ttl = int(config_getenv("KNOWLEDGE_EXPORT_TTL_HOURS", "24")) * 3600
             for file in artifact_dir().glob("*.zip"):
                 if time.time() - file.stat().st_mtime > ttl:
                     file.unlink(missing_ok=True)
             if once:
                 return
             await asyncio.sleep(
-                0 if worked else float(os.getenv("KNOWLEDGE_WORKER_POLL_SECONDS", "5"))
+                0 if worked else float(config_getenv("KNOWLEDGE_WORKER_POLL_SECONDS", "5"))
             )
     finally:
         await close_document_pool()

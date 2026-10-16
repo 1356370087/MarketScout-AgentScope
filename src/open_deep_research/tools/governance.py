@@ -642,7 +642,7 @@ async def _call_with_limits(tool, input, context):
             seconds = cfg.research_tool_call_timeout_seconds if tool.name in {
                 "web_research", "fetch_url", "web_search", "source_discovery", "search_documents",
             } else cfg.tool_call_timeout_seconds
-            limit = limited_tool if context.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v5" else limited
+            limit = limited_tool if context.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"} else limited
             return await limit(callback, seconds,
                 deadline_at=context.config.get("metadata", {}).get("execution_deadline_at"))
         return await callback()

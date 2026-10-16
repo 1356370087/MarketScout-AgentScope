@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
 import re
 import tempfile
 import time
@@ -30,7 +31,7 @@ from .publishers import (
     resolve_publication_format,
 )
 
-PUBLICATION_SCHEMA_VERSION = 1
+PUBLICATION_SCHEMA_VERSION = 2
 _COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -56,19 +57,19 @@ class PublicationStatus(str, Enum):
 
 
 def _flag(name: str, default: str = "true") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+    return config_getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _int(name: str, default: int, *, minimum: int = 1) -> int:
     try:
-        return max(minimum, int(os.getenv(name, str(default))))
+        return max(minimum, int(config_getenv(name, str(default))))
     except ValueError:
         return default
 
 
 def _float(name: str, default: float, *, minimum: float = 0.01) -> float:
     try:
-        parsed = float(os.getenv(name, str(default)))
+        parsed = float(config_getenv(name, str(default)))
         return max(minimum, parsed) if math.isfinite(parsed) else default
     except (TypeError, ValueError):
         return default
@@ -102,7 +103,7 @@ class PublisherSettings:
 
     enabled: bool = field(default_factory=lambda: _flag("PUBLISHER_ENABLED"))
     runs_dir: Path = field(
-        default_factory=lambda: Path(os.getenv("RUNS_DIR", ".runs")).resolve()
+        default_factory=lambda: Path(config_getenv("RUNS_DIR", ".runs")).resolve()
     )
     poll_interval_seconds: float = field(
         default_factory=lambda: _float("PUBLISHER_POLL_INTERVAL_SECONDS", 1.0)
@@ -245,6 +246,7 @@ class PublicationJob(BaseModel):
     status: Literal["queued", "running", "completed", "failed"] = "queued"
     report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     canonical_schema_version: str = "1.0"
+    platform_revision_id: str | None = None
     theme: PublisherTheme = Field(default_factory=PublisherTheme)
     theme_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     attempt: int = Field(default=0, ge=0)
@@ -460,7 +462,7 @@ class PublicationJobStore:
         if job.run_id != self.run_id or path.stem != job.publication_id:
             raise ValueError("publication_job_identity_mismatch")
         if (
-            job.schema_version != PUBLICATION_SCHEMA_VERSION
+            job.schema_version not in {1, PUBLICATION_SCHEMA_VERSION}
             or job.canonical_schema_version != "1.0"
         ):
             raise ValueError("publication_job_schema_unsupported")
@@ -517,6 +519,8 @@ class PublicationJobStore:
         with portalocker.Lock(str(lock), mode="a+b", timeout=30):
             if path.exists():
                 return self._read_job(path), False
+            from open_deep_research.platform import runtime as platform_runtime
+            platform_snapshot = platform_runtime.snapshot() if platform_runtime.enabled() else None
             job = PublicationJob(
                 publication_id=publication_id,
                 run_id=self.run_id,
@@ -533,6 +537,7 @@ class PublicationJobStore:
                 theme=theme,
                 theme_sha256=theme_sha256,
                 max_attempts=max(1, max_attempts),
+                platform_revision_id=platform_snapshot["revision_id"] if platform_snapshot else None,
             )
             _atomic_write_json(path, job.model_dump(mode="json"))
             if on_created is not None:
