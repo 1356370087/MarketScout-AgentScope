@@ -47,11 +47,12 @@ class AuthenticatedClient:
 async def run_case(client, case, args, implementation, budget):
     directory = args.output / case["id"]
     directory.mkdir(exist_ok=True)
+    gates_enabled = not getattr(args, "disable_quality_gates", False)
     request = {"messages": [{"role": "user", "content": case["question"]}],
         "source_selection": case["selection"], "configurable": {
             "enable_async_research": False, "enable_human_in_loop": True, "allow_clarification": False,
-            "report_review_enabled": True, "report_review_fail_open": False,
-            "quality_evaluation_enabled": True, "quality_evaluation_fail_open": False,
+            "report_review_enabled": gates_enabled, "report_review_fail_open": False,
+            "quality_evaluation_enabled": gates_enabled, "quality_evaluation_fail_open": False,
             "run_deadline_seconds": args.deadline, "max_run_cost_micro_usd": budget}}
     identity_file = directory / "run.json"
     resumed = identity_file.exists()
@@ -95,7 +96,13 @@ async def run_case(client, case, args, implementation, budget):
     finally:
         save(directory / "approvals.json", approvals)
         if final is None or final["status"] not in {"completed", "failed", "cancelled"}:
-            await client.request("POST", f"/runs/{run_id}/cancel")
+            # A broken observation channel says nothing about whether a paid
+            # operation is still running. Preserve its identity for observation
+            # to resume; the server keeps enforcing the frozen time/cost caps.
+            save(directory / "observation-interrupted.json", {
+                "run_id": run_id, "last_observed_status": (final or {}).get("status"),
+                "action": "recheck_same_run_before_any_restart_or_cancellation",
+            })
     usage = (await client.request("GET", f"/runs/{run_id}/usage")).json()
     save(directory / "usage.json", usage)
     for task_id in final["progress"].get("task_items", {}):
@@ -144,8 +151,9 @@ async def run_case(client, case, args, implementation, budget):
         "model_calls": usage["totals"]["calls"]["attempts"],
         "cost_micro_usd": budgets.get("cost_micro_usd", {}).get("settled", 0),
         "reserved_micro_usd": budgets.get("cost_micro_usd", {}).get("reserved", 0),
-        "published": published, "independent_content_review": "pending",
-        "runtime_quality_passed": final["status"] == "completed" and output.get("completion_status") == "success"
+        "published": published, "independent_content_review": "pending", "quality_gates_enabled": gates_enabled,
+        "execution_passed": final["status"] == "completed" and output.get("completion_status") == "success" and bool(report),
+        "runtime_quality_passed": gates_enabled and final["status"] == "completed" and output.get("completion_status") == "success"
             and not output.get("uncovered_requirements") and not output.get("research_gaps")
             and review.get("decision") == "pass" and not review.get("degraded") and not review.get("skipped")}
     save(directory / "result.json", result)
@@ -164,12 +172,16 @@ async def main(args):
         digest.update(path.relative_to(repo).as_posix().encode())
         digest.update(path.read_bytes())
     implementation = digest.hexdigest()
+    gates_enabled = not getattr(args, "disable_quality_gates", False)
     args.output.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output / "manifest.json"
     if manifest_path.exists() and json.loads(manifest_path.read_text(encoding="utf-8"))["implementation"] != implementation:
         raise ValueError("Existing implementation differs; use a new output directory.")
+    if manifest_path.exists() and json.loads(manifest_path.read_text(encoding="utf-8")).get("quality_gates_enabled", True) != gates_enabled:
+        raise ValueError("Existing quality gate setting differs; use a new output directory.")
     save(manifest_path, {"dataset": str(args.dataset), "implementation": implementation,
-        "cases": [case["id"] for case in cases], "mode": "real_models_and_web", "base_url": args.base_url})
+        "cases": [case["id"] for case in cases], "mode": "real_models_and_web", "base_url": args.base_url,
+        "quality_gates_enabled": gates_enabled})
     account = json.loads(args.credentials_file.read_text(encoding="utf-8"))
     results = []
     async with httpx.AsyncClient(base_url=args.base_url, trust_env=False, timeout=90) as http:
@@ -183,7 +195,8 @@ async def main(args):
                 raise RuntimeError("Experiment model budget exhausted")
             results.append(await run_case(client, case, args, implementation, min(args.run_budget_micro_usd, remaining)))
             save(args.output / "results.json", results)
-    return 0 if all(row["runtime_quality_passed"] and row["published"] and row["reserved_micro_usd"] == 0 for row in results) else 1
+    check = "runtime_quality_passed" if gates_enabled else "execution_passed"
+    return 0 if all(row[check] and row["published"] and row["reserved_micro_usd"] == 0 for row in results) else 1
 
 
 if __name__ == "__main__":
@@ -196,4 +209,6 @@ if __name__ == "__main__":
     parser.add_argument("--deadline", type=int, default=1200)
     parser.add_argument("--run-budget-micro-usd", type=int, default=1000000)
     parser.add_argument("--total-budget-micro-usd", type=int, default=3000000)
+    parser.add_argument("--disable-quality-gates", action="store_true",
+        help="仅用于明确授权的无门禁对照实验；成功退出只表示运行/发布完成，内容质量仍须独立核验。")
     raise SystemExit(asyncio.run(main(parser.parse_args())))

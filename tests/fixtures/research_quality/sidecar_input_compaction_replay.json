@@ -1,0 +1,1394 @@
+{
+  "draft": "# 将传统日志 Sidecar 迁移到 Kubernetes 原生 Sidecar：生产迁移方案\n\n## 一、声明方式、稳定版本与适用前提\n\nKubernetes 将原生 Sidecar 实现为 init container 的一种特例：在 Pod 的 `initContainers` 字段中为某个容器设置 `restartPolicy: Always`，该容器即成为 Sidecar 容器，在 Pod 启动后持续运行于 Pod 的整个生命周期。前提是集群启用了 `SidecarContainers` 特性门控——该特性自 Kubernetes **v1.29 起默认启用**（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n版本边界的两点说明：\n- 已准入证据仅支持\"v1.29 默认启用\"这一节点；任务中提到的“v1.33 稳定（GA）”在本次官方文档证据中未见直接声明，此处作为证据缺口显式标注，不做断言。\n- 对不支持容器级 `restartPolicy` 字段的旧版本集群，无法使用原生 Sidecar；官方文档指出，此时仍可运行未被标记为 init/sidecar 的多容器 Pod（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\nSidecar 容器独立于其他 init container 和主应用容器，可以被独立启动、停止或重启而不影响主容器（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。对 Deployment 与 Job 的 Pod 模板均适用（官方文档同时给出 Deployment 与 Job 示例）。\n\n## 二、与普通 init container 的差异；startupProbe / readinessProbe 的作用\n\n普通 init container 必须运行至完成、按 spec 顺序依次执行（前一个成功后下一个才能启动），且不支持 `lifecycle`、`livenessProbe`、`readinessProbe`、`startupProbe` 字段（`readinessProbe` 在校验阶段即被禁止，因为 init container 无法区分“就绪”与“完成”）（[Init Containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/)）。而 Sidecar 启动后持续运行，与主容器并发，支持探针控制其生命周期（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n两者对启动与就绪的影响是两个不同的判定：\n\n- **startupProbe 影响后续容器启动时机**：kubelet 在 Sidecar 式 init container 的 `started` 状态置为 true 后，才启动 `.spec.initContainers` 列表中的下一个容器；`started` 为真的条件是“容器内有进程运行且未定义 startupProbe”，或“startupProbe 成功”（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n- **readinessProbe 影响 Pod 就绪判定**：若 Sidecar 定义了 `readinessProbe`，其结果将用于决定 Pod 的 `ready` 状态（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n**结论（证据推断）**：“已启动”（started=true）与“已就绪”（readinessProbe 通过）是两个独立判定，不能把“已启动”当成“已就绪”。如果 Sidecar 只配置了 startupProbe（或不配置任何探针），后续容器会在 Sidecar 有进程运行后即启动，但 Pod 的 `ready` 状态并不因此反映 Sidecar 的服务可用性。对日志 Sidecar 而言，若需要在 Sidecar 尚未准备好时不调度流量，应配置 readinessProbe——这是基于上述官方机制得出的工程建议，而非官方保证。\n\n## 三、Job 完成、Pod 终止顺序与宽限期——“日志完全不丢”能否成立\n\n- **Job 完成**：官方明确，使用 Kubernetes 式 init container 定义 Sidecar 的 Job，主容器结束后 Sidecar 不会阻止 Job 完成（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n- **终止顺序**：Pod 终止时，kubelet 会延迟向 Sidecar 发送 TERM 信号，直到最后一个主容器完全终止；之后 Sidecar 按其在 Pod spec 中定义的**逆序**终止。这保证 Sidecar 持续服务其他容器直到不再需要（[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。官方还指出，若此前用 `preStop` 钩子控制终止顺序，迁移到原生 Sidecar 后通常可移除这些钩子，交给 kubelet 自动管理（[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。\n- **宽限期限制**：主容器终止过慢会相应推迟 Sidecar 的终止。若宽限期（默认删除宽限为 30 秒，可通过 `--grace-period` / `terminationGracePeriodSeconds` 覆盖）在终止完成前到期，Pod 可能进入强制终止，**所有剩余容器将以短宽限期被同时终止，此时不再有顺序保证**（[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。\n\n**结论（限定性推断，非官方保证）**：终止顺序保证在宽限期内有效，能显著降低日志 Sidecar 在主容器仍在产出日志时被提前杀掉的风险；但宽限期到期后的强制终止不保证顺序，官方证据**不支持“日志完全不丢”的绝对保证**。工程上应确保 `terminationGracePeriodSeconds` 足以覆盖主容器 + Sidecar 的完整优雅退出（工程建议）。\n\n## 四、Pod 有效资源（requests/limits）计算规则\n\n官方规则（[Init Containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/)）：\n\n- 所有 init container（含 Sidecar）中，某资源的最大 request/limit 即为**有效 init request/limit**；未指定 limit 视为最高 limit。\n- Pod 的**有效 request/limit** 取以下二者的**较大者**：所有 app container 之和，与有效 init request/limit。\n- 调度基于有效 request/limit 进行，即 init container 可为初始化阶段预留资源，而这些资源在 Pod 生命周期内未必持续占用。\n- Pod 的有效 QoS 等级由 init container 与 app container 共同决定。\n\n作为对比，纯 app container 之间才是求和：官方示例中两个容器各 request 0.25 CPU / 64MiB，Pod 的 request 为 0.5 CPU / 128MiB（[Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)）。\n\n**为何不能简单相加**：init/Sidecar 与 app container 的运行阶段不同——Sidecar 是 init container 的特例，与普通 init container 共享“取最大值”的有效资源计算方式；若将所有 init container 与 app container 简单相加，会高估调度所需的资源，导致过量预留。补充边界：Pod 级资源声明（`PodLevelResources`）自 v1.34 起 Beta 默认启用，仅适用于开启该特性的集群，可作为可选能力，不作为迁移前提（[Resource Management for Pods and Containers](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)）。\n\n## 五、最小 Job YAML 示例与迁移验证清单\n\n以下为官方文档给出的 Job + 原生 Sidecar 示例（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）：\n\n```yaml\napiVersion: batch/v1\nkind: Job\nmetadata:\n  name: myjob\nspec:\n  template:\n    spec:\n      containers:\n        - name: myjob\n          image: alpine:latest\n          command: ['sh', '-c', 'echo \"logging\" > /opt/logs.txt']\n          volumeMounts:\n            - name: data\n              mountPath: /opt\n      initContainers:\n        - name: logshipper\n          image: alpine:latest\n          # 设置 restartPolicy: Even 使其成为 Sidecar 容器\n          restartPolicy: Always\n          command: ['sh', '-c', 'tail -F /opt/logs.txt']\n          volumeMounts:\n            - name: data\n              mountPath: /opt\n      restartPolicy: Never\n      volumes:\n        - name: data\n          emptyDir: {}\n```\n\n行为说明（依据官方机制）：Sidecar 先于主容器启动（`started` 为真后主容器才开始）；主容器写日志到共享 `emptyDir`，Sidecar 持续 tail；主容器结束后 Sidecar 不会阻止 Job 完成。\n\n**迁移验证清单（工程建议，非官方保证）**：\n\n1. 确认集群版本 ≥ v1.29 且 `SidecarContainers` 门控处于启用状态。\n2. 验证 Sidecar `started` 状态置真后主容器才启动（观察 init container 状态与事件）。\n3. 如需 Sidecar 状态参与 Pod 就绪判定，配置并验证 `readinessProbe`；不要将“已启动”等同于“已就绪”。\n4. 核对 Pod 有效资源计算（init 取最大、与 app 之和取较大者），修正原 spec.containers Sidecar 迁移后的资源预留。\n5. 压测终止场景：设置足够的 `terminationGracePeriodSeconds`，确认宽限期内主容器先于 Sidecar 完全终止；检查强制终止路径下的日志缺口。\n6. 对 Deployment 与 Job 两种负载分别灰度，验证 Job 能正常完成、Deployment 滚动更新时 Sidecar 行为正常。\n\n## 六、证据缺口与限制\n\n- “v1.33 稳定（GA）”：本次准入的官方文档仅记载“v1.29 默认启用”，无 GA 版本声明证据，显式标注为缺口。\n- “日志完全不丢”：官方证据不支持绝对保证；结论限定为“宽限期内的终止顺序保证 + 足够的宽限期配置可大幅降低丢日志风险”。\n- 本报告不含任何性能实测数据，全部事实引自 kubernetes.io 官方文档。\n\n### Sources\n\n[1] Sidecar Containers: https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/\n[2] Init Containers: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/\n[3] Pod Lifecycle: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/\n[4] Resource Management for Pods and Containers: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+  "research_brief": "仅依据 kubernetes.io 官方文档与官方博客，研究将传统 spec.containers 日志 Sidecar 迁移到 Kubernetes 原生 Sidecar（init container + restartPolicy: Always）的生产迁移方案，适用于 Deployment 与批处理 Job。需覆盖：1) 原生 Sidecar 的声明方式、稳定版本（如 v1.29+ 特性门控、v1.33 稳定等版本边界）与适用前提；2) 与普通 init container 的差异，startupProbe 与 readinessProbe 分别如何影响后续容器启动与 Pod 就绪判定，能否把\"已启动\"当作\"已就绪\"；3) 原生 Sidecar 是否阻止 Job 完成、Pod 终止时的终止顺序与宽限期（terminationGracePeriodSeconds）限制，据此能否保证日志完全不丢；4) CPU/内存 requests 与 limits 如何计入 Pod 有效资源（Pod 有效 requests/limits 计算规则），为何不能简单将所有 init container 与 app container 相加；5) 给出一个最小 Job YAML 示例及迁移验证清单。输出为约1500字中文，至少引用3个不同的 kubernetes.io 官方页面，注明版本边界，明确区分官方保证与工程建议；不实际运行 Kubernetes，不编造性能数据。",
+  "coverage_contract": {
+    "schema_version": 4,
+    "original_query_sha256": "5285859c353e1c2a6662d043631622148b6caf255511af9a5c980e71358886ec",
+    "requirements": [
+      {
+        "requirement_id": "COV-01-c6af7d32f8e9",
+        "text": "仅使用 kubernetes.io 官方文档与官方博客",
+        "kind": "process",
+        "dimension_id": null,
+        "source_message_index": 0,
+        "source_start": 0,
+        "source_end": 27,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-02-1123a33f3c1a",
+        "text": "团队准备把写在 spec.containers 中的传统日志 Sidecar 迁入原生 Sidecar，并同时用于 Deployment 和批处理 Job",
+        "kind": "process",
+        "dimension_id": null,
+        "source_message_index": 0,
+        "source_start": 64,
+        "source_end": 141,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-03-337dbc424482",
+        "text": "原生 Sidecar 的声明方式、稳定版本与适用前提",
+        "kind": "factual",
+        "dimension_id": "DIM-01-27709826a243",
+        "source_message_index": 0,
+        "source_start": 148,
+        "source_end": 174,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-04-f5226f73b920",
+        "text": "与普通 init container 的差异",
+        "kind": "factual",
+        "dimension_id": "DIM-02-57d31e2766ef",
+        "source_message_index": 0,
+        "source_start": 177,
+        "source_end": 199,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-05-07f1b9776f4a",
+        "text": "startupProbe、readinessProbe 分别怎样影响后续容器启动和 Pod 就绪",
+        "kind": "factual",
+        "dimension_id": "DIM-02-57d31e2766ef",
+        "source_message_index": 0,
+        "source_start": 200,
+        "source_end": 248,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-06-2eed66c48169",
+        "text": "能否把“已启动”当成“已就绪”",
+        "kind": "factual",
+        "dimension_id": "DIM-02-57d31e2766ef",
+        "source_message_index": 0,
+        "source_start": 249,
+        "source_end": 264,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-07-55bd2a0036ba",
+        "text": "原生 Sidecar 是否阻止 Job 完成",
+        "kind": "factual",
+        "dimension_id": "DIM-03-e93ca0c3ba62",
+        "source_message_index": 0,
+        "source_start": 267,
+        "source_end": 289,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-08-86ca2de773e1",
+        "text": "Pod 终止时的顺序与宽限期限制",
+        "kind": "factual",
+        "dimension_id": "DIM-03-e93ca0c3ba62",
+        "source_message_index": 0,
+        "source_start": 290,
+        "source_end": 306,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-09-a9c3bbc1d0ca",
+        "text": "能否据此保证日志完全不丢",
+        "kind": "factual",
+        "dimension_id": "DIM-03-e93ca0c3ba62",
+        "source_message_index": 0,
+        "source_start": 307,
+        "source_end": 319,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-10-a930e0a43ca3",
+        "text": "CPU/内存 requests 与 limits 如何计入 Pod 的有效资源",
+        "kind": "factual",
+        "dimension_id": "DIM-04-9bfbf7cf9c4f",
+        "source_message_index": 0,
+        "source_start": 322,
+        "source_end": 361,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-11-7d33b890537a",
+        "text": "为什么不能简单把所有 init container 与 app container 相加",
+        "kind": "factual",
+        "dimension_id": "DIM-04-9bfbf7cf9c4f",
+        "source_message_index": 0,
+        "source_start": 362,
+        "source_end": 406,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-12-a718830abb1e",
+        "text": "5）给出一个最小 Job YAML 示例及迁移验证清单",
+        "kind": "deliverable",
+        "dimension_id": null,
+        "source_message_index": 0,
+        "source_start": 407,
+        "source_end": 434,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-13-5cf01221c9c9",
+        "text": "中文约1500字，至少引用3个不同官方页面，注明版本边界，区分官方保证和工程建议",
+        "kind": "deliverable",
+        "dimension_id": null,
+        "source_message_index": 0,
+        "source_start": 435,
+        "source_end": 475,
+        "source_located": true
+      },
+      {
+        "requirement_id": "COV-14-d89fa81340a4",
+        "text": "不需要实际运行 Kubernetes，也不要编造性能数据",
+        "kind": "process",
+        "dimension_id": null,
+        "source_message_index": 0,
+        "source_start": 476,
+        "source_end": 504,
+        "source_located": true
+      }
+    ],
+    "dimensions": [
+      {
+        "dimension_id": "DIM-01-27709826a243",
+        "label": "1）原生 Sidecar 的声明方式、稳定版本与适用前提",
+        "text": "1）原生 Sidecar 的声明方式、稳定版本与适用前提",
+        "source_message_index": 0,
+        "source_start": 146,
+        "source_end": 174,
+        "source_located": true,
+        "requirement_ids": [
+          "COV-03-337dbc424482"
+        ]
+      },
+      {
+        "dimension_id": "DIM-02-57d31e2766ef",
+        "label": "2）与普通 init container 的差异，startupProbe、readinessProbe 分别怎样影响后续容器启动和 Pod 就绪，能否把“已启动”当成“已就绪”",
+        "text": "2）与普通 init container 的差异，startupProbe、readinessProbe 分别怎样影响后续容器启动和 Pod 就绪，能否把“已启动”当成“已就绪”",
+        "source_message_index": 0,
+        "source_start": 175,
+        "source_end": 264,
+        "source_located": true,
+        "requirement_ids": [
+          "COV-04-f5226f73b920",
+          "COV-05-07f1b9776f4a",
+          "COV-06-2eed66c48169"
+        ]
+      },
+      {
+        "dimension_id": "DIM-03-e93ca0c3ba62",
+        "label": "3）原生 Sidecar 是否阻止 Job 完成、Pod 终止时的顺序与宽限期限制，能否据此保证日志完全不丢",
+        "text": "3）原生 Sidecar 是否阻止 Job 完成、Pod 终止时的顺序与宽限期限制，能否据此保证日志完全不丢",
+        "source_message_index": 0,
+        "source_start": 265,
+        "source_end": 319,
+        "source_located": true,
+        "requirement_ids": [
+          "COV-07-55bd2a0036ba",
+          "COV-08-86ca2de773e1",
+          "COV-09-a9c3bbc1d0ca"
+        ]
+      },
+      {
+        "dimension_id": "DIM-04-9bfbf7cf9c4f",
+        "label": "4）CPU/内存 requests 与 limits 如何计入 Pod 的有效资源，为什么不能简单把所有 init container 与 app container 相加",
+        "text": "4）CPU/内存 requests 与 limits 如何计入 Pod 的有效资源，为什么不能简单把所有 init container 与 app container 相加",
+        "source_message_index": 0,
+        "source_start": 320,
+        "source_end": 406,
+        "source_located": true,
+        "requirement_ids": [
+          "COV-10-a930e0a43ca3",
+          "COV-11-7d33b890537a"
+        ]
+      }
+    ],
+    "advisory_dimensions": [
+      "仅依据 kubernetes.io 官方文档与官方博客，研究将传统 spec.containers 日志 Sidecar 迁移到 Kubernetes 原生 Sidecar（init container + restartPolicy: Always）的生产迁移方案，适用于 Deployment 与批处理 Job。需覆盖：1) 原生 Sidecar 的声明方式、稳定版本（如 v1.29+ 特性门控、v1.33 稳定等版本边界）与适用前提；2) 与普通 init container 的差异，startupProbe 与 readinessProbe 分别如何影响后续容器启动与 Pod 就绪判定，能否把\"已启动\"当作\"已就绪\"；3) 原生 Sidecar 是否阻止 Job 完成、Pod 终止时的终止顺序与宽限期（terminationGracePeriodSeconds）限制，据此能否保证日志完全不丢；4) CPU/内存 requests 与 limits 如何计入 Pod 有效资源（Pod 有效 requests/limits 计算规则），为何不能简单将所有 init container"
+    ],
+    "single_research_task": false,
+    "source_selection": {
+      "mode": "specific",
+      "sources": [
+        {
+          "type": "domain",
+          "domain": "kubernetes.io"
+        }
+      ],
+      "retrieval": {
+        "version_mode": "current",
+        "as_of_published": null,
+        "as_of_valid": null,
+        "filters": {},
+        "profile_version": null
+      }
+    },
+    "delegation_scopes": {
+      "S01": [
+        "COV-03-337dbc424482"
+      ],
+      "S02": [
+        "COV-04-f5226f73b920",
+        "COV-05-07f1b9776f4a",
+        "COV-06-2eed66c48169"
+      ],
+      "S03": [
+        "COV-07-55bd2a0036ba",
+        "COV-08-86ca2de773e1",
+        "COV-09-a9c3bbc1d0ca"
+      ],
+      "S04": [
+        "COV-10-a930e0a43ca3",
+        "COV-11-7d33b890537a"
+      ]
+    },
+    "source_plan": {
+      "version": 1,
+      "intent": "official_only",
+      "entries": [],
+      "explicit": true,
+      "status": "confirmed",
+      "selection": {
+        "mode": "specific",
+        "sources": [
+          {
+            "type": "domain",
+            "domain": "kubernetes.io"
+          }
+        ],
+        "retrieval": {
+          "version_mode": "current",
+          "as_of_published": null,
+          "as_of_valid": null,
+          "filters": {},
+          "profile_version": null
+        }
+      }
+    }
+  },
+  "coverage_ledger": {
+    "COV-04-f5226f73b920": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_923dafe9e86b42dacb0e",
+        "ev_c386711b5a208440d270",
+        "ev_8ae49bfe3901dd0cb667",
+        "ev_9c5d2e88bf27633a9b8e"
+      ],
+      "task_ids": [
+        "3a7bf8d4b6af53679825114ef2963ae7"
+      ],
+      "caveats": [
+        "summary 未重复 ev_00c57e0a0c4c9b8ef18e 中的 SidecarContainers 特性门控/1.29 稳定信息，属 COV-01 的兄弟要求，非本 handoff 的缺口"
+      ]
+    },
+    "COV-05-07f1b9776f4a": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_5f22553db5d64bfa49cc",
+        "ev_ad98ba11865a5332013e",
+        "ev_590cce6021aaab655708"
+      ],
+      "task_ids": [
+        "3a7bf8d4b6af53679825114ef2963ae7"
+      ],
+      "caveats": [
+        "summary 未重复 ev_00c57e0a0c4c9b8ef18e 中的 SidecarContainers 特性门控/1.29 稳定信息，属 COV-01 的兄弟要求，非本 handoff 的缺口"
+      ]
+    },
+    "COV-06-2eed66c48169": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_5f22553db5d64bfa49cc",
+        "ev_ad98ba11865a5332013e",
+        "ev_f57c526f6d604b688091"
+      ],
+      "task_ids": [
+        "3a7bf8d4b6af53679825114ef2963ae7"
+      ],
+      "caveats": [
+        "summary 未重复 ev_00c57e0a0c4c9b8ef18e 中的 SidecarContainers 特性门控/1.29 稳定信息，属 COV-01 的兄弟要求，非本 handoff 的缺口"
+      ]
+    },
+    "COV-03-337dbc424482": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_00c57e0a0c4c9b8ef18e",
+        "ev_4e4a85b79e31c78ab058",
+        "ev_e5a4a600d6dfd4a3e4c8",
+        "ev_c5d83126242fedab0bcb",
+        "ev_e8a4df218812bd4690c1"
+      ],
+      "task_ids": [
+        "7abf75e2b43f5e8a8521dd7f635e5877"
+      ],
+      "caveats": [
+        "交接摘要仅声称 v1.29 默认启用，未提及 ev_c5d83126242fedab0bcb 中的 Stable since v1.33 / 门控锁定信息；注册表中已有该证据，建议写作阶段补充精确版本边界（v1.28 alpha 引入、v1.29 默认启用、v1.33 GA 并锁定）。",
+        "摘要省略了注册表中已有的 GA 版本与门控锁定信息（v1.33 stable/locked、v1.28 首次可用），写作时应纳入以完整注明版本边界。"
+      ]
+    },
+    "COV-10-a930e0a43ca3": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_84af841fde5092cf9252",
+        "ev_145f10d32685e556cc64",
+        "ev_acb70526f78845a46fc2",
+        "ev_c9cf5042f07086e3130f"
+      ],
+      "task_ids": [
+        "80f1a2201c3f5bdfaf3eba98790a39de"
+      ],
+      "caveats": []
+    },
+    "COV-11-7d33b890537a": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_547b14d1a07950ab252b",
+        "ev_ae67ef60864bc5eb4c95",
+        "ev_7a84294e7960d0d4514d"
+      ],
+      "task_ids": [
+        "80f1a2201c3f5bdfaf3eba98790a39de"
+      ],
+      "caveats": []
+    },
+    "COV-07-55bd2a0036ba": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_08471322a64cb8eb34d6"
+      ],
+      "task_ids": [
+        "852c4a54730f5e0d8d725de940ef5159"
+      ],
+      "caveats": []
+    },
+    "COV-08-86ca2de773e1": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_e889d3e66a4de6550408",
+        "ev_213956d90ae04ccc8a9f",
+        "ev_007ee9e43ea73399c11e",
+        "ev_4450426af1967a772272",
+        "ev_a5cb4dbd3f14d59e7596",
+        "ev_05243333d2f7d11af5a7"
+      ],
+      "task_ids": [
+        "852c4a54730f5e0d8d725de940ef5159"
+      ],
+      "caveats": []
+    },
+    "COV-09-a9c3bbc1d0ca": {
+      "status": "supported",
+      "evidence_ids": [
+        "ev_4450426af1967a772272",
+        "ev_769c19abfe8358b8c164"
+      ],
+      "task_ids": [
+        "852c4a54730f5e0d8d725de940ef5159"
+      ],
+      "caveats": []
+    }
+  },
+  "evidence": [
+    {
+      "reuse": "ev_c386711b5a208440d270",
+      "locator": "chars 2020-2851",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_7a84294e7960d0d4514d",
+      "locator": "chars 2020-3147",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_590cce6021aaab655708",
+      "locator": "chars 10809-11579",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_f57c526f6d604b688091",
+      "locator": "chars 10809-12636",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_dbdd34180682bbb75be9",
+      "supporting_excerpt": "## Understanding init containers\n\nA [Pod](/docs/concepts/workloads/pods/ \"A Pod represents a set of running containers in your cluster.\") can have multiple containers\nrunning apps within it, but it can also have one or more init containers, which are run\nbefore the app containers are started.\n\nInit containers are exactly like regular containers, except:\n\n* Init containers always run to completion.",
+      "source_title": "Init Containers",
+      "locator": "chars 721-1121",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.97,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/"
+    },
+    {
+      "reuse": "ev_9da1d5468540965b61d4",
+      "locator": "chars 10809-11336",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_6f30aeb08f4d0d58f1de",
+      "locator": "chars 10809-11682",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_722e179aa562b4fab34c",
+      "locator": "chars 0-440",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_8ae49bfe3901dd0cb667",
+      "locator": "chars 3149-3823",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_cbf0de5b94ae87d58ba5",
+      "locator": "chars 721-1456",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_14d283c7eccbb6f52fe8",
+      "supporting_excerpt": "## Understanding init containers\n\nA [Pod](/docs/concepts/workloads/pods/ \"A Pod represents a set of running containers in your cluster.\") can have multiple containers\nrunning apps within it, but it can also have one or more init containers, which are run\nbefore the app containers are started.",
+      "source_title": "Init Containers",
+      "locator": "chars 721-1014",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/"
+    },
+    {
+      "reuse": "ev_b36888493bd073a89e34",
+      "locator": "chars 0-719",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_709ae3d48469c6eaf4c4",
+      "locator": "chars 6455-6705",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_7bddc3f55307849e2c75",
+      "locator": "chars 4024-5361",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_6f5968237ec88220fb50",
+      "locator": "chars 3149-3582",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_cbff3bad6328c155b6f1",
+      "locator": "chars 3149-4022",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_94836f7356beca43ab63",
+      "locator": "chars 3149-3436",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_f6448075060cb4b8a089",
+      "locator": "chars 10809-13198",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_a9c06bd47c1bf5c194b3",
+      "locator": "chars 10809-12158",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_c804b77eb8cb3b85d4bf",
+      "locator": "chars 10809-11956",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_f858988f6a4fad6badd3",
+      "locator": "chars 721-1840",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_547b14d1a07950ab252b",
+      "locator": "chars 13200-14070",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_8a0eac49e57b20ef8241",
+      "supporting_excerpt": "### Differences from regular containers\n\nInit containers support all the fields and features of app containers,\nincluding resource limits, [volumes](/docs/concepts/storage/volumes/), and security settings. However, the\nresource requests and limits for an init container are handled differently,\nas documented in [Resource sharing within containers](#resource-sharing-within-containers).",
+      "source_title": "Init Containers",
+      "locator": "chars 2020-2406",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/"
+    },
+    {
+      "reuse": "ev_62a545130e29b927d1e1",
+      "locator": "chars 14335-14910",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_ae67ef60864bc5eb4c95",
+      "locator": "chars 13200-14146",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_923dafe9e86b42dacb0e",
+      "locator": "chars 1145-1482",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_00c57e0a0c4c9b8ef18e",
+      "locator": "chars 1145-2038",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_66bcccbaa5312069502d",
+      "locator": "chars 3868-4150",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_ad98ba11865a5332013e",
+      "locator": "chars 3868-4278",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_5f22553db5d64bfa49cc",
+      "locator": "chars 3868-5124",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.98,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_213956d90ae04ccc8a9f",
+      "locator": "chars 3868-5587",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_612223fedb61cc4bd32a",
+      "locator": "chars 7966-8512",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.97,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_7ae7212b267e4c51dd4f",
+      "locator": "chars 7966-8956",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_e984bd1fd1ece5dadfc5",
+      "locator": "chars 7966-9072",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.97,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_e8a4df218812bd4690c1",
+      "locator": "chars 1145-2436",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_4e4a85b79e31c78ab058",
+      "locator": "chars 2438-2771",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_202a4aeda74df28b57ea",
+      "locator": "chars 0-1143",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_da7bd08e4b232698aa76",
+      "locator": "chars 0-927",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_08471322a64cb8eb34d6",
+      "locator": "chars 5589-5814",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_9c5d2e88bf27633a9b8e",
+      "locator": "chars 3868-4530",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.98,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_486fae438ab4574412e7",
+      "locator": "chars 9074-10064",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_d438547e1b1ed6d0eff8",
+      "locator": "chars 7966-8710",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.97,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_d70dbda6b9e8303b3722",
+      "locator": "chars 6836-7078",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_d64f7babb9fb50b88a34",
+      "supporting_excerpt": "## Differences from application containers\n\nSidecar containers run alongside *app containers* in the same pod. However, they do not\nexecute the primary application logic; instead, they provide supporting functionality to\nthe main application.\n\nSidecar containers have their own independent lifecycles. They can be started, stopped,\nand restarted independently of app containers. This means you can update, scale, or\nmaintain sidecar containers without affecting the primary application.",
+      "source_title": "Sidecar Containers",
+      "locator": "chars 6836-7322",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "requirement_ids": [],
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/"
+    },
+    {
+      "reuse": "ev_c5d83126242fedab0bcb",
+      "locator": "chars 0-438",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.99,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_e5a4a600d6dfd4a3e4c8",
+      "locator": "chars 3010-3866",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.98,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_769c19abfe8358b8c164",
+      "locator": "chars 6836-7964",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.97,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_32705ac14739c59e9627",
+      "locator": "chars 6120-6834",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_abe2100fa8c8c537b766",
+      "locator": "chars 7966-8119",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_5372baa21c19dade3371",
+      "locator": "chars 6120-6834",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_7726861f6d9a52896edc",
+      "locator": "chars 6836-7486",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_cc2520d117be7ac62380",
+      "locator": "chars 3010-3866",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_007ee9e43ea73399c11e",
+      "locator": "chars 44677-46523",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_548a48013cffa202beb9",
+      "locator": "chars 49611-50850",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_4450426af1967a772272",
+      "locator": "chars 51957-52666",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_a5cb4dbd3f14d59e7596",
+      "supporting_excerpt": "### Forced Pod termination\n\n#### Caution:\n\nForced deletions can be potentially disruptive for some workloads and their Pods.\n\nBy default, all deletes are graceful within 30 seconds. The `kubectl delete` command supports\nthe `--grace-period=<seconds>` option which allows you to override the default and specify your\nown value.",
+      "source_title": "Pod Lifecycle",
+      "locator": "chars 52668-52994",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    },
+    {
+      "reuse": "ev_16489b564e9533e71b62",
+      "locator": "chars 52668-53201",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_9442a5369e07f1f39af8",
+      "supporting_excerpt": "### Forced Pod termination\n\n#### Caution:\n\nForced deletions can be potentially disruptive for some workloads and their Pods.\n\nBy default, all deletes are graceful within 30 seconds. The `kubectl delete` command supports\nthe `--grace-period=<seconds>` option which allows you to override the default and specify your\nown value.\n\nSetting the grace period to `0` forcibly and immediately deletes the Pod from the API\nserver. If the Pod was still running on a node, that forcible deletion triggers the kubelet to\nbegin immediate cleanup.\n\nUsing kubectl, You must specify an additional flag `--force` along with `--grace-period=0`\nin order to perform force deletions.\n\nWhen a force deletion is performed, the API server does not wait for confirmation\nfrom the kubelet that the Pod has been terminated on the node it was running on. It\nremoves the Pod in the API immediately so a new Pod can be created with the same\nname. On the node, Pods that are set to terminate immediately will still be given\na small grace period before being force killed.",
+      "source_title": "Pod Lifecycle",
+      "locator": "chars 52668-53708",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    },
+    {
+      "reuse": "ev_e889d3e66a4de6550408",
+      "locator": "chars 54083-54622",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_05243333d2f7d11af5a7",
+      "locator": "chars 54083-54996",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_1a990443f31b3d238db7",
+      "locator": "chars 54083-55313",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_48e2edf53c25779e86ea",
+      "locator": "chars 46824-47760",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_ed3ef1a734ee26cbc84a",
+      "locator": "chars 44677-45497",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_b92a93dc5fba6800290a",
+      "locator": "chars 46824-47319",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_e21089aadcd4b01aeb62",
+      "locator": "chars 47822-47977",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_ac70cdd18a03e381f17b",
+      "locator": "chars 46824-48193",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_3e454d7325c20548117a",
+      "supporting_excerpt": "Pods that shut down slowly should not continue to serve regular traffic and should start\n   terminating and finish processing open connections. Some applications need to go beyond\n   finishing open connections and need more graceful termination, for example, session draining\n   and completion.",
+      "source_title": "Pod Lifecycle",
+      "locator": "chars 50855-51149",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    },
+    {
+      "reuse": "ev_a31b4545758e9b19bb58",
+      "locator": "chars 52668-52792",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_e253ab6e879f9983dd45",
+      "locator": "chars 52668-53330",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_b404b74e756037a3159b",
+      "locator": "chars 52668-54081",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_eb322aeb24c6b5d3b349",
+      "locator": "chars 55315-56708",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_fe1c665614525b5e50c7",
+      "supporting_excerpt": "### Garbage collection of Pods\n\nFor failed Pods, the API objects remain in the cluster's API until a human or\n[controller](/docs/concepts/architecture/controller/ \"A control loop that watches the shared state of the cluster through the apiserver and makes changes attempting to move the current state towards the desired state.\") process\nexplicitly removes them.\n\nThe Pod garbage collector (PodGC), which is a controller in the control plane, cleans up\nterminated Pods (with a phase of `Succeeded` or `Failed`), when the number of Pods exceeds the\nconfigured threshold (determined by `terminated-pod-gc-threshold` in the kube-controller-manager).\nThis avoids a resource leak as Pods are created and terminated over time.",
+      "source_title": "Pod Lifecycle",
+      "locator": "chars 55315-56035",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/"
+    },
+    {
+      "evidence_id": "ev_81e6a6e23a2b8394a50a",
+      "supporting_excerpt": "### Init containers and Linux cgroups\n\nOn Linux, resource allocations for Pod level control groups (cgroups) are based on the effective Pod\nrequest and limit, the same as the scheduler.",
+      "source_title": "Init Containers",
+      "locator": "chars 14148-14333",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/workloads/pods/init-containers/"
+    },
+    {
+      "reuse": "ev_7457f56aee91031c1cf8",
+      "locator": "chars 14335-15217",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_4d38b2d4c94845fc554c",
+      "locator": "chars 15219-15821",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_bfffaace888a8ac7af23",
+      "locator": "chars 15823-16357",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_11e9688f6f5e5f1e1292",
+      "locator": "chars 3149-3823",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "reuse": "ev_f1eac425738b6b3f02fa",
+      "locator": "chars 5363-6453",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope"
+    },
+    {
+      "evidence_id": "ev_72af2b371d2955cf11e8",
+      "supporting_excerpt": "## Pod resources example\n\nFeature state:\nBeta since Kubernetes v1.34; enabled by default\n\nThis feature can be enabled by setting the `PodLevelResources`\n[feature gate](/docs/reference/command-line-tools-reference/feature-gates/).",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 10557-10786",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_c9cf5042f07086e3130f",
+      "supporting_excerpt": "## Pod resources example\n\nFeature state:\nBeta since Kubernetes v1.34; enabled by default\n\nThis feature can be enabled by setting the `PodLevelResources`\n[feature gate](/docs/reference/command-line-tools-reference/feature-gates/).\nThe following Pod has an explicit request of 1 CPU and 100 MiB of memory, and an\nexplicit limit of 1 CPU and 200 MiB of memory. The `pod-resources-demo-ctr-1`\ncontainer has explicit requests and limits set. However, the\n`pod-resources-demo-ctr-2` container will simply share the resources available\nwithin the Pod resource boundaries, as it does not have explicit requests and limits\nset.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 10557-11175",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_c68f3e4cbc7cd7d2eed6",
+      "supporting_excerpt": "## How Pods with resource requests are scheduled\n\nWhen you create a Pod, the Kubernetes scheduler selects a node for the Pod to\nrun on. Each node has a maximum capacity for each of the resource types: the\namount of CPU and memory it can provide for Pods. The scheduler ensures that,\nfor each resource type, the sum of the resource requests of the scheduled\ncontainers is less than the capacity of the node.\nNote that although actual memory\nor CPU resource usage on nodes is very low, the scheduler still refuses to place\na Pod on a node if the capacity check fails. This protects against a resource\nshortage on a node when resource usage later increases, for example, during a\ndaily peak in request rate.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 11932-12636",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_862db886b36d3d4bbc9a",
+      "supporting_excerpt": "## How Kubernetes applies resource requests and limits\n\nWhen the kubelet starts a container as part of a Pod, the kubelet passes that container's\nrequests and limits for memory and CPU to the container runtime.\n\nOn Linux, the container runtime typically configures\nkernel [cgroups](/docs/reference/glossary/?all=true#term-cgroup \"A group of Linux processes with optional resource isolation, accounting and limits.\") that apply and enforce the\nlimits you defined.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 12638-13100",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_acb70526f78845a46fc2",
+      "supporting_excerpt": "## Pod-level resource specification\n\nFeature state:\nBeta since Kubernetes v1.34; enabled by default\n\nProvided your cluster has the `PodLevelResources`\n[feature gate](/docs/reference/command-line-tools-reference/feature-gates/) enabled,\nyou can specify resource requests and limits at\nthe Pod level. At the Pod level, Kubernetes 1.37\nonly supports resource requests or limits for specific resource types: `cpu` and /\nor `memory` and / or `hugepages`. With this feature, Kubernetes allows you to declare an overall resource\nbudget for the Pod, which is especially helpful when dealing with a large number of\ncontainers where it can be difficult to accurately gauge individual resource needs.\nAdditionally, it enables containers within a Pod to share idle resources with each\nother, improving resource utilization.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 6006-6817",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_84af841fde5092cf9252",
+      "supporting_excerpt": "## Container resources example\n\nThe following Pod has two containers. Both containers are defined with a request for\n0.25 CPU\nand 64MiB (226 bytes) of memory. Each container has a limit of 0.5\nCPU and 128MiB of memory. You can say the Pod has a request of 0.5 CPU and 128\nMiB of memory, and a limit of 1 CPU and 256MiB of memory.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 9739-10068",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_145f10d32685e556cc64",
+      "supporting_excerpt": "## How Kubernetes applies resource requests and limits\n\nWhen the kubelet starts a container as part of a Pod, the kubelet passes that container's\nrequests and limits for memory and CPU to the container runtime.\n\nOn Linux, the container runtime typically configures\nkernel [cgroups](/docs/reference/glossary/?all=true#term-cgroup \"A group of Linux processes with optional resource isolation, accounting and limits.\") that apply and enforce the\nlimits you defined.\n\n* The CPU limit defines a hard ceiling on how much CPU time the container can use.\n  During each scheduling interval (time slice), the Linux kernel checks to see if this\n  limit is exceeded; if so, the kernel waits before allowing that cgroup to resume execution.\n* The CPU request typically defines a weighting. If several different containers (cgroups)\n  want to run on a contended system, workloads with larger CPU requests are allocated more\n  CPU time than workloads with small requests.\n* The memory request is mainly used during (Kubernetes) Pod scheduling. On a node that uses\n  cgroups v2, the container runtime might use the memory request as a hint to set\n  `memory.min` and `memory.low`.\n* The memory limit defines a memory limit for that cgroup. If the container tries to\n  allocate more memory than this limit, the Linux kernel out-of-memory subsystem activates\n  and, typically, intervenes by stopping one of the processes in the container that tried\n  to allocate memory. If that process is the container's PID 1, and the container is marked\n  as restartable, Kubernetes restarts the container.\n* The memory limit for the Pod or container can also apply to pages in memory backed\n  volumes, such as an `emptyDir`. The kubelet tracks `tmpfs` emptyDir volumes as container\n  memory use, rather than as local [ephemeral storage](/docs/concepts/storage/ephemeral-storage/).\n  When using memory backed `emptyDir`,\n  be sure to check the notes [below](#memory-backed-emptydir).",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 12638-14589",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.95,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_e629acff9a755d994dd1",
+      "supporting_excerpt": "## How Kubernetes applies resource requests and limits\n\nWhen the kubelet starts a container as part of a Pod, the kubelet passes that container's\nrequests and limits for memory and CPU to the container runtime.\n\nOn Linux, the container runtime typically configures\nkernel [cgroups](/docs/reference/glossary/?all=true#term-cgroup \"A group of Linux processes with optional resource isolation, accounting and limits.\") that apply and enforce the\nlimits you defined.\n\n* The CPU limit defines a hard ceiling on how much CPU time the container can use.\n  During each scheduling interval (time slice), the Linux kernel checks to see if this\n  limit is exceeded; if so, the kernel waits before allowing that cgroup to resume execution.\n* The CPU request typically defines a weighting. If several different containers (cgroups)\n  want to run on a contended system, workloads with larger CPU requests are allocated more\n  CPU time than workloads with small requests.\n* The memory request is mainly used during (Kubernetes) Pod scheduling. On a node that uses\n  cgroups v2, the container runtime might use the memory request as a hint to set\n  `memory.min` and `memory.low`.\n* The memory limit defines a memory limit for that cgroup. If the container tries to\n  allocate more memory than this limit, the Linux kernel out-of-memory subsystem activates\n  and, typically, intervenes by stopping one of the processes in the container that tried\n  to allocate memory. If that process is the container's PID 1, and the container is marked\n  as restartable, Kubernetes restarts the container.\n* The memory limit for the Pod or container can also apply to pages in memory backed\n  volumes, such as an `emptyDir`. The kubelet tracks `tmpfs` emptyDir volumes as container\n  memory use, rather than as local [ephemeral storage](/docs/concepts/storage/ephemeral-storage/).\n  When using memory backed `emptyDir`,\n  be sure to check the notes [below](#memory-backed-emptydir).\n\nIf a container exceeds its memory request and the node that it runs on becomes short of\nmemory overall, it is likely that the Pod the container belongs to will be\n[evicted](/docs/concepts/scheduling-eviction/ \"Process of terminating one or more Pods on Nodes\").",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 12638-14852",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.9,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_e1e398c6040fe9b16d3d",
+      "supporting_excerpt": "### CPU resource units\n\nLimits and requests for CPU resources are measured in *cpu* units.\nIn Kubernetes, 1 CPU unit is equivalent to **1 physical CPU core**,\nor **1 virtual core**, depending on whether the node is a physical host\nor a virtual machine running inside a physical machine.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 7175-7461",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_862c3b3b18e9b2ec8260",
+      "supporting_excerpt": "### Memory resource units\n\nLimits and requests for `memory` are measured in bytes. You can express memory as\na plain integer or as a fixed-point number using one of these\n[quantity](/docs/reference/kubernetes-api/common-definitions/quantity/) suffixes:\nE, P, T, G, M, k. You can also use the power-of-two equivalents: Ei, Pi, Ti, Gi,\nMi, Ki. The Kubernetes API also allows m as a suffix (for millibytes: 1/1000 of a byte),\nbut this isn't useful to specify: you must always assign whole numbers of bytes, or sometimes larger chunks such as multiples of 1 gibibyte.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 8776-9339",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_eba42d4f865ca675fa73",
+      "supporting_excerpt": "### Memory resource units\n\nLimits and requests for `memory` are measured in bytes. You can express memory as\na plain integer or as a fixed-point number using one of these\n[quantity](/docs/reference/kubernetes-api/common-definitions/quantity/) suffixes:\nE, P, T, G, M, k. You can also use the power-of-two equivalents: Ei, Pi, Ti, Gi,\nMi, Ki. The Kubernetes API also allows m as a suffix (for millibytes: 1/1000 of a byte),\nbut this isn't useful to specify: you must always assign whole numbers of bytes, or sometimes larger chunks such as multiples of 1 gibibyte.\n\nHere are some examples of memory quantities that represent roughly the same value:\n\n```\n128974848, 129e6, 129M,  128974848000m, 123Mi\n```\n\nPay attention to the case of the suffixes. \"M\" means megabytes, while \"m\" means millibytes. If you request `400m` of memory, this is a request for 0.4 bytes. Someone who types that probably meant to ask for 400 mebibytes (`400Mi`)\nor 400 megabytes (`400M`).",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 8776-9737",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_e749ba91ef038c8e36d9",
+      "supporting_excerpt": "### CPU resource units\n\nLimits and requests for CPU resources are measured in *cpu* units.\nIn Kubernetes, 1 CPU unit is equivalent to **1 physical CPU core**,\nor **1 virtual core**, depending on whether the node is a physical host\nor a virtual machine running inside a physical machine.\n\nFractional requests are allowed. When you define a container with\n`spec.containers[].resources.requests.cpu` set to `0.5`, you are requesting half\nas much CPU time compared to if you asked for `1.0` CPU.\nFor CPU resource units, the [quantity](/docs/reference/kubernetes-api/common-definitions/quantity/) expression `0.1` is equivalent to the\nexpression `100m`, which can be read as \"one hundred millicpu\". Some people say\n\"one hundred millicores\", and this is understood to mean the same thing.\n\nCPU resource is always specified as an absolute amount of resource, never as a relative amount. For example,\n`500m` CPU represents the roughly same amount of computing power whether that container\nruns on a single-core, dual-core, or 48-core machine.\n\n#### Note:\n\nKubernetes doesn't allow you to specify CPU resources with a precision finer than\n`1m` or `0.001` CPU. To avoid accidentally using an invalid CPU quantity, it's useful to specify CPU units using the milliCPU form\ninstead of the decimal form when using less than 1 CPU unit.\n\nFor example, you have a Pod that uses `5m` or `0.005` CPU and would like to decrease\nits CPU resources. By using the decimal form, it's harder to spot that `0.0005` CPU\nis an invalid value, while by using the milliCPU form, it's easier to spot that\n`0.5m` is an invalid value.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 7175-8774",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_4d47e02151c2838e6708",
+      "supporting_excerpt": "## How Kubernetes applies resource requests and limits\n\nWhen the kubelet starts a container as part of a Pod, the kubelet passes that container's\nrequests and limits for memory and CPU to the container runtime.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 12638-12848",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_247895f743c4cb85c530",
+      "supporting_excerpt": "```\n---\napiVersion: v1\nkind: Pod\nmetadata:\n  name: frontend\nspec:\n  containers:\n  - name: app\n    image: images.my-company.example/app:v4\n    resources:\n      requests:\n        memory: \"64Mi\"\n        cpu: \"250m\"\n      limits:\n        memory: \"128Mi\"\n        cpu: \"500m\"\n  - name: log-aggregator\n    image: images.my-company.example/log-aggregator:v6\n    resources:\n      requests:\n        memory: \"64Mi\"\n        cpu: \"250m\"\n      limits:\n        memory: \"128Mi\"\n        cpu: \"500m\"\n```",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 10070-10555",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_b3aa3e5b5e7bd38249e7",
+      "supporting_excerpt": "```\napiVersion: v1\nkind: Pod\nmetadata:\n  name: pod-resources-demo\n  namespace: pod-resources-example\nspec:\n  resources:\n    limits:\n      cpu: \"1\"\n      memory: \"200Mi\"\n    requests:\n      cpu: \"1\"\n      memory: \"100Mi\"\n  containers:\n  - name: pod-resources-demo-ctr-1\n    image: nginx\n    resources:\n      limits:\n        cpu: \"0.5\"\n        memory: \"100Mi\"\n      requests:\n        cpu: \"0.5\"\n        memory: \"50Mi\"\n  - name: pod-resources-demo-ctr-2\n    image: fedora\n    command:\n    - sleep\n    - inf\n```",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 11423-11930",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_cd3728693606176ba0f5",
+      "supporting_excerpt": "To determine whether a container cannot be scheduled or is being killed due to resource limits,\nsee the [Troubleshooting](#troubleshooting) section.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 15039-15187",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    },
+    {
+      "evidence_id": "ev_5840a5545b32c0d791f5",
+      "supporting_excerpt": "## How Kubernetes applies resource requests and limits\n\nWhen the kubelet starts a container as part of a Pod, the kubelet passes that container's\nrequests and limits for memory and CPU to the container runtime.\n\nOn Linux, the container runtime typically configures\nkernel [cgroups](/docs/reference/glossary/?all=true#term-cgroup \"A group of Linux processes with optional resource isolation, accounting and limits.\") that apply and enforce the\nlimits you defined.\n\n* The CPU limit defines a hard ceiling on how much CPU time the container can use.\n  During each scheduling interval (time slice), the Linux kernel checks to see if this\n  limit is exceeded; if so, the kernel waits before allowing that cgroup to resume execution.\n* The CPU request typically defines a weighting. If several different containers (cgroups)\n  want to run on a contended system, workloads with larger CPU requests are allocated more\n  CPU time than workloads with small requests.\n* The memory request is mainly used during (Kubernetes) Pod scheduling. On a node that uses\n  cgroups v2, the container runtime might use the memory request as a hint to set\n  `memory.min` and `memory.low`.\n* The memory limit defines a memory limit for that cgroup. If the container tries to\n  allocate more memory than this limit, the Linux kernel out-of-memory subsystem activates\n  and, typically, intervenes by stopping one of the processes in the container that tried\n  to allocate memory. If that process is the container's PID 1, and the container is marked\n  as restartable, Kubernetes restarts the container.\n* The memory limit for the Pod or container can also apply to pages in memory backed\n  volumes, such as an `emptyDir`. The kubelet tracks `tmpfs` emptyDir volumes as container\n  memory use, rather than as local [ephemeral storage](/docs/concepts/storage/ephemeral-storage/).\n  When using memory backed `emptyDir`,\n  be sure to check the notes [below](#memory-backed-emptydir).\n\nIf a container exceeds its memory request and the node that it runs on becomes short of\nmemory overall, it is likely that the Pod the container belongs to will be\n[evicted](/docs/concepts/scheduling-eviction/ \"Process of terminating one or more Pods on Nodes\").\n\nA container might or might not be allowed to exceed its CPU limit for extended periods of time.\nHowever, container runtimes don't terminate Pods or containers for excessive CPU usage.",
+      "source_title": "Resource Management for Pods and Containers",
+      "locator": "chars 12638-15037",
+      "source_kind": "explicit_url",
+      "source_authority": 0.55,
+      "confidence": 0.7,
+      "source_type": "web",
+      "source_scope_status": "in_scope",
+      "source_url": "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+    }
+  ],
+  "historical_review_evidence_ids": [
+    "ev_b36888493bd073a89e34",
+    "ev_c386711b5a208440d270",
+    "ev_00c57e0a0c4c9b8ef18e",
+    "ev_213956d90ae04ccc8a9f",
+    "ev_5f22553db5d64bfa49cc",
+    "ev_f6448075060cb4b8a089",
+    "ev_1a990443f31b3d238db7",
+    "ev_923dafe9e86b42dacb0e",
+    "ev_547b14d1a07950ab252b",
+    "ev_f1eac425738b6b3f02fa",
+    "ev_32705ac14739c59e9627",
+    "ev_eb322aeb24c6b5d3b349",
+    "ev_08471322a64cb8eb34d6",
+    "ev_247895f743c4cb85c530",
+    "ev_e21089aadcd4b01aeb62",
+    "ev_84af841fde5092cf9252",
+    "ev_e889d3e66a4de6550408",
+    "ev_4450426af1967a772272",
+    "ev_66bcccbaa5312069502d",
+    "ev_007ee9e43ea73399c11e",
+    "ev_72af2b371d2955cf11e8",
+    "ev_7a84294e7960d0d4514d",
+    "ev_ad98ba11865a5332013e",
+    "ev_548a48013cffa202beb9",
+    "ev_c9cf5042f07086e3130f",
+    "ev_590cce6021aaab655708",
+    "ev_a5cb4dbd3f14d59e7596",
+    "ev_c68f3e4cbc7cd7d2eed6",
+    "ev_f57c526f6d604b688091",
+    "ev_612223fedb61cc4bd32a",
+    "ev_16489b564e9533e71b62",
+    "ev_862db886b36d3d4bbc9a",
+    "ev_dbdd34180682bbb75be9",
+    "ev_7ae7212b267e4c51dd4f",
+    "ev_9442a5369e07f1f39af8",
+    "ev_acb70526f78845a46fc2",
+    "ev_9da1d5468540965b61d4",
+    "ev_e984bd1fd1ece5dadfc5",
+    "ev_05243333d2f7d11af5a7",
+    "ev_722e179aa562b4fab34c",
+    "ev_4d47e02151c2838e6708"
+  ]
+}

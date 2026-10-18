@@ -1,0 +1,27 @@
+[
+  {
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "recorded-example-audit",
+          "type": "function",
+          "function": {
+            "name": "__insightforge_structured_output",
+            "arguments": "{\"example_checks\":[{\"expected_behavior\": \"官方最小 Job 示例：主容器写入一条日志后退出，logshipper Sidecar（容器级 restartPolicy: Always）通过共享 emptyDir 以 tail -F 持续采集日志；主容器退出后 Job 正常进入 Completed，Sidecar 不阻塞完成。\", \"expected_lifecycle\": \"persistent\", \"execution_checks\": [{\"expected_lifecycle\": \"finite\", \"observed_lifecycle\": \"finite\", \"stopping_condition\": \"echo 写入完成后 shell 命令正常退出，主容器以成功结束（Job restartPolicy: Never 下计入完成）。\", \"unit_id\": \"unit-1\", \"observed_lifecycle\": \"finite\"}, {\"expected_lifecycle\": \"persistent\", \"observed_lifecycle\": \"persistent\", \"stopping_condition\": \"tail -F 无终止条件，持续跟踪文件；作为 Sidecar 在整个 Pod 生命周期运行，仅在 Pod 终止时随主容器之后（逆序）被 kubelet 停止，非自行结束。\", \"unit_id\": \"unit-2\"}], \"explanation\": \"静态检查（未执行）：YAML 与源页面逐字一致。Job 模板 Pod 级 restartPolicy: Never 与容器级 Always 层级不同，声明合法；主容器 echo 后退出，属有限任务；tail -F 为无限跟踪循环，是预期的常驻 Sidecar，其常驻不阻塞 Job 完成。与示例声明的演示目的相符。\", \"observed_behavior\": \"静态检查（未执行）：代码与来源记录逐字一致，无转录缺陷。主容器执行 echo \\\"logging\\\" > /opt/logs.txt 写入共享 emptyDir 后即退出；logshipper 以 tail -F 无限跟踪该文件，属预期常驻 Sidecar，无自然停止条件，由 kubelet 在 Pod 终止时停止。\", \"observed_lifecycle\": \"persistent\", \"status\": \"satisfies\"}]}"
+          }
+        }
+      ]
+    },
+    "finish_reason": "tool_calls"
+  },
+  {
+    "message": {
+      "role": "assistant",
+      "content": "```json\n{\n  \"example_checks\": [\n    {\n      \"example_id\": \"example-1-2c43ca2c549a\",\n      \"expected_behavior\": \"Job whose main container writes one log line to a shared emptyDir while a native sidecar (initContainer with restartPolicy: Always) tails the file; sidecar must not block Job completion.\",\n      \"observed_behavior\": \"Main container appends 'logging' to /opt/logs.txt then exits; sidecar 'tail -F' starts before main container (as sidecar-style init container) and keeps running until pod termination; pod-level restartPolicy: Never is compatible with Job; sidecar with Always policy does not block Job completion per the documented semantics of the same official example.\",\n      \"expected_lifecycle\": \"persistent\",\n      \"observed_lifecycle\": \"persistent\",\n      \"status\": \"satisfies\",\n      \"explanation\": \"unit-1 is finite primary work (single echo, exits). unit-2 is a persistent helper: 'tail -F' never exits on its own; it is terminated with the pod, which is the intended behavior of a native sidecar and does not block Job completion. YAML matches the official Job example from the cited source.\",\n      \"execution_checks\": [\n        {\n          \"unit_id\": \"unit-1\",\n          \"expected_lifecycle\": \"finite\",\n          \"observed_lifecycle\": \"finite\",\n          \"stopping_condition\": \"sh -c writes the file once and exits; container terminates successfully.\"\n        },\n        {\n          \"unit_id\": \"unit-2\",\n          \"expected_lifecycle\": \"persistent\",\n          \"observed_lifecycle\": \"persistent\",\n          \"stopping_condition\": \"none; tail -F runs indefinitely, terminated only by pod shutdown (sidecar stopped after main containers, per native sidecar semantics).\"\n        }\n      ]\n    }\n  ]\n}\n```",
+      "tool_calls": []
+    },
+    "finish_reason": "stop"
+  }
+]

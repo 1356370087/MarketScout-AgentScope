@@ -108,6 +108,17 @@ class ToolBudgetReserveRequest(ServiceRequest):
     fetch_calls: int | None = Field(default=None, ge=0, le=100, exclude_if=lambda value: value is None)
 
 
+class ToolOperationGetRequest(ServiceRequest):
+    """Read a tool receipt without reserving or executing the tool again."""
+
+    run_id: str
+    task_id: str
+    fence_token: int
+    stage: str
+    logical_operation_id: str
+    tool_name: str
+
+
 class ToolBudgetSettleRequest(ServiceRequest):
     """Settle one previously reserved logical Gateway tool call."""
 
@@ -659,6 +670,13 @@ def build_internal_sandbox_router(
             request.logical_operation_id,
         )
         return {"status": "reserved"}
+
+    @router.post("/operations/tool-get")
+    async def get_tool_operation(request: ToolOperationGetRequest) -> dict[str, Any]:
+        ledger = await native_ledger_for(request)
+        if ledger is None:
+            raise HTTPException(404, "tool_receipt_unavailable")
+        return await ledger.lookup_tool(request)
 
     @router.post("/budgets/tool-settle")
     async def settle_tool_budget(

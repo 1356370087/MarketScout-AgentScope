@@ -30,6 +30,11 @@ class QuotaLimits(StrictModel):
     max_bytes_per_user: int | None = Field(default=None, ge=1)
 
 
+class UserQuotaLimits(QuotaLimits):
+    monthly_cost_unlimited: bool = Field(default=False,
+        description="仅取消该用户的月度费用上限；继续预留、结算并执行单次研究预算。")
+
+
 class ConfigurationDocument(StrictModel):
     schema_version: Literal[1] = 1
     runtime: dict[str, Any] = Field(default_factory=dict)

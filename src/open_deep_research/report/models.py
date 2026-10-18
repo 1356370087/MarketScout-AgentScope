@@ -19,9 +19,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 
 class SourceRef(BaseModel):
@@ -405,6 +407,38 @@ class ReportReviewIssue(BaseModel):
         return payload
 
 
+class ReportEvidenceSupport(BaseModel):
+    """An actual source passage used to verify an answer in the submitted draft."""
+
+    evidence_id: str = ""
+    quote: str = Field(default="", max_length=2000,
+        description="Verbatim supporting_excerpt text, or claim text only if that record has no supporting_excerpt.")
+    passage_index: SkipJsonSchema[int | None] = None
+    source_passage_id: SkipJsonSchema[str] = ""
+
+
+class ReportExecutionReview(BaseModel):
+    """Purpose and stopping condition of one executable unit in an example."""
+
+    unit_id: str = ""
+    expected_lifecycle: Literal["finite", "persistent", "not_applicable", "unknown"]
+    observed_lifecycle: Literal["finite", "persistent", "not_applicable", "unknown"]
+    stopping_condition: str = Field(min_length=1, max_length=1000)
+
+
+class ReportExampleReview(BaseModel):
+    """Behavioral check of one complete code/configuration example."""
+
+    example_id: str
+    expected_behavior: str = Field(min_length=1, max_length=1000)
+    observed_behavior: str = Field(default="", max_length=1000)
+    expected_lifecycle: Literal["finite", "persistent", "not_applicable", "unknown"]
+    observed_lifecycle: Literal["finite", "persistent", "not_applicable", "unknown"]
+    status: Literal["satisfies", "contradicts", "unverified"]
+    explanation: str = Field(min_length=1, max_length=1500)
+    execution_checks: List[ReportExecutionReview] = Field(default_factory=list)
+
+
 class ReportCoverageReview(BaseModel):
     """Reviewer assessment for one stable user coverage requirement."""
 
@@ -413,6 +447,12 @@ class ReportCoverageReview(BaseModel):
     requirement_id: str
     status: Literal["covered", "partial", "missing"] = "missing"
     explanation: str = ""
+    # Factual witnesses are enforced by the v20 runtime; process/format rows
+    # and historical receipts may omit these fields.
+    answer_excerpt: SkipJsonSchema[str] = ""
+    answer_passage_index: SkipJsonSchema[int | None] = None
+    supporting_evidence: SkipJsonSchema[List[ReportEvidenceSupport]] = Field(default_factory=list)
+    missing_aspects: SkipJsonSchema[List[str] | None] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -571,6 +611,12 @@ class ReportReview(BaseModel):
     citation_audit: List[ReportCitationReview] = Field(default_factory=list)
     issues: List[ReportReviewIssue] = Field(default_factory=list)
     issue_resolutions: List[ReportIssueResolution] = Field(default_factory=list)
+    example_checks: SkipJsonSchema[List[ReportExampleReview]] = Field(default_factory=list)
+    _submitted_evidence_ids: set[str] | None = PrivateAttr(default=None)
+    _verified_boundary_issues: List[ReportReviewIssue] = PrivateAttr(default_factory=list)
+    _verified_guarantee_issues: List[ReportReviewIssue] = PrivateAttr(default_factory=list)
+    _auxiliary_review_error: str | None = PrivateAttr(default=None)
+    _verified_boundary_cases: set[str] = PrivateAttr(default_factory=set)
     summary: str = ""
     # ``status`` describes execution/availability and is deliberately separate
     # from the quality decision (e.g. a fail-open skipped review is degraded).

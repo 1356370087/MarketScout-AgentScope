@@ -1,5 +1,6 @@
 """Native AgentScope model execution at the credential-owning Gateway."""
 
+import asyncio
 import os
 import time
 from contextvars import ContextVar
@@ -7,6 +8,7 @@ from contextvars import ContextVar
 import httpx
 from agentscope.credential import OpenAICredential
 from agentscope.message import Msg, TextBlock, ToolCallBlock, ToolResultBlock
+from agentscope.model import FinishedReason
 from agentscope.tool import ToolChoice
 from openai import APIConnectionError, APIStatusError
 from pydantic import SecretStr
@@ -152,6 +154,9 @@ class NativeGatewayProvider:
             )
             self.models[request.model] = model
         choice = request.tool_choice
+        json_mode = request.structured_schema is not None and choice == "none"
+        if json_mode:
+            choice = None
         if isinstance(choice, dict):
             choice = ToolChoice(mode=choice["function"]["name"])
         elif choice:
@@ -167,6 +172,7 @@ class NativeGatewayProvider:
                 max_tokens=request.max_output_tokens,
                 temperature=request.temperature,
                 metadata=self.request_metadata(request),
+                **({"response_format": {"type": "json_object"}} if json_mode else {}),
                 extra_headers={
                     "x-litellm-request-id": request.logical_operation_id,
                     "traceparent": current_traceparent(request.run_id),
@@ -192,6 +198,11 @@ class NativeGatewayProvider:
             ) from exc
         finally:
             self.headers.reset(token)
+        # AgentScope converts cancellation into an empty INTERRUPTED response.
+        # Restore cancellation so the Gateway retains the unknown physical call
+        # and never bills it as a completed, zero-token format-repair attempt.
+        if result.finished_reason == FinishedReason.INTERRUPTED:
+            raise asyncio.CancelledError
         usage = result.usage
         message = {
             "role": "assistant",

@@ -16,7 +16,7 @@ from security.rbac import Principal, require_active_user
 from . import schema as s
 from .contracts import (BootstrapRequest, ConfigurationDocument, DraftRequest, UpdateDraft, PublishRequest,
     PreviewRequest, PreferencesRequest, CredentialRequest, CredentialReplacement, ImportRequest,
-    QuotaLimits, MaintenanceRequest)
+    UserQuotaLimits, MaintenanceRequest)
 from .store import get_store, PlatformError, require, check_scope, now
 
 class PlatformRoute(APIRoute):
@@ -365,7 +365,7 @@ async def user_quotas(owner_id: str, user=Depends(real_user)):
 
 
 @router.put("/quotas/{owner_id}")
-async def set_quotas(owner_id: str, body: QuotaLimits, user=Depends(real_user)):
+async def set_quotas(owner_id: str, body: UserQuotaLimits, user=Depends(real_user)):
     require(user, "platform.quotas.write")
     store = get_store()
     async with store.engine.begin() as conn:

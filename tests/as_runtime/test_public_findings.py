@@ -12,6 +12,7 @@ from open_deep_research.agentscope_runtime.recovery import RecoverySession
 from open_deep_research.agentscope_runtime.recovery_store import UnknownOperation
 from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff
 from open_deep_research.agentscope_runtime.research_models import ResearchModels
+from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.api.native_runs import NativeRuns
 from open_deep_research.events.public import project_public_events
 
@@ -41,6 +42,7 @@ async def test_findings_sql_replay_deduplicates_sources_and_model(store):
             return StructuredResponse(content={"findings": ["Supported public finding."]})
 
     factory = SummaryFactory()
+    factory.run = RunConfig.compile()
     for index in range(2):
         session = RecoverySession(store, lease, state) if index == 0 else await RecoverySession.open(store, state.run_id, "owner")
         try:
@@ -86,5 +88,36 @@ async def test_findings_failure_does_not_expose_raw_or_swallow_unknown(store, mo
         assert len(calls) == (0 if mode == "rejected" else 1)
         if mode == "rejected":
             assert not any(event.type == "research.source.discovered" for event in events)
+    finally:
+        await session.close()
+
+
+@pytest.mark.parametrize("expired", [False, True])
+async def test_optional_summary_respects_completed_task_deadline(store, tmp_path, expired):
+    import time
+    from open_deep_research.agentscope_runtime.efficiency import ResearchCache
+
+    state, lease = await create(store)
+    session = RecoverySession(store, lease, state)
+    session.research_cache = ResearchCache(session, tmp_path)
+    await session.research_cache.progress({"tasks": {"task-one": {
+        "status": "completed", "deadline_at": time.time() + (-1 if expired else 60)}}})
+    calls = []
+
+    async def summary(*args):
+        calls.append(1)
+        return SimpleNamespace(findings=["Supported public finding."])
+
+    models = SimpleNamespace(recovery=session, structured=summary)
+    result = handoff()
+    original = result.model_dump(mode="json")
+    try:
+        await publish_handoff(models, result, context_chars=1000)
+        events = await NativeRuns(store, None, None).events(state.run_id, "owner")
+        assert len(calls) == (0 if expired else 1)
+        assert any(event.type == "research.source.discovered" for event in events)
+        assert any(event.type == "findings.updated" for event in events) is not expired
+        assert result.model_dump(mode="json") == original
+        assert session.problem is None
     finally:
         await session.close()

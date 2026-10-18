@@ -128,10 +128,17 @@ class ReportContext:
             payload["coverage_contract"] = self.state.get("coverage_contract", {})
         if records is None:
             records = (
-                order_evidence(self.evidence_records, self.requirement_to_evidence, deduplicate=modern)
+                (self.evidence_records if self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 20
+                 else order_evidence(self.evidence_records, self.requirement_to_evidence, deduplicate=modern))
                 if self.strict_evidence or self.evidence_records
                 else [{"historical_note": note} for note in self.findings.split("\n\n") if note]
             )
+        if self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+            from .writing import answer_evidence_order
+            requirements = (self.state.get("coverage_contract") or {}).get("requirements", [])
+            owned = set(payload.get("requirement_ids") or [])
+            records = answer_evidence_order(records,
+                [row for row in requirements if not owned or row["requirement_id"] in owned], self.requirement_to_evidence)
         from open_deep_research.configuration import QUALITY_POLICY_VERSION
         payload["_quality_policy_version"] = self.config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
         if payload["_quality_policy_version"] in {"quality-gate-v5", "quality-gate-v6"} and any(row.get("evidence_id") for row in records):

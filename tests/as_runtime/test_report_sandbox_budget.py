@@ -54,7 +54,8 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
         expected = payload["evidence_registry"] if role == "report_review" else unique_evidence(payload["evidence_registry"])
         factual_fields = ("evidence_id", "claim", "supporting_excerpt", "source_url", "locator")
         def facts(rows):
-            return sorted([{k: row.get(k) for k in factual_fields} for row in rows], key=lambda row: row["evidence_id"])
+            return sorted([{k: row.get(k, row.get("supporting_excerpt") if k == "claim" else None)
+                            for k in factual_fields} for row in rows], key=lambda row: row["evidence_id"])
         assert facts(evidence["records"]) == facts(expected)
         assert evidence["omitted_record_count"] == 0
         if role == "report_revisor":
@@ -102,6 +103,8 @@ async def test_real_recovery_review_uses_frozen_sandbox_window(window, role):
                 result = await invoke()
                 if role == "report_review":
                     assert result.decision == "revise"
+                    submitted = json.loads(requests[0]["messages"][2]["content"][0]["text"])["records"]
+                    assert result._submitted_evidence_ids == {row["evidence_id"] for row in submitted}
                 else:
                     assert result == payload["draft_markdown"]
                 assert len(requests) == 1

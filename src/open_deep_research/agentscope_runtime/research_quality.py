@@ -63,9 +63,10 @@ class NativeResearchQuality:
         protocol_validator=None,
     ):
         cfg = Configuration.from_runnable_config(config)
-        from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
+        from open_deep_research.quality.context import CONTEXT_RULES, SCOPE_CONTEXT_RULES, research_context_xml
         modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
-        messages = [SystemMsg("quality_rules", system_prompt + ("\n" + CONTEXT_RULES if modern else "")),
+        messages = [SystemMsg("quality_rules", system_prompt + ("\n" + CONTEXT_RULES if modern else "")
+                             + ("\n" + SCOPE_CONTEXT_RULES if payload.get("coverage_contract", {}).get("scope_context") else "")),
                     UserMsg("research_evidence", research_context_xml(payload.get("coverage_contract"), payload=payload)
                             if modern else "Evaluate this JSON research payload:\n" + json.dumps(payload, ensure_ascii=False, sort_keys=cfg.research_efficiency_mode == "bounded"))]
         errors = []
@@ -176,8 +177,9 @@ class NativeResearchQuality:
                                             requirement_ids=outcome.requirement_ids)
             outcome.assessment["summary_repair"] = {"attempts": 1, "reason": "supported_evidence_summary_mismatch",
                 "original_summary": outcome.compressed_research, "initial_assessment": result.model_dump(mode="json")}
+            options = {"reference_only": True} if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20 else {}
             outcome.compressed_research = await _evidence_handoff_notes(self.models, assignment, outcome.evidence_registry,
-                                                                       Configuration.from_runnable_config(config))
+                                                                       Configuration.from_runnable_config(config), **options)
             result = await evaluate_subagent_handoff(outcome.research_topic, outcome.model_dump(mode="json"), config,
                 coverage_contract=contract, requirement_ids=outcome.requirement_ids, evaluator=self.evaluate)
             outcome.assessment["summary_repair"]["accepted"] = result.accepted

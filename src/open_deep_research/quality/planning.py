@@ -11,17 +11,19 @@ from open_deep_research.quality.contract import (
     _message_role,
     _stable_requirement_id,
     _stable_dimension_id,
+    _split_top_level_dimension_list,
     build_research_coverage_contract,
     classify_requirement_kind,
     research_delegation_scopes,
 )
 
 
-def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False):
+def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False, preserve_scope=False):
     """Retain provenance and deterministic constraints without inventing facts."""
     original = {i: _message_content(m) for i, m in enumerate(messages)
                 if _message_role(m) in {"user", "human"}}
     fallback = build_research_coverage_contract(messages, advisory_dimensions=[brief])
+    marker_pattern = r"[（(]\d{1,2}[）)]|(?<![\w.])\d{1,2}[）)]" if preserve_scope else r"[（(]\d{1,2}[）)]"
     selected = []
     facet_parents = []
     for atom in atoms:
@@ -47,13 +49,13 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
         if facets:
             facet_parents.append((index, start, start + len(text), text))
             selected.extend(facets)
-            if not _fully_quoted(text, start, facets):
+            if not _fully_quoted(text, start, facets, marker_pattern=marker_pattern):
                 selected.append((index, start, start + len(text), text, kind))
         else:
             selected.append((index, start, start + len(text), text, kind))
     expanded = []
     for i, start, end, text, kind in selected:
-        markers = list(re.finditer(r"[（(]\d{1,2}[）)]", text)) if kind == "factual" else []
+        markers = list(re.finditer(marker_pattern, text)) if kind == "factual" else []
         if len(markers) > 1:
             for n, marker in enumerate(markers):
                 a = start + marker.start()
@@ -68,7 +70,7 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     # independent of the model's grouping, quoting or omission choices.
     parents = []
     for i, content in original.items():
-        markers = list(re.finditer(r"[（(]\d{1,2}[）)]", content))
+        markers = list(re.finditer(marker_pattern, content))
         if len(markers) < 2:
             continue
         for n, marker in enumerate(markers):
@@ -84,7 +86,7 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
             selected = [row for row in selected if not (row[0] == i and row[4] == "factual" and row[1] < b and row[2] > a)]
             if finer:
                 selected.extend(finer)
-            if not finer or not _fully_quoted(content[a:b], a, finer):
+            if not finer or not _fully_quoted(content[a:b], a, finer, marker_pattern=marker_pattern):
                 selected.append((i, a, b, content[a:b], classify_requirement_kind(content[a:b])))
             if atomic:
                 parents.append((i, a, b, content[a:b]))
@@ -132,6 +134,59 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
         if req.kind != "factual" and not any(i == req.source_message_index and a <= req.source_start and b >= req.source_end
                                             for i, a, b, _, _ in selected):
             selected.append((req.source_message_index, req.source_start, req.source_end, req.text, req.kind))
+    if preserve_scope:
+        # An explicitly supplied scenario is a premise, not an external fact
+        # that a researcher must prove. Questions/verification within it remain
+        # factual; source positions preserve the label even when the model omits it.
+        scenarios = [(i, match.start(), match.end("body")) for i, text in original.items()
+            for match in re.finditer(r"(?:^|[。\n])\s*(?:场景|背景|scenario|context)\s*[：:]\s*(?P<body>[^。\n]+)", text, re.I)
+            if not re.search(r"[?？]|是否|能否|请说明|核实|验证|\b(?:whether|how|verify|explain|check)\b", match["body"], re.I)]
+        selected = [(i, a, b, text, "process" if any(i == owner and start <= a < b <= end
+                    for owner, start, end in scenarios) else kind) for i, a, b, text, kind in selected]
+        # A model can quote the goal and its supplied scenario as one span.
+        # Keep such a non-question preamble as scope, including across sentences.
+        question = r"[?？]|是否|能否|如何|怎么|为何|什么|核实|验证|\b(?:whether|how|what|why|verify|check)\b"
+        prefixes = {i: match.start() for i, text in original.items()
+                    if (match := re.search(marker_pattern, text))
+                    and any(row[0] == i and row[4] == "factual" and row[1] >= match.start() for row in selected)}
+        # An introductory request to produce a plan/report is an output goal.
+        # Its numbered factual questions already own the external research;
+        # making the title another fact duplicates every sibling obligation.
+        output_goal = r"^(?:(?:研究|撰写|编写|制定|设计).*(?:方案|报告|综述|计划)|(?:research|write|prepare|produce)\b.*\b(?:plan|report|strategy|roadmap))\s*[。.!！]?$"
+        selected = [(i, a, b, text, "deliverable" if kind == "factual" and b <= prefixes.get(i, -1)
+                    and not re.search(question, text, re.I) and re.search(output_goal, text.strip(), re.I)
+                    else kind) for i, a, b, text, kind in selected]
+        selected = [(i, a, b, text, "process" if kind == "factual" and b <= prefixes.get(i, -1)
+                    and not re.search(question, text, re.I)
+                    and any(i == owner and a < end and start < b for owner, start, end in scenarios)
+                    else kind) for i, a, b, text, kind in selected]
+        # If a full source clause must remain, its nested fragments are not
+        # additional obligations. Fully covering facets already removed their
+        # parent above; this preserves each question without counting it twice.
+        selected = [row for row in selected if not any(
+            row[0] == parent[0] and row[4] == parent[4]
+            and parent[1] <= row[1] < row[2] <= parent[2]
+            and (row[1], row[2]) != (parent[1], parent[2])
+            for parent in selected)]
+        # Explicit object-aspect lists must not depend on whether the model
+        # happened to provide facets. One covered aspect cannot stand for the
+        # whole list. Keep the shared object in the parent dimension and retain
+        # each child's exact original span; do not split relational questions.
+        expanded, parsed = list(selected), []
+        candidates = [*parents, *((i, a, b, text) for i, a, b, text, kind in selected if kind == "factual")]
+        for i, a, b, text in candidates:
+            if any(owner == i and start <= a < b <= end for owner, start, end in parsed):
+                continue
+            facets = _enumerated_object_facets(text)
+            if not facets:
+                continue
+            if not any(owner == i and start <= a < b <= end for owner, start, end, _ in parents):
+                parents.append((i, a, b, text))
+            expanded = [row for row in expanded if not (row[0] == i and row[4] == "factual" and a <= row[1] < row[2] <= b)]
+            expanded.extend((i, a + offset, a + offset + len(facet), facet, "factual") for offset, facet in facets)
+            parsed.append((i, a, b))
+        selected = expanded
+        parents = sorted(dict.fromkeys(parents))
     unique = {}
     for row in sorted(selected):
         unique.setdefault((row[0], row[1], row[2]), row)
@@ -171,6 +226,24 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     return compiled
 
 
+def _enumerated_object_facets(text):
+    """Split explicit noun facets following a shared object's 的 qualifier."""
+    prefix, marker, tail = text.rpartition("的")
+    if not marker or "、" not in tail or re.search(r"[?？]|分别|如何|怎样|是否|能否|之间|关系|差异|区别", tail):
+        return []
+    parts = _split_top_level_dimension_list(tail)
+    if len(parts) < 2:
+        return []
+    result, cursor = [], len(prefix) + len(marker)
+    for part in parts:
+        offset = text.find(part, cursor)
+        if offset < 0:
+            return []
+        result.append((offset, part))
+        cursor = offset + len(part)
+    return result
+
+
 def _qualified_question_spans(content):
     """Keep conditional and claim-verification clauses source-addressable."""
     for match in re.finditer(r"[^。；;\n!?！？]+(?:[!?！？])?", content):
@@ -187,12 +260,12 @@ def _qualified_question_spans(content):
             yield start, end
 
 
-def _fully_quoted(text, start, rows):
+def _fully_quoted(text, start, rows, *, marker_pattern=r"[（(]\d{1,2}[）)]"):
     """A model may split a source clause, but cannot silently omit its words."""
     remaining = list(text)
     for _, a, b, _, _ in rows:
         remaining[max(0, a - start):min(len(text), b - start)] = " " * (min(len(text), b - start) - max(0, a - start))
-    value = re.sub(r"[（(]\d{1,2}[）)]", "", "".join(remaining))
+    value = re.sub(marker_pattern, "", "".join(remaining))
     value = re.sub(r"\b(?:and|or)\b|以及|及|与|和|并", "", value, flags=re.IGNORECASE)
     return not re.search(r"\w", value)
 

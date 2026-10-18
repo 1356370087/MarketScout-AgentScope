@@ -8,7 +8,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
-from open_deep_research.quality.context import CONTEXT_RULES, research_context_xml
+from open_deep_research.quality.context import CONTEXT_RULES, SCOPE_CONTEXT_RULES, research_context_xml
 from datetime import UTC, datetime
 from uuid import uuid4
 from urllib.parse import urlsplit
@@ -92,12 +92,13 @@ def _compression_context(value, accepted_urls):
     return json.dumps(project(value), ensure_ascii=False)
 
 
-async def _evidence_handoff_notes(models, assignment, evidence, cfg):
+async def _evidence_handoff_notes(models, assignment, evidence, cfg, *, reference_only=False):
     """Retain candidate evidence when free-text compression fails citation checks.
 
     This is a handoff to the existing quality gate, never an admission decision.
-    Drop the invalid prose in full and keep whole evidence records within the
-    same handoff budget instead of repeating web research for a formatting fault.
+    Drop invalid prose in full instead of repeating Web research. The v20
+    reference mode leaves original records in the separate quality payload;
+    older frozen runs retain the original bounded record rendering.
     """
     model = models.agent_model("compression", assignment.task_id)
     limit = min(cfg.handoff_context_target_tokens,
@@ -105,6 +106,19 @@ async def _evidence_handoff_notes(models, assignment, evidence, cfg):
     records = [{key: row.get(key) for key in ("evidence_id", "claim", "supporting_excerpt", "source_url")}
                for row in evidence]
     urls = {row["source_url"] for row in evidence}
+    if reference_only:
+        # The quality payload already carries the complete registry separately.
+        # Repeating whole records here also marks all their IDs as mandatory
+        # citations, so a summary that fits alone can overflow the next gate.
+        note = _compression_context({
+            "status": "candidate_evidence_handoff",
+            "compression_warning": "先前摘要未通过校验或与证据目录不一致，已弃用；不能据此断言资料缺失。请重新核验独立 evidence_registry 中的原文，此提示不表示证据已经准入。",
+            "evidence_registry_ref": "evidence_registry",
+            "candidate_record_count": len(evidence),
+        }, urls)
+        if await model.count_tokens([UserMsg("evidence", note)], tools=[]) > limit:
+            raise QualityInputBudgetExceeded("handoff_evidence_reference_does_not_fit")
+        return note
 
     def render(count):
         return _compression_context({
@@ -425,7 +439,8 @@ class Researcher:
         scoped_model_context = model_config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}
         if scoped_model_context:
             from open_deep_research.quality.contract import researcher_coverage_view
-            model_contract = researcher_coverage_view(contract, assignment.requirement_ids)
+            model_contract = researcher_coverage_view(contract, assignment.requirement_ids,
+                preserve_scope=model_config.get("metadata", {}).get("run_config_schema_version", 18) >= 20)
             model_config = {**model_config, "metadata": {**model_config.get("metadata", {}), "coverage_contract": model_contract}}
         completion = _Completion(cfg.max_react_tool_calls)
 
@@ -516,11 +531,16 @@ class Researcher:
 
         async def quality_boundary(agent):
             if cfg.research_efficiency_mode == "bounded":
+                import time
+                from open_deep_research.agentscope_runtime.runtime_limits import current_deadline_at
                 from open_deep_research.agentscope_runtime.efficiency import (
                     research_budget_reason,
                 )
 
-
+                deadline = current_deadline_at()
+                if deadline is not None and deadline - time.time() <= cfg.model_call_timeout_seconds:
+                    completion.stopped, completion.stop_reason = True, "task_time_reserved"
+                    return
                 reason = await research_budget_reason(self.models, scoped_config())
                 if reason:
                     completion.stopped, completion.stop_reason = True, reason
@@ -603,6 +623,7 @@ class Researcher:
                 mcp_prompt=cfg.mcp_prompt or "",
                 tool_guidance="{tool_guidance}",
             ) + research_guidance(scoped_config()) + ("\n" + CONTEXT_RULES if scoped_model_context and contract.get("schema_version", 2) >= 3 else "")
+            + ("\n" + SCOPE_CONTEXT_RULES if model_contract.get("scope_context") else "")
             + ("\n\n" + skill_guidance if skill_guidance else ""),
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=cfg.max_react_tool_calls),
@@ -657,15 +678,16 @@ class Researcher:
                 urls,
             )
         )
-        if cfg.research_efficiency_mode == "bounded" and cache is not None:
+        if cfg.research_efficiency_mode == "bounded" and cache is not None and completion.stop_reason != "task_time_reserved":
             from open_deep_research.agentscope_runtime.efficiency import handoff_prompt
 
             prompt = await handoff_prompt(self.models, assignment, contract, evidence,
                                           observations.assessments, scoped_config())
         compression = {"status": "model_summary", "attempts": 0}
         for attempt in range(2):
-            if completion.stop_reason in {"report_budget_reserved", "report_time_reserved"}:
-                notes = "研究已停止新增调用，以预留报告预算。已确认的证据由结构化记录携带；剩余问题尚未证实。"
+            if completion.stop_reason in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
+                notes = "研究已停止新增调用，以遵守任务时限及报告预算。候选证据由独立 evidence_registry 完整携带；未核实问题不能据此视为已覆盖。"
+                compression.update(status="evidence_only", reason=completion.stop_reason)
                 break
             from open_deep_research.agentscope_runtime.runtime_limits import attributed
 
@@ -684,7 +706,8 @@ class Researcher:
                     + "。请重新压缩，仅引用给定 evidence 的 source_url；未抓取来源只能描述为缺口，不得列出其 URL。")
         else:
             if evidence and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
-                notes = await _evidence_handoff_notes(self.models, assignment, evidence, cfg)
+                notes = await _evidence_handoff_notes(self.models, assignment, evidence, cfg,
+                    reference_only=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20)
                 compression["status"] = "candidate_evidence_fallback"
                 compression["reason"] = "compression_citation_validation_failed"
             else:
@@ -783,7 +806,11 @@ class Supervisor:
         if use_scopes and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
             # A leaf's search depth must not prevent the supervisor from even
             # assigning every frozen scope once and submitting completion.
-            coordination_limit = max(coordination_limit, len(delegation_scopes) + 1)
+            attempts_per_scope = (1 + cfg.max_supplement_rounds
+                if self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20 else 1)
+            # Allowed supplements consume coordinator turns too. Account for
+            # them without changing leaf limits, per-scope stops or run budgets.
+            coordination_limit = max(coordination_limit, len(delegation_scopes) * attempts_per_scope + 1)
         completion = _Completion(coordination_limit)
         ledger = dict(getattr(self, "initial_coverage_ledger", {})) if contract.get("schema_version", 2) >= 3 else {}
         assessments = {}
@@ -924,7 +951,7 @@ class Supervisor:
                         assessment = HandoffAssessment.model_validate(
                             outcome.assessment["handoff"]
                         )
-                    elif outcome.termination in {"report_budget_reserved", "report_time_reserved"}:
+                    elif outcome.termination in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
                         from open_deep_research.quality.gate import HandoffAssessment
 
                         assessment = HandoffAssessment(accepted=False, reason=outcome.termination)

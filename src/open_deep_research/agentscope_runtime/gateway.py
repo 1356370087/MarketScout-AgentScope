@@ -29,6 +29,7 @@ from agentscope.tool import ToolChoice
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
+from open_deep_research.models.protocol_errors import parse_structured_json, schema_repair_feedback
 from open_deep_research.sandbox.wire import GatewayModelOutcomeV2, GatewayModelRequestV2
 
 _operation_scope = ContextVar("native_gateway_operation", default=None)
@@ -213,13 +214,14 @@ class SandboxChatModel(ChatModelBase):
                 from open_deep_research.budgets import BudgetDimension, BudgetExhausted
 
                 raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
-            if server_search is not None and outcome.status == "failed":
-                code = outcome.error_code or "server_search_failed"
+            if outcome.status == "failed":
+                code = outcome.error_code or "gateway_model_failed"
                 status = {"invalid_request": 400, "authentication": 401,
                           "model_unavailable": 404, "budget_or_rate_limit": 429,
-                          "server_search_failed": 422}.get(code)
+                          "gateway_budget_exceeded": 429,
+                          "model_not_dispatched": 503, "server_search_failed": 422}.get(code)
                 raise GatewayCallError(code, status_code=status, uncertain=False)
-            raise GatewayCallError("sandbox_gateway_operation_not_completed", uncertain=True)
+            raise GatewayCallError(outcome.error_code or "sandbox_gateway_operation_not_completed", uncertain=True)
         return outcome
 
     def _headers(self, request):
@@ -354,38 +356,72 @@ class SandboxChatModel(ChatModelBase):
             else structured_model
         )
         messages = list(messages)
+        json_repair = False
+        json_supported = True
+        last_format_error = None
         for attempt in range(max(1, self.structured_attempts)):
-            outcome = await self._request(messages, structured_schema=schema, **kwargs)
+            try:
+                outcome = await self._request(messages, structured_schema=schema,
+                    **{**kwargs, "tool_choice": "none" if json_repair else None})
+            except GatewayCallError as exc:
+                # Some compatible providers do not support JSON response mode.
+                # A definite 400 may use the remaining original attempt budget;
+                # transport/unknown outcomes must never trigger another dispatch.
+                if json_repair and not exc.uncertain and exc.code == "invalid_request":
+                    if attempt + 1 >= self.structured_attempts:
+                        raise last_format_error from exc
+                    json_repair = json_supported = False
+                    messages.append(UserMsg("user",
+                        "JSON response mode is unavailable. Call __insightforge_structured_output "
+                        "exactly once with all required properties and no duplicate keys."))
+                    continue
+                raise
             try:
                 if outcome.finish_reason in {"length", "max_tokens"}:
                     raise GatewayCallError("structured_output_truncated")
                 content = outcome.structured
-                if content is None:
-                    calls = (outcome.message or {}).get("tool_calls") or []
+                calls = (outcome.message or {}).get("tool_calls") or []
+                if json_repair:
+                    text = (outcome.message or {}).get("content")
+                    if calls or not isinstance(text, str) or not text.strip():
+                        raise GatewayCallError("structured_output_missing")
+                    content = parse_structured_json(text)
+                elif calls:
                     matches = [
                         c for c in calls
                         if c["function"]["name"] == "__insightforge_structured_output"
                     ]
-                    if len(matches) != 1:
+                    if len(calls) != 1 or len(matches) != 1:
                         raise GatewayCallError("structured_output_missing")
-                    content = json.loads(matches[0]["function"]["arguments"])
+                    content = parse_structured_json(matches[0]["function"]["arguments"])
+                elif content is None:
+                    text = (outcome.message or {}).get("content")
+                    if not isinstance(text, str) or not text.strip():
+                        raise GatewayCallError("structured_output_missing")
+                    content = parse_structured_json(text)
                 jsonschema.validate(content, schema)
                 if isinstance(structured_model, type):
                     content = structured_model.model_validate(content).model_dump(mode="json")
                 break
             except (json.JSONDecodeError, jsonschema.ValidationError, ValidationError, GatewayCallError) as exc:
+                last_format_error = exc
                 if attempt + 1 >= self.structured_attempts:
                     raise
                 # 格式修复发生在持久化逻辑调用内；每次物理请求仍经 Gateway
                 # 领取独立操作 ID 并计账，不将缺失字段伪造成合法评分。
+                json_repair = json_supported
                 messages.append(UserMsg(
                     "user",
                     "The previous response did not satisfy the required schema. "
-                    "Call __insightforge_structured_output exactly once and include "
-                    "every required property with the declared types. Required: "
+                    + ("Return one JSON object as response content and include " if json_repair else
+                       "Call __insightforge_structured_output exactly once and include ")
+                    +
+                    "every required property with the declared types. Emit each property "
+                    "only once, use concise field values, and close every object and array. Required: "
                     + json.dumps(schema.get("required", []))
                     + "\nValidation error: "
-                    + (exc.message if isinstance(exc, jsonschema.ValidationError) else str(exc))[:1000]
+                    + (schema_repair_feedback(jsonschema.validators.validator_for(schema)(schema).iter_errors(content))
+                       if isinstance(exc, jsonschema.ValidationError) else str(exc)[:1000])
                     + (
                         "\nThe output exceeded its token limit. Use concise field values "
                         "and avoid duplicate entries; preserve all required coverage "
@@ -464,6 +500,14 @@ class GovernedModelMixin:
                 "tool_calls",
             }:
                 raise GatewayCallError("structured_output_not_complete")
+            # Pydantic does not enforce enum constraints added via schema extras.
+            # Service/CLI calls must enforce the same contract as Gateway calls.
+            schema = structured_model.model_json_schema() if isinstance(structured_model, type) else structured_model
+            try:
+                jsonschema.validate(result.content, schema)
+            except jsonschema.ValidationError as exc:
+                raise jsonschema.ValidationError(schema_repair_feedback(
+                    jsonschema.validators.validator_for(schema)(schema).iter_errors(result.content))) from exc
             result.metadata.update(metadata)
             return result
         except Exception as error:

@@ -119,6 +119,34 @@ async def test_rephrasing_an_unresolved_defect_does_not_change_its_identity(monk
     assert not second.hard_failures
 
 
+@pytest.mark.parametrize("run_version", [19, 20])
+@pytest.mark.asyncio
+async def test_retained_informational_feedback_is_not_an_unresolved_blocker(monkeypatch, run_version):
+    draft, state, config, raw = fixture()
+    config["metadata"]["run_config_schema_version"] = run_version
+    raw["coverage"][0].update(answer_excerpt="A previous backup manifest is required.",
+        supporting_evidence=[{"evidence_id": "EV-01", "quote": "A previous backup manifest is required."}],
+        missing_aspects=[])
+    raw["issues"] = [issue("executive_readability", "info", requires_change=False,
+        description="The paragraph is correctly qualified; no change is needed.", revision_instruction="")]
+
+    async def invoke(*args, **kwargs):
+        return deepcopy(raw)
+
+    monkeypatch.setattr(reviewer, "_invoke_reviewer", invoke)
+    first = await reviewer.review_report(draft, state, config)
+    assert first.decision == "pass"
+    identity = first.issues[0].issue_id
+    state["report_review_history"] = [first.model_dump(mode="json")]
+    raw["issues"][0]["issue_id"] = identity
+    raw["issue_resolutions"] = [{"issue_id": identity, "status": "retained",
+        "explanation": "The same nonblocking observation remains valid."}]
+    second = await reviewer.review_report(draft, state, config, attempt=2)
+    assert ("review_issue_resolution_missing_or_invalid" in second.hard_failures) == (run_version == 19)
+    if run_version == 20:
+        assert second.decision == "pass" and not second.hard_failures
+
+
 @pytest.mark.asyncio
 async def test_editorial_label_cannot_bypass_critical_score_or_source_failure(monkeypatch):
     draft, state, config, raw = fixture()
@@ -278,3 +306,57 @@ async def test_only_summary_mismatch_is_repaired_without_new_research(monkeypatc
     if supported:
         assert outcome.assessment["summary_repair"]["original_summary"] == calls[0]
         assert outcome.assessment["summary_repair"]["accepted"]
+
+
+@pytest.mark.parametrize("run_version", [19, 20])
+@pytest.mark.asyncio
+async def test_summary_repair_does_not_duplicate_cited_evidence_beyond_handoff_budget(monkeypatch, run_version):
+    import hashlib
+    from types import SimpleNamespace
+    from open_deep_research.agentscope_runtime import research_agents, research_quality
+    from open_deep_research.quality.gate import evaluate_subagent_handoff
+
+    text = "A completed batch emits one receipt and exits. " + "Additional source context. " * 35
+    evidence = [{"evidence_id": identity, "claim": text, "supporting_excerpt": text,
+        "source_url": f"https://docs.example/source-{i}", "security_status": "accepted"}
+        for i, identity in enumerate(["ev_aaaaaaaaaaaaaaaaaaaa", "ev_bbbbbbbbbbbbbbbbbbbb"])]
+    original = deepcopy(evidence)
+    outcome = research_agents.ResearchHandoff(task_id="task", research_topic="Explain finite batch completion",
+        requirement_ids=["COV-01"], compressed_research="These source records are missing.", evidence_registry=evidence)
+    contract = {"schema_version": 1, "original_query_sha256": hashlib.sha256(outcome.research_topic.encode()).hexdigest(),
+        "requirements": [{"requirement_id": "COV-01", "text": outcome.research_topic, "kind": "factual",
+            "source_message_index": 0, "source_start": 0, "source_end": len(outcome.research_topic)}]}
+    cfg = {"configurable": {"quality_evaluation_max_input_chars": 6000, "handoff_context_target_tokens": 8000,
+        "quality_evaluation_min_sources": 2, "quality_evaluation_fail_open": False},
+        "metadata": {"run_config_schema_version": run_version, "quality_policy_version": "quality-gate-v6"}}
+    calls = []
+
+    async def judge(schema, system_prompt, payload, config, **kwargs):
+        calls.append(payload)
+        assert {row["evidence_id"] for row in payload["evidence_registry"]} == {row["evidence_id"] for row in evidence}
+        return schema.model_validate({"accepted": len(calls) == 2,
+            "relevance": 5, "source_quality": 5, "evidence_coverage": 5, "groundedness": 5,
+            "unsupported_claims": ["The summary falsely claims the registered sources are missing."] if len(calls) == 1 else [],
+            "requirement_coverage": [{"requirement_id": "COV-01", "status": "supported",
+                "evidence_ids": [row["evidence_id"] for row in evidence], "explanation": "Both source records support completion."}],
+            "reason": "The facts are supported; only the original summary is incorrect."})
+
+    async def evaluate(*args, **kwargs):
+        return await evaluate_subagent_handoff(*args, **{**kwargs, "evaluator": judge})
+
+    async def count_tokens(messages, **kwargs):
+        return len(messages[0].get_text_content()) // 4
+
+    models = SimpleNamespace(agent_model=lambda *args: SimpleNamespace(context_size=32768, count_tokens=count_tokens))
+    monkeypatch.setattr(research_quality, "evaluate_subagent_handoff", evaluate)
+    if run_version == 19:
+        from open_deep_research.quality.gate import QualityInputBudgetExceeded
+        with pytest.raises(QualityInputBudgetExceeded, match="quality_cited_evidence_does_not_fit"):
+            await research_quality.NativeResearchQuality(models, lambda: cfg).handoff(outcome, contract)
+        assert len(calls) == 1
+        return
+    result = await research_quality.NativeResearchQuality(models, lambda: cfg).handoff(outcome, contract)
+    assert result.accepted and len(calls) == 2
+    assert outcome.evidence_registry == original
+    assert len(outcome.compressed_research) < 600
+    assert outcome.assessment["summary_repair"]["attempts"] == 1

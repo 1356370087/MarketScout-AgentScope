@@ -37,6 +37,7 @@ from open_deep_research.quality.contract import (
     ResearchRiskProfile,
     coverage_requirement_display_text,
     is_delegable_requirement,
+    original_requirement_context,
     resolve_handoff_admission,
     task_coverage_contract,
 )
@@ -1309,10 +1310,12 @@ def _evidence_optional_requirement_ids(
 def _owned_coverage_contract_projection(
     coverage_contract: ResearchCoverageContract,
     owned_requirement_ids: tuple[str, ...],
+    *, preserve_scope: bool = False,
 ) -> dict[str, Any]:
     """Project only this handoff's atomic requirements for the Judge."""
     owned = set(owned_requirement_ids)
     return {
+        **({"scope_context": original_requirement_context(coverage_contract)} if preserve_scope else {}),
         "schema_version": coverage_contract.schema_version,
         "original_query_sha256": coverage_contract.original_query_sha256,
         "source_selection": (
@@ -1715,6 +1718,7 @@ def _handoff_protocol_errors(
     evidence_ids: tuple[str, ...] = (),
     evidence_truncated: bool = True,
     reduce_decision: bool = False,
+    validate_coverage_evidence: bool = False,
 ) -> list[str]:
     """Return semantic contradictions in one handoff Judge response."""
     scores = (
@@ -1730,6 +1734,14 @@ def _handoff_protocol_errors(
     ]
     deterministic_failures = list(checks.get("failures", []))
     errors: list[str] = []
+    if validate_coverage_evidence:
+        known = set(evidence_ids)
+        for coverage in result.requirement_coverage:
+            if coverage.status == "supported":
+                unknown = set(coverage.evidence_ids) - known
+                if unknown or not coverage.evidence_ids:
+                    errors.append("requirement_coverage_invalid_evidence:" + coverage.requirement_id
+                                  + ":" + (",".join(sorted(unknown)) or "missing"))
     if exclusive_requirement_ids and result.accepted:
         # Scores/text claiming success while owned coverage rows are absent
         # is a protocol contradiction: retry the Judge with the exact IDs.
@@ -2059,6 +2071,7 @@ async def evaluate_tool_results(
                 "coverage_contract": _owned_coverage_contract_projection(
                     resolved_contract,
                     owned_requirement_ids,
+                    preserve_scope=config.get("metadata", {}).get("run_config_schema_version", 18) >= 20,
                 ),
                 "owned_requirement_ids": list(owned_requirement_ids),
                 "research_topic": (
@@ -2440,6 +2453,7 @@ async def evaluate_subagent_handoff(
                 "coverage_contract": _owned_coverage_contract_projection(
                     resolved_contract,
                     owned_requirement_ids,
+                    preserve_scope=config.get("metadata", {}).get("run_config_schema_version", 18) >= 20,
                 ),
                 "owned_requirement_ids": list(owned_requirement_ids),
                 "owned_requirements": [
@@ -2521,6 +2535,7 @@ async def evaluate_subagent_handoff(
                 evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["evidence_registry"]),
                 evidence_truncated=bool(payload["evidence_registry_stats"]["truncated"]),
                 reduce_decision=reduce_decision,
+                validate_coverage_evidence=config.get("metadata", {}).get("run_config_schema_version", 18) >= 20,
             ) + (procedure_protocol_errors(candidate.procedure_checks, procedure_ids,
                 [str(e.get("evidence_id")) for e in payload["evidence_registry"]]) if procedure_ids else []),
         )

@@ -171,7 +171,8 @@ class NativeResearchStages:
             contract = compile_planned_requirements(state.messages, result.requirements, brief=result.research_brief,
                 atomic=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"},
                 entities=result.entities,
-                preserve_conditions=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6")
+                preserve_conditions=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
+                preserve_scope=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20)
         else:
             contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())

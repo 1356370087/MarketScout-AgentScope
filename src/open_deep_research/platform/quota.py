@@ -26,7 +26,8 @@ async def reserve(owner, operation_id, amount, source, *, store=None, at=None, d
     async with store.engine.begin() as conn:
         limits = await store.limits(owner, conn)
         ceiling = limits.get("monthly_cost_micro_usd")
-        if ceiling is None:
+        unlimited = limits.get("monthly_cost_unlimited", False)
+        if ceiling is None and not unlimited:
             raise PlatformError("monthly_quota_not_configured", 503)
         created = (await conn.execute(store.upsert(s.charges).values(operation_id=operation_id,
             owner_id=owner, period=period, status="reserved", reserved=amount, actual=None,
@@ -43,9 +44,10 @@ async def reserve(owner, operation_id, amount, source, *, store=None, at=None, d
             if changed.rowcount != 1:
                 raise PlatformError("quota_operation_conflict", 409)
         await conn.execute(store.upsert(s.months).values(owner_id=owner, period=period, reserved=0, settled=0).on_conflict_do_nothing())
-        changed = await conn.execute(update(s.months).where(s.months.c.owner_id == owner,
-            s.months.c.period == period, s.months.c.reserved + s.months.c.settled + amount <= ceiling)
-            .values(reserved=s.months.c.reserved + amount))
+        reservation = update(s.months).where(s.months.c.owner_id == owner, s.months.c.period == period)
+        if not unlimited:
+            reservation = reservation.where(s.months.c.reserved + s.months.c.settled + amount <= ceiling)
+        changed = await conn.execute(reservation.values(reserved=s.months.c.reserved + amount))
         if changed.rowcount != 1:
             raise QuotaExceeded()
         return {"operation_id": operation_id, "status": "reserved", "reserved": amount, "period": period}

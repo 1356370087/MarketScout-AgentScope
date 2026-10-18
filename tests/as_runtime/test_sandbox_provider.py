@@ -1,6 +1,7 @@
 """Native provider executes the real AgentScope/OpenAI stack over HTTP fixtures."""
 
 import json
+import asyncio
 
 import httpx
 import pytest
@@ -21,6 +22,34 @@ def request():
         messages=[{"role": "user", "content": "Research"}],
         max_output_tokens=100,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["cancel", "timeout"])
+async def test_native_provider_preserves_sdk_interruption(interruption):
+    started = asyncio.Event()
+    calls = []
+
+    async def handler(req):
+        calls.append(req)
+        started.set()
+        await asyncio.Event().wait()
+
+    provider = NativeGatewayProvider(api_key="fixture", base_url="https://fixture.invalid/v1",
+                                     transport=httpx.MockTransport(handler))
+    try:
+        if interruption == "cancel":
+            task = asyncio.create_task(provider.complete(request()))
+            await asyncio.wait_for(started.wait(), 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(provider.complete(request()), 0.05)
+        assert len(calls) == 1
+    finally:
+        await provider.aclose()
 
 
 @pytest.mark.asyncio

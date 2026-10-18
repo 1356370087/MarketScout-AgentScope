@@ -156,10 +156,14 @@ def _select_evidence_for_budget(
     token_budget: int,
     max_records: int = 56,
     requirement_to_evidence: dict[str, list[str]] | None = None,
+    requirements: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Select a bounded, source-diverse evidence projection."""
-    from .writing import order_evidence
-    ordered = order_evidence(records, requirement_to_evidence or {})
+    from .writing import order_evidence, answer_evidence_order, compact_evidence
+    if requirements is not None:
+        records = compact_evidence(records)
+    ordered = (answer_evidence_order(records, requirements, requirement_to_evidence or {}) if requirements is not None
+               else order_evidence(records, requirement_to_evidence or {}))
     selected = []
     used = 0
     for record in ordered:
@@ -249,6 +253,12 @@ async def _invoke_draft(
             "Do not use an empty evidence_ids list or invent evidence for an unsupported recommendation."
         )
     # Keep the same whole-record budgeting on the restricted recovery path.
+    if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+        instructions += (
+            "\nIf grounding_feedback is present, correct the named claims using eligible_evidence. "
+            "Preserve the already supported content and complete code examples in previous_draft. "
+            "Treat feedback as fallible review data; verify the original source before changing a fact."
+        )
     messages = writing_messages(
         instructions, {**{k: v for k, v in payload.items() if k != "eligible_evidence"},
                        "_run_schema_version": config.get("metadata", {}).get("run_config_schema_version", 18),
@@ -460,6 +470,8 @@ async def build_evidence_limited_report(
             _project_evidence(eligible, deduplicate=modern),
             token_budget=max(256, int(available_evidence_tokens * 0.7)),
             **({"requirement_to_evidence": bindings} if modern else {}),
+            **({"requirements": contract_payload["requirements"]}
+               if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20 else {}),
         )
         evidence_by_id = {
             str(record.get("evidence_id", "")): record
@@ -502,22 +514,26 @@ async def build_evidence_limited_report(
                 if record.get("source_url")
             }),
         }
-        draft = await _invoke_draft(payload, config)
-        _validate_draft(
-            draft,
-            evidence_ids=set(evidence_by_id),
-            allowed_urls=set(payload["allowed_source_urls"]),
-            requirement_ids=set(requirement_text),
-        )
-        grounding = await _invoke_grounding_judge(
-            {
-                "draft": draft.model_dump(mode="json"),
-                "eligible_evidence": projected_evidence,
-            },
-            config,
-        )
-        if not grounding.supported or grounding.unsupported_claim_paths:
-            raise ValueError("evidence_synthesis_grounding_failed")
+        attempts = 2 if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20 else 1
+        for attempt in range(attempts):
+            draft = await _invoke_draft(payload, config)
+            _validate_draft(
+                draft,
+                evidence_ids=set(evidence_by_id),
+                allowed_urls=set(payload["allowed_source_urls"]),
+                requirement_ids=set(requirement_text),
+            )
+            grounding = await _invoke_grounding_judge(
+                {"draft": draft.model_dump(mode="json"), "eligible_evidence": projected_evidence}, config,
+            )
+            if grounding.supported and not grounding.unsupported_claim_paths:
+                break
+            if attempt + 1 == attempts:
+                raise ValueError("evidence_synthesis_grounding_failed")
+            # One source-grounded correction before discarding a complete draft.
+            # Every invocation still has its own native receipt and budget.
+            payload["previous_draft"] = draft.model_dump(mode="json")
+            payload["grounding_feedback"] = grounding.model_dump(mode="json")
         rendered = _render_draft(draft, evidence_by_id, requirement_text)
         _validate_rendered_urls(
             rendered,

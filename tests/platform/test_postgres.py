@@ -128,6 +128,34 @@ async def test_postgres_atomic_quota_and_encrypted_credentials(client):
 
 
 @pytest.mark.asyncio
+async def test_admin_can_make_one_user_monthly_unlimited_without_erasing_spend(client):
+    user = await login(client)
+    await publish(client)
+    await quota.reserve(user["id"], "before-unlimited", 80, "test")
+    await quota.mark_unknown("before-unlimited")
+    response = await client.put(f"/platform/quotas/{user['id']}", json={"monthly_cost_unlimited": True})
+    assert response.status_code == 200, response.text
+    assert response.json()["effective"]["monthly_cost_unlimited"] is True
+    assert response.json()["effective"]["max_run_cost_micro_usd"] == 50
+    await asyncio.gather(*(quota.reserve(user["id"], f"no-ceiling-{i}", 600, "test") for i in range(5)))
+    await quota.settle("no-ceiling-0", 400)
+    await quota.settle("no-ceiling-0", 400)
+    async with get_store().engine.connect() as conn:
+        month = (await conn.execute(select(s.months).where(s.months.c.owner_id == user["id"]))).mappings().one()
+        assert (month["reserved"], month["settled"]) == (2480, 400)
+    researcher = await user_token(client, "quota-reader@example.com", "researcher")
+    denied = await client.put(f"/platform/quotas/{user['id']}", headers={"Authorization": researcher},
+        json={"monthly_cost_unlimited": True})
+    assert denied.status_code == 403
+    response = await client.put(f"/platform/quotas/{user['id']}", json={"monthly_cost_unlimited": False})
+    assert response.status_code == 200
+    with pytest.raises(quota.QuotaExceeded):
+        await quota.reserve(user["id"], "limited-again", 1, "test")
+    events = (await client.get("/platform/audit")).json()["items"]
+    assert any(item["action"] == "quota.updated" and item["detail"]["limits"]["monthly_cost_unlimited"] for item in events)
+
+
+@pytest.mark.asyncio
 async def test_json_import_preserves_field_locks_and_budget(client):
     await login(client)
     source = {"runtime": {"max_researcher_iterations": 4}, "services": {"PUBLISHER_ENABLED": False},

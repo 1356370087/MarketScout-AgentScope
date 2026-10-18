@@ -38,7 +38,7 @@ class SummaryModel(ScriptedModel):
         )
 
 
-def build(model, session=None, offloader=None):
+def build(model, session=None, offloader=None, config=None):
     class Factory:
         accounts_physical_attempts = True
         run = SimpleNamespace(get=lambda name: {})
@@ -50,7 +50,7 @@ def build(model, session=None, offloader=None):
             return ModelPolicyMiddleware(ModelCallPolicy([model], attempts=1, circuit_enabled=False))
 
     models = ResearchModels(Factory(), recovery=session)
-    context = NativeResearchContext(models, "researcher", model)
+    context = NativeResearchContext(models, "researcher", model, config)
     return Agent(
         name="researcher", model=context.model, system_prompt="Research the assigned task.",
         context_config=context.config, injection_config=context.injection,
@@ -66,6 +66,29 @@ def history(repeats=1100):
         AssistantMsg("researcher", "recent finding"),
         UserMsg("user", "continue"),
     ]
+
+
+async def test_late_task_keeps_context_without_starting_summary(store):
+    import time
+    from open_deep_research.agentscope_runtime.runtime_limits import attributed
+
+    state, lease = await create(store)
+    session = RecoverySession(store, lease, state)
+    model = SummaryModel()
+    agent = build(model, session, config={"configurable": {
+        "research_efficiency_mode": "bounded", "model_call_timeout_seconds": 180}})
+    agent.state.context = history(3000)
+    original = agent.state.model_copy(deep=True)
+    with attributed(deadline_at=time.time() + 9):
+        await agent.compress_context()
+    assert model.summary_calls == []
+    assert agent.state == original
+    assert session.problem is None
+    assert not (await store.budget(state.run_id, "owner"))["used"]
+    with attributed(deadline_at=time.time() + 300):
+        await agent.compress_context()
+    assert len(model.summary_calls) == 1
+    assert "COV-01" in str(agent.state.summary)
 
 
 async def test_native_summary_is_accounted_once_and_replays_committed_state(store, tmp_path):

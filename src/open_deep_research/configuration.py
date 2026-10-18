@@ -18,7 +18,9 @@ from open_deep_research.quality.policy import (
     rigor_from_legacy_min_score,
 )
 
-RUN_CONFIG_SCHEMA_VERSION = 19
+# v20 pins scope-preserving evidence selection and explicit report answer/example
+# verification. Existing v19 runs retain their original review contract.
+RUN_CONFIG_SCHEMA_VERSION = 20
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7

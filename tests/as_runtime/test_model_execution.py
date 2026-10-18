@@ -154,12 +154,13 @@ async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(in
     def serve(request):
         body = json.loads(request.content)
         seen.append(body)
+        value = {"value": 1} if repair_succeeds and len(seen) == 2 else None if invalid == "truncated" else invalid
         return httpx.Response(200, json={
             "protocol_version": 2,
             "logical_operation_id": body["logical_operation_id"],
             "requested_model": "fixture", "status": "completed",
-            "message": {"role": "assistant", "content": "output"},
-            "structured": {"value": 1} if repair_succeeds and len(seen) == 2 else None if invalid == "truncated" else invalid,
+            "message": {"role": "assistant", "content": json.dumps(value) if value is not None else ""},
+            "structured": value,
             "finish_reason": "length" if invalid == "truncated" and not (repair_succeeds and len(seen) == 2) else "stop",
             "usage": {"input_tokens": 2, "output_tokens": 1},
         })
@@ -189,6 +190,45 @@ async def test_sandbox_structured_repair_is_bounded_and_has_distinct_receipts(in
             assert "concise field values" in str(seen[1]["messages"])
 
 
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+async def test_schema_repair_identifies_all_invalid_source_choices_within_attempt_budget(repair_succeeds):
+    import jsonschema
+    seen = []
+    choices = [f"source-{i}:0" for i in range(200)] + [f"resource-record:{i}" for i in range(3)]
+    schema = {"type": "object", "required": ["refs"], "properties": {
+        "refs": {"type": "array", "items": {"type": "string", "enum": choices}}}}
+
+    def serve(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        value = {"refs": ["resource-record:3", "resource-record:4"]}
+        if len(seen) == 2:
+            feedback = body["messages"][-1]["content"][0]["text"]
+            for index, invalid in enumerate(value["refs"]):
+                assert f'"path": ["refs", {index}]' in feedback
+                assert invalid in feedback
+            assert all(f"resource-record:{i}" in feedback for i in range(3))
+            assert len(feedback) < 2000
+            if repair_succeeds:
+                value = {"refs": ["resource-record:0", "resource-record:2"]}
+        return httpx.Response(200, json={"protocol_version": 2,
+            "logical_operation_id": body["logical_operation_id"], "requested_model": "fixture",
+            "status": "completed", "message": {"role": "assistant", "content": json.dumps(value)},
+            "structured": value, "finish_reason": "stop", "usage": {"input_tokens": 2, "output_tokens": 1}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="https://gateway.invalid") as client:
+        model = SandboxChatModel(binding=SandboxBinding("https://gateway.invalid", "r", "t",
+            "report_review", "writing", SecretStr("fixture")), model="fixture", client=client, structured_attempts=2)
+        if repair_succeeds:
+            result = await model.generate_structured_output([UserMsg("user", "judge")], schema)
+            assert result.content == {"refs": ["resource-record:0", "resource-record:2"]}
+        else:
+            with pytest.raises(jsonschema.ValidationError):
+                await model.generate_structured_output([UserMsg("user", "judge")], schema)
+    assert len(seen) == 2
+    assert len({row["logical_operation_id"] for row in seen}) == 2
+
+
 async def test_sandbox_uncertain_is_not_retried():
     calls = []
 
@@ -200,6 +240,125 @@ async def test_sandbox_uncertain_is_not_retried():
     with pytest.raises(GatewayCallError):
         await policy.invoke(handler, {"messages": []}, {})
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("invalid", [
+    '{"value":0,"value":1}',
+    '{"value":1,"nested":{"score":0,"score":5}}',
+    '{' + '"evidence_coverage":5,' * 1010,
+])
+async def test_structured_repair_rejects_duplicate_or_degenerate_arguments(invalid):
+    from open_deep_research.sandbox.gateway import _wire_structured_args
+    calls = []
+
+    def serve(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        message = {"role": "assistant", "tool_calls": [{"id": "c", "type": "function",
+            "function": {"name": "__insightforge_structured_output",
+                         "arguments": invalid if len(calls) == 1 else '{"value":2}'}}]}
+        extracted = _wire_structured_args(message)
+        if len(calls) == 1:
+            assert extracted is None
+        else:
+            assert body["tool_choice"] == "none"
+            message = {"role": "assistant", "content": '{"value":2}'}
+        return httpx.Response(200, json={"logical_operation_id": body["logical_operation_id"],
+            "requested_model": "fixture", "status": "completed", "message": message,
+            "structured": extracted, "finish_reason": "tool_calls"})
+
+    class Answer(BaseModel):
+        value: int
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="https://gateway.invalid") as client:
+        model = SandboxChatModel(binding=SandboxBinding("https://gateway.invalid", "r", "t",
+            "quality_evaluation", "researching", SecretStr("cap")), model="fixture", client=client,
+            structured_attempts=2)
+        result = await model.generate_structured_output([UserMsg("user", "judge")], Answer)
+    assert result.content == {"value": 2}
+    assert len(calls) == 2
+    assert len({c["logical_operation_id"] for c in calls}) == 2
+    feedback = str(calls[-1]["messages"][-1])
+    assert "only once" in feedback and len(feedback) < 1600
+    assert invalid not in feedback
+
+
+@pytest.mark.parametrize("value", [
+    '{"value":1,"value":1}',
+    '```json\n{"value":1}\n```',
+    '```\n{"value":1}\n```',
+])
+def test_structured_json_lossless_normalization(value):
+    from open_deep_research.models.protocol_errors import parse_structured_json
+    assert parse_structured_json(value) == {"value": 1}
+
+
+@pytest.mark.parametrize("value", [
+    '{"value":1,"value":true}',
+    '{"value":[1],"value":[true]}',
+    '{"value":1,"value":2}',
+    'Explanation\n```json\n{"value":1}\n```',
+    '```json\n{"value":1}\n```\nOther text',
+    '```json\n{"value":1}\n```\n```json\n{"value":2}\n```',
+    '```json\n{"value":\n```',
+])
+def test_structured_json_rejects_conflict_partial_or_surrounding_text(value):
+    from open_deep_research.models.protocol_errors import parse_structured_json
+    with pytest.raises(json.JSONDecodeError):
+        parse_structured_json(value)
+
+
+@pytest.mark.parametrize("index", [0, 1])
+async def test_recorded_valid_example_audits_need_no_extra_model_dispatch(index):
+    from pathlib import Path
+    from pydantic import create_model, Field
+    from open_deep_research.models.protocol_errors import parse_structured_json
+    from open_deep_research.report.models import ReportExampleReview
+    from open_deep_research.sandbox.gateway import _wire_structured_args
+    records = json.loads((Path(__file__).parents[1] / 'fixtures/research_quality/sidecar_example_protocol_replay.json').read_text(encoding='utf-8'))
+    identity = parse_structured_json(records[1]['message']['content'])['example_checks'][0]['example_id']
+    example = create_model('RecordedExample', __base__=ReportExampleReview, example_id=(str, Field(default=identity)))
+    schema = create_model('RecordedExampleAudit', example_checks=(list[example], ...))
+    calls = []
+    def serve(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        message = records[index]['message']
+        if index == 0:
+            assert _wire_structured_args(message)['example_checks'][0]['execution_checks'][0]['observed_lifecycle'] == 'finite'
+        # A previously persisted Gateway receipt can still contain structured=null.
+        return httpx.Response(200, json={'logical_operation_id': body['logical_operation_id'],
+            'requested_model': 'fixture', 'status': 'completed', 'message': message,
+            'structured': None, 'finish_reason': records[index]['finish_reason'],
+            'usage': {'input_tokens': 10, 'output_tokens': 5}})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url='https://gateway.invalid') as client:
+        model = SandboxChatModel(binding=SandboxBinding('https://gateway.invalid', 'r', 't',
+            'report_review', 'writing', SecretStr('cap')), model='fixture', client=client, structured_attempts=1)
+        result = await model.generate_structured_output([UserMsg('user', 'Audit the example')], schema)
+    assert len(calls) == 1
+    check = result.content['example_checks'][0]
+    assert check['status'] == 'satisfies'
+    assert [r['observed_lifecycle'] for r in check['execution_checks']] == ['finite', 'persistent']
+
+
+@pytest.mark.parametrize("status,code,uncertain", [
+    ("failed", "model_not_dispatched", False), ("failed", "authentication", False),
+    ("failed", "invalid_request", False), ("uncertain", "gateway_connection_failed", True),
+])
+async def test_structured_gateway_failure_preserves_dispatch_certainty(status, code, uncertain):
+    calls = []
+    def serve(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        return httpx.Response(200, json={"logical_operation_id": body["logical_operation_id"],
+            "requested_model": "fixture", "status": status, "error_code": code})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve), base_url="http://gateway") as client:
+        model = SandboxChatModel(binding=SandboxBinding("http://gateway", "r", "t", "web_evidence",
+            "researching", SecretStr("cap")), model="fixture", client=client, structured_attempts=3)
+        with pytest.raises(GatewayCallError, match=code) as raised:
+            await model.generate_structured_output([UserMsg("user", "q")], {"type": "object"})
+    assert raised.value.uncertain is uncertain
+    assert len(calls) == 1  # Only a completed malformed response receives format repair.
 
 
 async def test_fallback_state_survives_serialization():
@@ -624,6 +783,42 @@ async def test_litellm_native_plain_and_structured_over_authorized_transport(
             result = await model([UserMsg("user", "q")])
             assert result.metadata["provider_finish_reason"] == "stop"
         assert len(calls) == 1 and result.usage.input_tokens == 3
+
+
+@pytest.mark.parametrize('identity', ['COV-allowed', 'COV-invented'])
+async def test_native_structured_schema_extras_are_enforced_and_paid_response_is_retained(identity):
+    import httpx2 as sdk_httpx
+    import jsonschema
+    from agentscope.credential import OpenAICredential
+    from pydantic import Field
+
+    class Answer(BaseModel):
+        requirement_id: str = Field(json_schema_extra={'enum': ['COV-allowed']})
+
+    calls = []
+    async def serve(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        name = body['tools'][0]['function']['name']
+        return sdk_httpx.Response(200, json={'id': 'enum-receipt', 'object': 'chat.completion', 'created': 1,
+            'model': 'alias', 'choices': [{'index': 0, 'finish_reason': 'tool_calls', 'message': {
+                'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call1', 'type': 'function',
+                    'function': {'name': name, 'arguments': json.dumps({'requirement_id': identity})}}]}}],
+            'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}})
+
+    async with sdk_httpx.AsyncClient(transport=sdk_httpx.MockTransport(serve), trust_env=False) as client:
+        model = GovernedOpenAIChatModel(credential=OpenAICredential(api_key='fixture-key', base_url='https://proxy.invalid/v1'),
+            model='alias', stream=False, max_retries=0, client_kwargs={'http_client': client, 'max_retries': 0})
+        if identity == 'COV-allowed':
+            result = await model.generate_structured_output([UserMsg('user', 'check')], Answer)
+            assert result.content == {'requirement_id': identity}
+        else:
+            with pytest.raises(jsonschema.ValidationError) as failure:
+                await model.generate_structured_output([UserMsg('user', 'check')], Answer)
+            assert 'COV-allowed' in failure.value.message and 'requirement_id' in failure.value.message
+            assert failure.value.billed_response.usage.input_tokens == 3
+            assert failure.value.billed_response.metadata['request_id'] == 'enum-receipt'
+    assert len(calls) == 1  # Repair stays with the existing caller's attempt budget.
 
 
 async def test_exhausted_recovery_does_not_call_again_on_restore():

@@ -273,9 +273,14 @@ class _ReportRun:
                         policy = factory.policy_middleware(role, candidates=candidates)
 
                         async def invoke(current_model, messages, **kwargs):
-                            return await current_model.generate_structured_output(
-                                fit_candidate(current_model, messages, descriptor["max_output_tokens"]), schema
-                            )
+                            fitted = fit_candidate(current_model, messages, descriptor["max_output_tokens"])
+                            result = await current_model.generate_structured_output(fitted, schema)
+                            if role == "report_review":
+                                import json
+                                result.metadata["report_evidence_ids"] = [row["evidence_id"]
+                                    for message in fitted if message.name == "report_evidence"
+                                    for row in json.loads(message.get_text_content() or "")["records"] if row.get("evidence_id")]
+                            return result
 
                         return await policy.policy.invoke(
                             invoke, {"messages": native}, {}
@@ -309,7 +314,11 @@ class _ReportRun:
                 else await call()
             )
         if schema is not None:
-            return schema.model_validate(response.content)
+            result = schema.model_validate(response.content)
+            if role == "report_review":
+                if hasattr(result, "_submitted_evidence_ids") and "report_evidence_ids" in response.metadata:
+                    result._submitted_evidence_ids = set(response.metadata["report_evidence_ids"])
+            return result
         content = "".join(
             b.text for b in response.content if isinstance(b, TextBlock)
         ).strip()

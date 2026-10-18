@@ -45,6 +45,215 @@ async def test_web_reservation_carries_host_source_contract(host):
     assert reserved["coverage_contract"] == contract
 
 
+@pytest.mark.parametrize("reservation_committed", [False, True])
+@pytest.mark.parametrize("failure", ["http500", "cancel"])
+async def test_predispatch_authority_failure_does_not_fabricate_unknown_call(host, reservation_committed, failure):
+    import asyncio
+    gateway, ledger, _ = host
+    post = gateway.internal.post
+    requests = []
+
+    async def disconnect(path, request):
+        requests.append((path, request.service_nonce))
+        if path.endswith("/budgets/reserve"):
+            if reservation_committed:
+                await post(path, request)
+            if failure == "cancel":
+                raise asyncio.CancelledError
+            raise httpx.HTTPStatusError("authority disconnected", request=httpx.Request("POST", "http://host"),
+                                       response=httpx.Response(500))
+        return await post(path, request)
+
+    gateway.internal.post = disconnect
+    class Provider:
+        async def complete(self, request):
+            pytest.fail("No physical call may occur after a failed reservation")
+    gateway.model_gateways["r"] = Provider()
+    request = GatewayModelRequestV2(run_id="r", task_id="t", role="web_evidence", stage="researching",
+        logical_operation_id="unreserved", model="m", messages=[{"role": "user", "content": "q"}])
+    context = GatewayRunContext({}, ledger.recovery.lease.fence,
+        time.time() + 300, api_keys={"LITELLM_RUN_KEY": "test"})
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await gateway.invoke_model_operation_v2(request, context)
+    else:
+        result = await gateway.invoke_model_operation_v2(request, context)
+        assert result.status == "failed" and result.error_code == "model_not_dispatched"
+    assert sum(path.endswith("/budgets/reserve") for path, _ in requests) == 1
+    assert len({nonce for _, nonce in requests}) == len(requests)
+    row = await ledger.recovery.store.operation_record(ledger.recovery.lease, "gateway:model:unreserved")
+    if reservation_committed:
+        assert row["state"] == "committed" and row["result"]["status"] == "failed"
+    else:
+        assert row is None
+        assert not any(path.endswith("/transition") for path, _ in requests)
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert not any(budget["reserved"].values())
+    assert not any(budget["used"].values())
+
+
+async def test_sdk_interruption_keeps_conservative_charge_and_cannot_redispatch(host):
+    import asyncio
+    from open_deep_research.agentscope_runtime.sandbox_provider import NativeGatewayProvider
+    gateway, ledger, _ = host
+    calls = []
+    async def interrupted(request):
+        calls.append(request)
+        raise asyncio.CancelledError
+    provider = NativeGatewayProvider(api_key="test", base_url="http://provider/v1",
+                                     transport=httpx.MockTransport(interrupted))
+    gateway.model_gateways["r"] = provider
+    request = GatewayModelRequestV2(run_id="r", task_id="t", role="quality_evaluation", stage="researching",
+        logical_operation_id="interrupted", model="m", messages=[{"role": "user", "content": "q"}])
+    context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300,
+                               api_keys={"LITELLM_RUN_KEY": "test"})
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await gateway.invoke_model_operation_v2(request, context)
+        receipt = await gateway.invoke_model_operation_v2(request, context)
+        assert receipt.status == "uncertain"
+        assert len(calls) == 1
+        budget = await ledger.recovery.store.budget("r", "u")
+        assert budget["used"]["model_calls"] == 1
+        row = await ledger.recovery.store.operation_record(ledger.recovery.lease, "gateway:model:interrupted")
+        assert row["actual"] == row["reservation"]
+    finally:
+        await provider.aclose()
+
+
+async def test_expired_task_deadline_does_not_dispatch_or_charge_model(host):
+    from types import SimpleNamespace
+
+    gateway, ledger, _ = host
+    calls = []
+
+    async def progress():
+        return {"tasks": {"t": {"status": "completed", "deadline_at": time.time() - 1}}}
+
+    ledger.research_cache = SimpleNamespace(progress=progress)
+
+    class Provider:
+        async def complete(self, request):
+            calls.append(request.logical_operation_id)
+            return GatewayModelOutcomeV2(logical_operation_id=request.logical_operation_id,
+                requested_model=request.model, status="completed",
+                message={"role": "assistant", "content": "summary"},
+                usage={"input_tokens": 3, "output_tokens": 4})
+
+    gateway.model_gateways["r"] = Provider()
+    request = GatewayModelRequestV2(run_id="r", task_id="t", role="summarization", stage="researching",
+        logical_operation_id="expired-summary", model="m", messages=[{"role": "user", "content": "q"}])
+    context = GatewayRunContext({"configurable": {"research_efficiency_mode": "bounded"}},
+        ledger.recovery.lease.fence, time.time() + 300, api_keys={"LITELLM_RUN_KEY": "test"})
+    for _ in range(2):
+        result = await gateway.invoke_model_operation_v2(request, context)
+        assert result.status == "failed" and result.error_code == "model_not_dispatched"
+    assert calls == []
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert not any(budget["reserved"].values())
+    assert not any(budget["used"].values())
+
+
+@pytest.mark.parametrize("production_router", [False, True])
+async def test_tool_lookup_is_read_only_and_bound_to_original_task(host, production_router):
+    from open_deep_research.sandbox.wire import GatewayToolRequestV1
+    from open_deep_research.agentscope_runtime.recovery_store import RecoveryConflict
+    gateway, ledger, client = host
+    if production_router:
+        from open_deep_research.sandbox.internal_api import build_internal_sandbox_router
+        async def resolve(run_id): return ledger
+        app = FastAPI()
+        app.include_router(build_internal_sandbox_router(lambda _: None, native_ledger=resolve,
+            native_root_key=lambda: gateway.configurable.sandbox_root_signing_key))
+        client._transport = httpx.ASGITransport(app)
+    request = GatewayToolRequestV1(run_id="r", task_id="t", role="researcher", stage="researching",
+        execution_zone="gateway", logical_operation_id="fetch", tool_call_id="c", tool_name="fetch_url",
+        arguments={"url": "https://docs.example/api"})
+    context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300)
+    assert await gateway.lookup_tool_operation(request, context) is None
+    reserve = gateway.internal.signed(ToolBudgetReserveRequest, run_id="r", task_id="t", stage="researching",
+        fence_token=context.fence_token, logical_operation_id="fetch", tool_name="fetch_url",
+        fetch_calls=1)
+    await gateway.internal.post("/internal/sandbox/budgets/tool-reserve", reserve)
+    assert await gateway.lookup_tool_operation(request, context) is None
+    row = await ledger.recovery.store.operation_record(ledger.recovery.lease, "gateway:tool:fetch")
+    assert row["state"] == "started"  # Reading an in-flight operation must not quarantine it.
+    outcome = GatewayToolOutcomeV1(logical_operation_id="fetch", tool_call_id="c", status="failed",
+        error={"error_type": "unknown", "message": "known extraction failure"})
+    settle = gateway.internal.signed(ToolBudgetSettleRequest, run_id="r", fence_token=context.fence_token,
+        logical_operation_id="fetch", outcome=outcome.model_dump(mode="json"), fetch_calls=1)
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", settle)
+    before = await ledger.recovery.store.budget("r", "u")
+    assert await gateway.lookup_tool_operation(request, context) == outcome
+    assert await gateway.lookup_tool_operation(request, context) == outcome
+    assert await ledger.recovery.store.budget("r", "u") == before
+    with pytest.raises(RecoveryConflict):
+        await gateway.lookup_tool_operation(request.model_copy(update={"task_id": "other-task"}), context)
+
+
+@pytest.mark.parametrize("json_supported", [True, False])
+@pytest.mark.parametrize("attempts", [2, 3])
+async def test_structured_format_repair_uses_same_schema_budget_and_physical_ledger(host, json_supported, attempts):
+    import json
+    from sqlalchemy import update
+    from pydantic import BaseModel, SecretStr
+    from open_deep_research.agentscope_runtime.gateway import SandboxBinding, SandboxChatModel
+    from open_deep_research.agentscope_runtime.sandbox_provider import NativeGatewayProvider
+    gateway, ledger, _ = host
+    async with ledger.recovery.store.engine.begin() as conn:
+        await conn.execute(update(ledger.recovery.store.runs).values(limits={"model_calls": 3}))
+    physical = []
+    def provider_http(request):
+        body = json.loads(request.content)
+        physical.append(body)
+        if body.get("response_format"):
+            assert body["response_format"] == {"type": "json_object"}
+            assert not body.get("tools") and not body.get("tool_choice")
+            assert '"value"' in str(body["messages"][-1]["content"])
+            if not json_supported:
+                return httpx.Response(400, json={"error": {"message": "JSON mode unsupported"}})
+            message = {"role": "assistant", "content": '{"value":2}'}
+        else:
+            message = {"role": "assistant", "tool_calls": [{"id": "c", "type": "function",
+                "function": {"name": "__insightforge_structured_output",
+                             "arguments": '{"value":0,"value":1}' if len(physical) == 1 else '{"value":2}'}}]}
+        return httpx.Response(200, json={"id": "response", "object": "chat.completion", "created": 1,
+            "model": "fixture", "choices": [{"index": 0, "message": message,
+                "finish_reason": "tool_calls" if "tool_calls" in message else "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+    provider = NativeGatewayProvider(api_key="fixture", base_url="http://provider/v1",
+                                     transport=httpx.MockTransport(provider_http))
+    gateway.model_gateways["r"] = provider
+    async def transport(request):
+        wire = GatewayModelRequestV2.model_validate_json(request.content)
+        context = GatewayRunContext({}, ledger.recovery.lease.fence, time.time()+300,
+            api_keys={"LITELLM_RUN_KEY": "fixture"})
+        result = await gateway.invoke_model_operation_v2(wire, context)
+        assert await gateway.invoke_model_operation_v2(wire, context) == result
+        return httpx.Response(200, json=result.model_dump(mode="json"))
+    class Answer(BaseModel):
+        value: int
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport), base_url="http://gateway") as client:
+            model = SandboxChatModel(binding=SandboxBinding("http://gateway", "r", "t", "quality_evaluation",
+                "researching", SecretStr("fixture")), model="fixture", client=client, structured_attempts=attempts)
+            if not json_supported and attempts == 2:
+                with pytest.raises(json.JSONDecodeError, match="duplicate"):
+                    await model.generate_structured_output([UserMsg("user", "q")], Answer)
+            else:
+                answer = await model.generate_structured_output([UserMsg("user", "q")], Answer)
+                assert answer.content == {"value": 2}
+        assert len(physical) == (2 if json_supported else attempts)
+        budget = await ledger.recovery.store.budget("r", "u")
+        assert budget["used"]["model_calls"] == len(physical)
+        completed = 1 if not json_supported and attempts == 2 else 2
+        assert budget["used"]["input_tokens"] == completed * 10
+        assert budget["used"]["output_tokens"] == completed * 5
+        assert not any(budget["reserved"].values())
+    finally:
+        await provider.aclose()
+
+
 @pytest.mark.parametrize('production_router', [False, True])
 async def test_deadline_refusal_crosses_gateway_without_dispatch_or_orphan_receipt(host, production_router):
     from pydantic import SecretStr

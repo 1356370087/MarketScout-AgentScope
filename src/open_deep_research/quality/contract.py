@@ -418,7 +418,7 @@ def task_coverage_contract(contract, requirement_ids):
     return contract
 
 
-def researcher_coverage_view(contract, requirement_ids):
+def researcher_coverage_view(contract, requirement_ids, *, preserve_scope=False):
     """Expose only assigned factual obligations to a Researcher's model.
 
     The caller keeps the full contract for source admission and orchestration.
@@ -427,12 +427,21 @@ def researcher_coverage_view(contract, requirement_ids):
     """
     resolved = ResearchCoverageContract.model_validate(contract)
     owned = set(requirement_ids)
-    return resolved.model_copy(update={
+    projected = resolved.model_copy(update={
         "requirements": tuple(row for row in resolved.requirements if row.kind != "factual" or row.requirement_id in owned),
         "dimensions": tuple(row.model_copy(update={"requirement_ids": tuple(rid for rid in row.requirement_ids if rid in owned)})
                             for row in resolved.dimensions if owned.intersection(row.requirement_ids)),
         "delegation_scopes": {},
     }).model_dump(mode="json")
+    if preserve_scope:
+        projected["scope_context"] = original_requirement_context(resolved)
+    return projected
+
+
+def original_requirement_context(contract):
+    """Keep user-authored framing available without assigning sibling work."""
+    rows = contract.requirements if isinstance(contract, ResearchCoverageContract) else contract.get("requirements", [])
+    return list(dict.fromkeys(row.text if isinstance(row, CoverageRequirement) else row["text"] for row in rows))
 
 
 class DimensionCoverageSummary(BaseModel):

@@ -1,6 +1,7 @@
 """Native compression with domain constraints and durable operation ownership."""
 
 import json
+import time
 from contextvars import ContextVar
 
 from agentscope.agent import ContextConfig, InjectionConfig
@@ -64,6 +65,7 @@ class NativeResearchContext(MiddlewareBase):
 
         cfg = Configuration.from_runnable_config(config) if config is not None else None
         self.bounded = cfg is not None and cfg.research_efficiency_mode == "bounded"
+        self.model_call_timeout_seconds = cfg.model_call_timeout_seconds if cfg is not None else 0
         target = min(cfg.research_context_target_tokens, int(model.context_size * 0.8)) if self.bounded else int(model.context_size * 0.8)
         self.config = ContextConfig(
             trigger_ratio=max(0.01, target / model.context_size),
@@ -112,6 +114,17 @@ class NativeResearchContext(MiddlewareBase):
         )
 
     async def on_compress_context(self, agent, input_kwargs, next_handler):
+        if self.bounded and self.role == "researcher":
+            from open_deep_research.agentscope_runtime.runtime_limits import current_deadline_at
+
+            if self.recovery and self.recovery.problem:
+                raise ContextControlError(self.recovery.problem)
+            deadline = current_deadline_at()
+            if deadline is not None and deadline - time.time() <= self.model_call_timeout_seconds:
+                # SDK compression precedes the domain reasoning boundary. Leave
+                # history intact so that boundary can hand off existing evidence
+                # without launching a summary into the task's closing window.
+                return
         before = agent.state.model_copy(deep=True)
         key = self.recovery.key("context:compress") if self.recovery else None
         cfg = input_kwargs.get("context_config") or agent.context_config

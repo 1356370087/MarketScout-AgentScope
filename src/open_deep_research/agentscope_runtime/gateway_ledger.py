@@ -27,6 +27,7 @@ from open_deep_research.sandbox.internal_api import (
     ResearchDataRequest,
     ToolBudgetReserveRequest,
     ToolBudgetSettleRequest,
+    ToolOperationGetRequest,
 )
 
 # 这些工具的物理抓取进入 fetch_calls 维度；其余工具只计 tool_calls。
@@ -159,6 +160,20 @@ class SQLGatewayLedger:
                 result["deadline_at"] = min(deadlines)
         return result
 
+    async def lookup_tool(self, request):
+        """Return only a matching committed receipt, preserving unknown effects."""
+        row = await self.recovery.store.operation_record(
+            self.recovery.lease, self.tool_key(request.logical_operation_id))
+        if row is None:
+            return {"found": False}
+        # Match the existing reservation contract, including historical runs.
+        expected = digest({"task_id": request.task_id, "stage": request.stage,
+                           "tool_name": request.tool_name})
+        if row["input_digest"] != expected:
+            raise RecoveryConflict("gateway tool operation input changed")
+        return {"found": True, "outcome": (row["result"] or {}).get("outcome")
+                if row["state"] == "committed" else None}
+
     async def settle_tool(self, request):
         """结算一次 Gateway 工具调用；携带回执后重试可直接复用已提交结果。"""
         session = self.recovery
@@ -222,7 +237,9 @@ class SQLGatewayLedger:
             rejected = request.status == "failed" and outcome.get("error_code") in {
                 "authentication", "permission_denied", "invalid_request",
             }
-            if rejected and not any(usage.get(k) is not None for k in ("input_tokens", "output_tokens")):
+            if request.status == "failed" and outcome.get("error_code") == "model_not_dispatched":
+                actual = {dimension: 0 for dimension in actual}
+            elif rejected and not any(usage.get(k) is not None for k in ("input_tokens", "output_tokens")):
                 # 明确未执行的拒绝可释放 token；请求尝试仍计一次。
                 actual = {dimension: 0 for dimension in actual}
                 actual["model_calls"] = 1
@@ -322,6 +339,10 @@ def build_gateway_ledger_router(resolve, root_key):
             ) from None
         except UnknownOperation:
             raise HTTPException(409, "tool_operation_unknown") from None
+
+    @router.post("/operations/tool-get")
+    async def get_tool(request: ToolOperationGetRequest):
+        return await (await authorize(request)).lookup_tool(request)
 
     @router.post("/budgets/tool-settle")
     async def tool_settle(request: ToolBudgetSettleRequest):

@@ -95,8 +95,14 @@ async def limited(callback, seconds, *, deadline_at=None, receipt_grace=0):
         x for x in (deadline_at, current_deadline_at()) if x is not None
     )
     deadline = min(candidates)
+    remaining = deadline - time.time()
+    if remaining <= 0:
+        # asyncio.timeout(0) cancels at the next suspension, after callback code
+        # can already dispatch an external effect. Receipt grace only lets an
+        # operation started in time finish recording its response.
+        raise TimeoutError("operation deadline elapsed before dispatch")
     with attributed(deadline_at=deadline):
-        async with asyncio.timeout(max(0, deadline - time.time()) + receipt_grace):
+        async with asyncio.timeout(remaining + receipt_grace):
             return await callback()
 
 

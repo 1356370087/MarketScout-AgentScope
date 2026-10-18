@@ -113,6 +113,52 @@ async def test_supervisor_can_assign_every_scope_despite_short_leaf_iteration_li
     assert "remaining_scopes" in json.dumps(models.created[0][2].calls, default=str)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [19, 20])
+async def test_allowed_supplement_does_not_consume_turns_needed_for_an_unassigned_scope(version):
+    from tests.as_runtime.test_research_migration import Models, cfg, evidence, tool_call
+    from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
+    from open_deep_research.quality.gate import HandoffAssessment
+    from open_deep_research.quality.contract import build_research_coverage_contract
+
+    coverage = build_research_coverage_contract([{"role": "user", "content": f"Explain {topic}."}
+        for topic in ("startup", "readiness", "shutdown", "resources")]).model_dump(mode="json")
+    ids = [r["requirement_id"] for r in coverage["requirements"] if r["kind"] == "factual"]
+    coverage.update(schema_version=4, delegation_scopes={f"S{i+1:02d}": [rid] for i, rid in enumerate(ids)})
+    scopes = list(coverage["delegation_scopes"])
+    # A non-tool planning response and one permitted supplement precede the
+    # last scope, reproducing the real run's exhausted coordinator.
+    scripts = [[], *[[tool_call("ConductResearch", call_id=f"c{i}", research_topic="Explain the assigned scope.", scope_id=scope)]
+                     for i, scope in enumerate([scopes[0], scopes[0], *scopes[1:]])],
+               [tool_call("ResearchComplete", call_id="done")]]
+    models = Models({"supervisor": scripts})
+    config = cfg(quality_evaluation_enabled=True, quality_evaluation_min_sources=1,
+                 max_researcher_iterations=2, max_supplement_rounds=1)
+    config["metadata"].update(quality_policy_version="quality-gate-v6", run_config_schema_version=version)
+    attempts = []
+
+    class Worker:
+        async def run(self, assignment, contract, feedback):
+            attempts.append(assignment.requirement_ids)
+            return ResearchHandoff(**assignment.model_dump(), compressed_research="Grounded finding.", evidence_registry=[evidence()])
+
+    class Quality:
+        async def handoff(self, outcome, contract):
+            accepted = len(attempts) != 1
+            return HandoffAssessment(accepted=accepted, relevance=5, source_quality=5,
+                evidence_coverage=5 if accepted else 2, groundedness=5, reason="Supported." if accepted else "Needs one supplement.",
+                requirement_coverage=[{"requirement_id": rid, "status": "supported" if accepted else "partial",
+                    "evidence_ids": ["ev1"], "explanation": "Direct evidence."} for rid in outcome.requirement_ids])
+
+    _, state = await Supervisor(models, lambda: config, Worker(), run_id="supplement-scopes", quality=Quality(), completion_policy=True).run("brief", coverage)
+    if version >= 20:
+        assert state["middle_context"]["business_completion"]["action"] == "complete"
+        assert all(state["middle_context"]["coverage_ledger"][rid]["status"] == "supported" for rid in ids)
+        assert attempts.count([ids[0]]) == 2
+    else:
+        assert state["middle_context"]["business_completion"]["action"] != "complete"
+
+
 def test_v16_fingerprint_and_behavior_survive_new_defaults(monkeypatch):
     frozen = freeze_run_config({"configurable": {"enable_memory": False}})
     frozen["metadata"]["run_config_schema_version"] = 16
@@ -311,6 +357,55 @@ async def test_parent_deadline_bounds_child_without_retries():
 
     with attributed(deadline_at=time.time() + 0.02), pytest.raises(TimeoutError):
         await limited(lambda: asyncio.sleep(1), 30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inherited", [False, True])
+async def test_expired_deadline_never_enters_external_callback(inherited):
+    import time
+
+    calls = []
+
+    async def dispatch():
+        calls.append("dispatched")
+        await asyncio.sleep(0)
+
+    expired = time.time() - 1
+    with attributed(deadline_at=expired if inherited else None), pytest.raises(TimeoutError):
+        await limited(dispatch, 30, deadline_at=None if inherited else expired, receipt_grace=15)
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_task_closeout_retains_evidence_without_another_paid_call(cache):
+    import time
+    from test_research_migration import Models, cfg, contract, evidence
+    from agentscope.message import TextBlock
+    from open_deep_research.agentscope_runtime.research_agents import Researcher, ResearchAssignment
+
+    coverage = contract()
+    requirement = coverage["requirements"][0]["requirement_id"]
+    assignment = ResearchAssignment(task_id="late-task", research_topic="market", requirement_ids=[requirement])
+    record = {**evidence(), "requirement_ids": [requirement]}
+    await cache.progress({"tasks": {assignment.task_id: {"deadline_at": time.time() + 9}},
+        "candidates": {record["evidence_id"]: record}})
+    models = Models({role: [[TextBlock(text="This paid call must not run.")]]
+        for role in ("researcher", "compression")})
+    models.recovery = cache.recovery
+    config = cfg(research_efficiency_mode="bounded", model_call_timeout_seconds=180)
+    config["metadata"]["run_config_schema_version"] = 20
+
+    async def tools(assignment):
+        return []
+
+    outcome = await Researcher(models, lambda: config, tools, run_id="efficiency").run(assignment, coverage)
+    assert outcome.termination == "task_time_reserved"
+    assert len(outcome.evidence_registry) == 1
+    assert {key: outcome.evidence_registry[0][key] for key in record} == record
+    assert outcome.assessment["compression"]["attempts"] == 0
+    assert models.text_calls == []
+    assert all(model.calls == [] for _, _, model in models.created)
+    assert cache.recovery.problem is None
 
 
 @pytest.mark.asyncio

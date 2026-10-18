@@ -1,0 +1,48 @@
+{
+  "source_run_id": "0f990c849dde4ffa943abb7298a257ef",
+  "draft": "# 传统日志 Sidecar 迁移至 Kubernetes 原生 Sidecar 的生产迁移方案\n\n## 一、声明方式、版本边界与适用前提\n\n**声明方式**：Kubernetes 1.28 为 init container 新增了可选的 `restartPolicy` 字段，若设置，唯一合法值为 `Always`；设置后该 init container 即成为“原生 Sidecar”：退出后自动重启，后续 init container 在其 startupProbe 成功后即启动（而非等待其退出），且 Pod 终止只取决于主容器（[Kubernetes v1.28: Introducing native sidecar containers](https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/)）。\n\n**版本演进（官方边界）**：\n- **v1.28**：alpha，需显式启用 `SidecarContainers` 特性门控；官方明确建议 alpha 阶段仅在短期测试集群中使用（[博客](https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/)）。\n- **v1.29 起**：特性默认激活，无需启用门控（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n- **v1.33 起**：Stable，特性门控已锁定，即使显式设置 `SidecarContainers` 的值，Kubernetes 也会忽略且不报错（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n**适用前提**：集群版本 ≥1.29（默认可用）或 1.28 并显式开启门控。对日志场景，官方博客明确指出日志收集容器是典型受益者：可先于其他容器启动、持续运行到 Pod 终止，从而提高日志收集可靠性；alpha 阶段的已知问题（CPU/内存/设备/拓扑管理器未感知 sidecar 生命周期、`kubectl describe node` 输出不正确）仅限于该阶段陈述，后续版本是否修复在准入证据中无记录，此为证据缺口（[博客](https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/)）。\n\n## 二、与普通 init container 的差异；探针语义\n\n**普通 init container**：必须运行至完成，不支持 `lifecycle`、`livenessProbe`、`readinessProbe`、`startupProbe`（校验阶段强制禁止，因为 init container 无法区分“就绪”与“完成”）；所有 init container 依次成功后主容器才启动（[Init Containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/)）。\n\n**原生 Sidecar**：持续运行于 Pod 整个生命周期，与主容器并发，支持上述探针字段（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)、[Init Containers](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/)）。\n\n**启动与就绪语义**：\n- `started` 状态：kubelet 将 sidecar 标记为 started 后才启动下一个 init container。started 为 true 的条件是**容器内有进程在运行且未定义 startupProbe**，或 startupProbe 成功（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n- `readinessProbe`：若为 sidecar 定义了 readinessProbe，其结果用于判定 Pod 的 `ready` 状态（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n**“已启动”≠“已就绪”**（基于上述证据的推断）：无 startupProbe 时，进程一运行即算 started，下游容器随之启动；而 Pod ready 取决于 readinessProbe 结果。因此若日志 Sidecar 需要预热（如建立发送通道），应配置 startupProbe/readinessProbe，不能把“已启动”当作“已就绪”。这是工程建议，官方仅陈述机制本身。\n\n## 三、Job 完成、终止顺序与“日志完全不丢”\n\n**Job 场景**：官方文档明确，使用原生 sidecar 的 Job 中，主容器结束后 sidecar 不会阻止 Job 完成，无需额外配置（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。Pod 终止也只取决于主容器（[博客](https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/)）。\n\n**终止顺序**：kubelet 会**延迟向 sidecar 发送 TERM 信号，直到最后一个主容器完全终止**，随后按声明逆序终止 sidecar（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)、[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。官方还指出 sidecar 的优雅退出本身不被视为关键——若其他容器用尽了宽限期，sidecar 可能收到 SIGTERM 后很快收到 SIGKILL，非 0 退出码属正常，外部工具应忽略（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）。\n\n**宽限期限制**：主容器终止缓慢会连带推迟 sidecar 终止；若宽限期在终止流程完成前耗尽，Pod 进入强制终止，**所有剩余容器同时以较短宽限期被杀**（[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。默认删除宽限期为 30 秒，`kubectl delete --grace-period` 可覆盖；设为 0 需配合 `--force`（[Pod Lifecycle](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)）。\n\n**结论（证据支持的推断，非官方保证）**：原生机制显著**降低**日志丢失风险（sidecar 先启动、后终止），但强制终止路径客观存在，**不能据此保证日志完全不丢**；工程上应配置充足的宽限期并在日志代理侧做本地缓冲。\n\n## 四、资源计算：为何不能简单相加\n\n官方规则（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）：\n- 某资源的*有效 init request/limit* = 所有 init container 中该值的最大者；未设 limit 视为最大 limit。\n- Pod 的*有效 request/limit* = pod overhead 与以下两者中**较大者**：① 所有**非 init 容器**（app + sidecar）之和；② 有效 init request/limit。\n- 调度基于有效 request/limit；Pod 有效 QoS 取所有容器中的最高层级。\n\n**示意算例（假设值，非实测）**：设日志 sidecar request 100m，app 容器 request 500m，某普通 init container request 1000m：有效 Pod request = max(100+500, 1000) = **1000m**，而非全量相加的 1600m——因为普通 init 短暂运行、与主容器不并发。而 sidecar 持续运行，作为非 init 容器进入求和项：若去掉该 init，则为 600m。这正是“不能简单将所有 init 与 app 容器资源相加”的原因，也是 1.28 alpha 中资源管理器行为不正确问题的根源（[博客](https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/)）。\n\n## 五、最小 Job YAML 示例与迁移验证清单\n\n官方示例（[Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)）：\n\n```yaml\napiVersion: batch/v1\nkind: Job\nmetadata:\n  name: myjob\nspec:\n  template:\n    spec:\n      containers:\n        - name: myjob\n          image: alpine:latest\n          command: ['sh', '-c', 'echo \"logging\" > /opt/logs.txt']\n          volumeMounts:\n            - name: data\n              mountPath: /opt\n      initContainers:\n        - name: logshipper\n          image: alpine:latest\n          # 设置 restartPolicy: Always 使其成为 sidecar 容器\n          restartPolicy: Always\n          command: ['sh', '-c', 'tail -F /opt/logs.txt']\n          volumeMounts:\n            - name: data\n              mountPath: /opt\n      restartPolicy: Never\n      volumes:\n        - name: data\n          emptyDir: {}\n```\n\n**迁移验证清单（工程建议，逐项附证据依据）**：\n1. 确认集群 ≥1.29（默认启用）或 1.28 已开启 `SidecarContainers` 门控（版本边界，官方文档）。\n2. 确认 sidecar 的 `started` 先于 app 容器启动；若日志代理需预热，配置 startupProbe/readinessProbe（探针语义，官方文档）。\n3. Job 主容器结束后 Job 正常完成，sidecar 不阻塞（官方保证）。\n4. 终止演练：确认 sidecar 在主容器完全终止后才收到 TERM；测试宽限期耗尽的强制终止路径，评估日志缓冲能力（官方机制 + 工程建议）。\n5. 资源配额与调度按“有效 request/limit”核算，而非全量相加（官方规则）。\n6. 1.28 集群上留意 alpha 已知问题（describe node 输出、资源管理器不感知 sidecar）；1.29+ 无此证据，需自行验证。\n\n## 六、结论\n\n原生 Sidecar 通过 `initContainers + restartPolicy: Always` 声明，v1.28 alpha（门控）→ v1.29 默认激活 → v1.33 Stable 锁定。官方保证的包括：启动顺序、不阻塞 Job 完成与 Pod 终止、主容器先终止的 shutdown 顺序、以及“求和 vs 取最大”的资源计算；而“日志完全不丢”“探针必须配置”等属于工程建议——强制终止路径的存在意味着只能降低风险，不能给出零丢失承诺。\n\n### Sources\n[1] Kubernetes v1.28: Introducing native sidecar containers: https://kubernetes.io/blog/2023/08/25/native-sidecar-containers/\n[2] Sidecar Containers: https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/\n[3] Init Containers: https://kubernetes.io/docs/concepts/workloads/pods/init-containers/\n[4] Pod Lifecycle: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/\n",
+  "original_audit": {
+    "checks": [
+      {
+        "case_id": "helper_first",
+        "applicable": true,
+        "formula_passage_index": 16,
+        "reported_value": 2.5,
+        "evidence_ids": [
+          "ev_66bcccbaa5312069502d",
+          "ev_6f5968237ec88220fb50",
+          "ev_f7e14dcb36adf828d12d",
+          "ev_486fae438ab4574412e7"
+        ],
+        "explanation": "Applicable: report passage 16 states effective = overhead + max(sum of non-init, max init), and the sources establish lifecycle: the restartPolicy:Always helper persists for the whole Pod life once started (ev_66bcccbaa5312069502d), and regular init containers finish before main containers start (ev_6f5968237ec88220fb50), matching the phase ordering. Per-phase substitution with the given demands (overhead = 0): Phase [helper] — only the running helper (0.5) counts; the transient init and steady app have not yet started and are not counted, giving max(0.5, 0) = 0.5 (the literal declaration-based max over not-yet-started init would overstate this phase). Phase [helper, transient] — non-init sum = 0.5, effective init max = 2.0, so max(0.5, 2.0) = 2.5. Phase [helper, steady] — non-init sum = 0.5 + 1.0 = 1.5, transient already finished, so 1.5. Simultaneous peak across concurrent phases = max(0.5, 2.5, 1.5) = 2.5 normalized units. Hypothetical substitution only, not a measurement."
+      },
+      {
+        "case_id": "helper_after",
+        "applicable": true,
+        "formula_passage_index": 16,
+        "reported_value": 2.0,
+        "evidence_ids": [
+          "ev_66bcccbaa5312069502d",
+          "ev_6f5968237ec88220fb50",
+          "ev_f7e14dcb36adf828d12d",
+          "ev_486fae438ab4574412e7"
+        ],
+        "explanation": "Applicable under the given ordering: the phases declare the transient init running first and the persistent helper starting only afterwards; since the helper is a restartPolicy:Always container that persists once started (ev_66bcccbaa5312069502d) and regular init containers run to completion before subsequent containers start (ev_6f5968237ec88220fb50), this ordering is consistent with the sources, so the report formula (passage 16) applies. Per-phase substitution (overhead = 0): Phase [transient] — transient init = 2.0, helper and steady not yet started, giving max(0, 2.0) = 2.0. Phase [helper] — running sidecar 0.5, transient finished, giving max(0.5, 0) = 0.5. Phase [helper, steady] — non-init sum = 0.5 + 1.0 = 1.5. Simultaneous peak = max(2.0, 0.5, 1.5) = 2.0 normalized units. The declared individual maximum (transient = 2.0) is not enriched into a richer concurrent peak because it never overlaps the other components in this ordering. Hypothetical substitution only, not a measurement."
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "evidence_id": "ev_486fae438ab4574412e7"
+    },
+    {
+      "evidence_id": "ev_66bcccbaa5312069502d"
+    },
+    {
+      "evidence_id": "ev_6f5968237ec88220fb50"
+    },
+    {
+      "evidence_id": "ev_f7e14dcb36adf828d12d"
+    }
+  ]
+}

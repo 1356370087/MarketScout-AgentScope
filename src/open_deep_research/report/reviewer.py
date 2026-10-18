@@ -13,9 +13,11 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
+from types import GenericAlias
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, ValidationError, create_model
+from pydantic.json_schema import SkipJsonSchema
 
 from open_deep_research import prompts as _prompts
 from open_deep_research.configuration import (
@@ -46,6 +48,8 @@ from .models import (
     ReportDimensionScores,
     ReportDraft,
     ReportIssueResolution,
+    ReportEvidenceSupport,
+    ReportExampleReview,
     ReportReview,
     ReportReviewIssue,
 )
@@ -470,11 +474,32 @@ def build_reviewer_payload(
         "reference_style": normalized_draft.reference_style,
         "outline": [{"name": section.name} for section in normalized_draft.sections],
     }
+    if (config or {}).get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+        from .writing import answer_evidence_order, evidence_bindings, project_evidence
+        from .verification import example_inventory
+        from open_deep_research.quality.contract import original_requirement_context
+
+        contract = coverage_contract.model_dump(mode="json") if coverage_contract else _unwrap(normalized_state.get("coverage_contract"), {})
+        kinds = {r["requirement_id"]: r.get("kind", "factual") for r in contract.get("requirements", [])}
+        requirements = [{**r, "kind": kinds.get(r["requirement_id"], "factual")} for r in requirements]
+        payload["coverage_contract"]["requirements"] = requirements
+        payload["coverage_contract"]["scope_context"] = original_requirement_context(contract)
+        payload["requirement_to_evidence"] = evidence_bindings(records, _unwrap(raw_ledger, {}))
+        payload["required_requirement_ids"] = [r["requirement_id"] for r in requirements
+            if r["kind"] == "factual" and payload["requirement_to_evidence"].get(r["requirement_id"])]
+        payload["evidence_registry"] = answer_evidence_order(project_evidence(records), requirements,
+            payload["requirement_to_evidence"], answer_text=body_without_references(normalized_draft.markdown))
+        payload["examples"] = example_inventory(_markdown_regions(normalized_draft.markdown))
     if (config or {}).get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
         history = normalized_state.get("report_review_history") or []
         previous = history[-1] if history else {}
         payload["previous_issues"] = [item for item in previous.get("issues", []) if item.get("issue_id")]
         payload["previous_draft_sha256"] = previous.get("draft_sha256")
+        if (config or {}).get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+            # The report can change; the original question and accepted source
+            # scope cannot shrink to exempt a previously established ordering.
+            payload["required_boundary_cases"] = sorted({case for review in history
+                for case in review.get("provenance", {}).get("boundary_applicable_cases", [])})
         body = body_without_references(normalized_draft.markdown)
         urls = {source.url for source in parse_sources_from_text(body)}
         numbers = numbered_source_urls(normalized_draft.markdown)
@@ -484,7 +509,7 @@ def build_reviewer_payload(
     return payload
 
 
-def _track_review_issues(issues, resolutions, previous):
+def _track_review_issues(issues, resolutions, previous, *, advisory_retention=False):
     """Track explicit defects across drafts without trusting model pass/fail."""
     prior = {item["issue_id"]: item for item in previous if item.get("issue_id")}
     errors = []
@@ -509,7 +534,7 @@ def _track_review_issues(issues, resolutions, previous):
     by_id = {item.issue_id: item for item in resolutions}
     if len(by_id) != len(resolutions) or set(by_id) - set(prior) or required - set(by_id):
         errors.append("review_issue_resolution_missing_or_invalid")
-    remaining = {item.issue_id for item in issues if item.blocking}
+    remaining = {item.issue_id for item in issues if item.blocking or advisory_retention}
     for identity, resolution in by_id.items():
         if (resolution.status == "retained") != (identity in remaining):
             errors.append("review_issue_resolution_missing_or_invalid")
@@ -990,8 +1015,19 @@ def _normalize_candidate(
 ) -> ReportReview:
     """Apply deterministic validation and compute the effective gate decision."""
     candidate = _candidate_payload(raw)
+    submitted_evidence_ids = candidate._submitted_evidence_ids if isinstance(candidate, ReportReview) else None
+    # Normalization assigns issue identities. Keep the cached independent audit
+    # reusable when a prose metadata repair reviews this same draft again.
+    boundary_issues = [item.model_copy(deep=True) for item in candidate._verified_boundary_issues] if isinstance(candidate, ReportReview) else []
+    guarantee_issues = [item.model_copy(deep=True) for item in candidate._verified_guarantee_issues] if isinstance(candidate, ReportReview) else []
+    auxiliary_error = candidate._auxiliary_review_error if isinstance(candidate, ReportReview) else None
+    boundary_cases = candidate._verified_boundary_cases if isinstance(candidate, ReportReview) else set()
     if config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 and isinstance(candidate, ReportReview):
-        candidate = candidate.model_dump(mode="json", exclude_unset=True)
+        normalized = candidate.model_dump(mode="json", exclude_unset=True)
+        if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+            # Keep the single-example identity bound by the invocation schema.
+            normalized["example_checks"] = [row.model_dump(mode="json") for row in candidate.example_checks]
+        candidate = normalized
     candidate_protocol_invalid = not isinstance(candidate, Mapping | ReportReview) or (
         isinstance(candidate, Mapping) and not candidate
     )
@@ -1004,10 +1040,33 @@ def _normalize_candidate(
         except ValidationError:
             model_review = ReportReview()
             model_validation_failed = True
+    model_review._submitted_evidence_ids = submitted_evidence_ids
     records = _state_evidence(state)
     requirements = _requirements(state)
     issues = _safe_candidate_issues(model_review.issues)
     deterministic_failures: list[str] = []
+    verification = config.get("metadata", {}).get("run_config_schema_version", 18) >= 20
+    answer_feedback = []
+    if verification:
+        if auxiliary_error:
+            deterministic_failures.extend(["report_guarantee_reviewer_unavailable", "report_reviewer_unavailable"])
+        for issue in issues:
+            if (not issue.requires_change and issue.severity == "low" and not issue.requirement_id
+                    and issue.category in {"redundancy", "executive_readability"}):
+                # An already nonblocking, no-change style note is informational.
+                # It must not prevent correction of actual factual defects.
+                issue.severity = "info"
+            elif not issue.requires_change and issue.severity != "info" and issue.revision_instruction.strip():
+                # The reducer already treats this defect as blocking. Preserve
+                # its concrete correction instead of failing on a contradictory
+                # optional-change flag and preventing the revision itself.
+                issue.requires_change = True
+    if verification and model_error is None:
+        from .verification import check_answers
+        answer_issues, answer_errors, answer_feedback = check_answers(model_review,
+            payload["coverage_contract"]["requirements"], draft.markdown, records, payload.get("examples", []))
+        issues.extend(answer_issues)
+        deterministic_failures.extend(answer_errors)
     if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
         if any(issue.severity != "info" and (
             not issue.description.strip() or not issue.revision_instruction.strip()
@@ -1050,6 +1109,8 @@ def _normalize_candidate(
         records,
         issues,
     )
+    if verification and submitted_evidence_ids is not None:
+        valid_evidence_ids &= submitted_evidence_ids
     # When the semantic Reviewer is unavailable, fail-open may waive only the
     # missing model output. Do not manufacture protocol defects from the empty
     # fallback object; draft/source checks below still run independently.
@@ -1086,6 +1147,7 @@ def _normalize_candidate(
                 )
             )
             deterministic_failures.append("coverage_requirement_partial")
+    citation_issue_start = len(issues)
     citations = (
         _safe_candidate_citations(
             model_review.citation_audit,
@@ -1100,6 +1162,10 @@ def _normalize_candidate(
         if model_error is None
         else []
     )
+    citation_feedback = [{"citation_target": issue.citation_target, "evidence_ids": issue.evidence_ids,
+        "error": issue.description, "source_urls": {eid: evidence_references[eid] for eid in issue.evidence_ids
+            if eid in valid_evidence_ids and eid in evidence_references}}
+        for issue in issues[citation_issue_start:]]
     # A draft with accepted evidence should expose at least one body citation;
     # the final orchestrator also enforces this, but recording it here makes a
     # manually supplied draft safe to review.
@@ -1135,10 +1201,16 @@ def _normalize_candidate(
         unknown_ids = [item for item in issue_item.evidence_ids if item not in valid_evidence_ids]
         if unknown_ids:
             deterministic_failures.append("unknown_evidence_id")
+    # The independent boundary call already validated its own submitted sources.
+    # Do not lend those sources to the prose model or reject them against a
+    # different call's evidence selection.
+    issues.extend(boundary_issues)
+    issues.extend(guarantee_issues)
     # De-duplicate deterministic issue codes and deduplicate repeated findings.
     fidelity = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6"
     if fidelity:
-        deterministic_failures.extend(_track_review_issues(issues, model_review.issue_resolutions, payload.get("previous_issues", [])))
+        deterministic_failures.extend(_track_review_issues(issues, model_review.issue_resolutions,
+            payload.get("previous_issues", []), advisory_retention=verification))
     deterministic_failures = list(dict.fromkeys(deterministic_failures))
     hard_failures = list(
         dict.fromkeys(
@@ -1241,6 +1313,8 @@ def _normalize_candidate(
                 "coverage_contract_rows_missing_or_invalid",
                 "citation_audit_missing",
                 "accepted_evidence_missing",
+                "report_answer_witness_invalid",
+                "report_example_checks_missing_or_invalid",
             }
             or code.startswith("source_allowlist")
             or code.startswith("fenced_code")
@@ -1262,6 +1336,8 @@ def _normalize_candidate(
     status = "failed" if model_error and not bool(getattr(Configuration.from_runnable_config(config), "report_review_fail_open", True)) else "completed"
     if model_error and status != "failed":
         status = "degraded"
+    if auxiliary_error:
+        decision, status = "fail", "failed"
     metadata = config.get("metadata", {}) if isinstance(config, Mapping) else {}
     policy_version = str(metadata.get("quality_policy_version") or QUALITY_POLICY_VERSION)
     evaluation_epoch = str(metadata.get("quality_evaluation_epoch") or "legacy-unpinned")
@@ -1278,7 +1354,25 @@ def _normalize_candidate(
         provenance["advisory_issue_ids"] = [issue.issue_id for issue in issues if not issue.blocking]
     if model_error:
         provenance["model_error"] = model_error[:500]
+    if auxiliary_error:
+        provenance["auxiliary_review_error"] = auxiliary_error[:2000]
+    if answer_feedback:
+        provenance["answer_verification_feedback"] = answer_feedback
+    if verification and citation_feedback:
+        provenance["citation_binding_feedback"] = citation_feedback
+    if verification and boundary_cases:
+        from .boundaries import phase_calculations
+        provenance["boundary_applicable_cases"] = sorted(boundary_cases)
+        provenance["phase_calculations"] = phase_calculations(boundary_cases)
     summary = str(model_review.summary or "").strip()[:2_000]
+    if verification and decision != model_decision:
+        summary = {
+            "pass": "Report passed deterministic and independent verification; remaining feedback is nonblocking.",
+            "revise": "Report requires revision after deterministic and independent verification.",
+            "fail": "Report review failed deterministic or protocol validation.",
+        }[decision]
+        details = [issue.description for issue in issues if issue.blocking]
+        summary = (summary + " " + "; ".join(details or hard_failures)).strip()[:2_000]
     if not summary:
         summary = (
             "Report passed deterministic and semantic review."
@@ -1295,6 +1389,7 @@ def _normalize_candidate(
         citation_audit=citations,
         issues=issues,
         issue_resolutions=model_review.issue_resolutions if fidelity else [],
+        example_checks=model_review.example_checks if verification else [],
         summary=summary,
         status=status,
         hard_failures=hard_failures,
@@ -1325,14 +1420,21 @@ async def _invoke_reviewer(
     """Invoke the structured Reviewer through the shared model gateway."""
     from .writing import writing_messages
 
-    fields = {key: value for key, value in payload.items() if key != "evidence_registry"}
+    fields = {key: value for key, value in payload.items()
+              if key not in {"evidence_registry", "examples", "_verified_example_checks", "_verified_boundary_issues", "_verified_boundary_cases", "_verified_guarantee_issues"}}
     fields["_run_schema_version"] = config.get("metadata", {}).get("run_config_schema_version", 18)
     fields["_quality_policy_version"] = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
+    records = list(payload.get("evidence_registry", []))
+    if fields["_run_schema_version"] >= 20:
+        from .verification import source_passage_view, evidence_passages
+        records = source_passage_view(records)
+        fields["draft_passages"] = {str(index): text for index, text in enumerate(evidence_passages(fields.pop("draft_markdown")))}
     if fields["_run_schema_version"] < 18:
         fields.pop("citation_targets", None)
     messages = writing_messages(
         getattr(_prompts, "report_review_prompt", "{payload}"),
-        {**fields, "review_attempt": attempt}, list(payload.get("evidence_registry", [])),
+        {**fields, "review_attempt": attempt}, records,
+        audit=fields["_run_schema_version"] >= 20,
         guidance=_REVIEW_SECURITY_SYSTEM_PROMPT + "\nUse report_evidence.records as evidence_registry. "
         "Omitted evidence is unavailable; never certify unsupported claims as verified. "
         + ("Every non-info issue must identify a location, requirement ID, evidence ID or citation target, "
@@ -1377,7 +1479,9 @@ async def _invoke_reviewer(
         previous_ids = [item["issue_id"] for item in payload.get("previous_issues", [])]
         required_ids = [row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])]
         issue_schema = create_model("ReportReviewIssue", __base__=ReportReviewIssue,
-            requires_change=(bool, Field(..., description="Whether a real defect requires correction; a no-change verification must have severity info.")),
+            requires_change=(bool, Field(default=True if fields["_run_schema_version"] >= 20 else ...,
+                description=("Whether a defect requires correction. Omission conservatively requires correction; a no-change verification must have severity info."
+                    if fields["_run_schema_version"] >= 20 else "Whether a real defect requires correction; a no-change verification must have severity info."))),
             issue_id=(str, Field(default="", description="Copy the previous issue_id for the same unresolved defect; leave empty for a new defect.", json_schema_extra={"enum": ["", *previous_ids]})),
             requirement_id=(str | None, Field(default=None, json_schema_extra={"enum": [None, *required_ids]})))
         coverage_schema = create_model("ReportCoverageReview", __base__=ReportCoverageReview,
@@ -1389,13 +1493,165 @@ async def _invoke_reviewer(
             issue_id=(str, Field(..., json_schema_extra={"enum": previous_ids} if previous_ids else None)))
         resolution_list: Any = list[cast(Any, resolution_schema)]
         blocking_count = sum(bool(item.get("blocking", True)) for item in payload.get("previous_issues", []))
+        resolution_field = (Field(default_factory=list, max_length=0)
+            if fields["_run_schema_version"] >= 20 and not previous_ids
+            else Field(..., min_length=blocking_count, max_length=len(previous_ids),
+                description="Resolve every prior blocking issue explicitly. Copy its exact issue_id, use resolved or retained, and explain the evidence or draft change."))
         schema = create_model("ReportReview", __base__=schema,
             issues=(issue_list, Field(default_factory=list)),
-            issue_resolutions=(resolution_list, Field(..., min_length=blocking_count, max_length=len(previous_ids),
-                description="Resolve every prior blocking issue explicitly. Copy its exact issue_id, use resolved or retained, and explain the evidence or draft change. An empty array is valid only when there are no previous blocking issues.")),
+            issue_resolutions=(resolution_list, resolution_field),
             coverage=(coverage_list, Field(..., min_length=len(required_ids),
                 max_length=len(required_ids) if required_ids else None)))
-    return await require_report_runtime().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=schema)
+    if fields["_run_schema_version"] >= 20:
+        required_ids = [row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])]
+        messages[0].content += (
+            "\nVerify each covered answer, not just the presence of its heading or terminology. "
+            "The complete canonical draft is draft_passages concatenated in numeric index order. "
+            "For each covered factual requirement select answer_passage_index containing its actual answer, "
+            "not just a heading or bibliography. Verify the whole answer across the draft. "
+            "The runtime extracts answer_excerpt; do not copy or paraphrase it. "
+            "For factual requirements, include supporting_evidence with one source_passage_id "
+            "selected from the schema's allowed references. Each reference is evidence_id:local_index "
+            "and identifies that record's source_passages entry. "
+            "The runtime binds the evidence_id, local passage_index and original quote; "
+            "do not generate these fields or reuse a draft passage number as a source reference. "
+            "Interpret the selected passage within the complete record and its governing headings. "
+            "Do not use model knowledge or infer omitted source "
+            "contents. Check the whole scoped question: a valid generic formula does not cover missing "
+            "components, concurrency phases or additive terms of the requested scenario. "
+            "Do not infer a highest- or lowest-category classification rule from nearby numeric "
+            "max/min operations or a statement that the same criteria apply to all components; "
+            "require the source's actual classification criteria. "
+            "List remaining required aspects in missing_aspects and mark partial/missing, even if the draft openly admits "
+            "them. A correctly supported negative answer is different from an unanswered question. "
+            "For process/format requirements, supporting_evidence may be empty. A process constraint "
+            "verified by the source inventory or runtime need not have an answer_excerpt in the report. "
+            "A separate stage audits executable examples. Review their related factual claims here, "
+            "but do not emit example_checks. Keep witnesses short and explanations concise."
+        )
+        support_schema = create_model("ReportSourcePassage", __base__=ReportEvidenceSupport,
+            evidence_id=(SkipJsonSchema[str], Field(default="")),
+            quote=(SkipJsonSchema[str], Field(default="")),
+            source_passage_id=(str, Field(..., description="Select one allowed evidence_id:local_index reference identifying an actual source_passages entry.",
+                json_schema_extra={"enum": [f"{row['evidence_id']}:{index}" for row in records for index in row["source_passages"]]})))
+        coverage_schema = create_model("VerifiedReportCoverage", __base__=ReportCoverageReview,
+            requirement_id=(str, Field(..., json_schema_extra={"enum": required_ids} if required_ids else None)),
+            answer_passage_index=(int | None, Field(default=None, ge=0,
+                description="Required for covered factual answers; may be omitted for process/format checks verified from inventory. Runtime enforces factual answer witnesses.")),
+            supporting_evidence=(GenericAlias(list, support_schema), Field(default_factory=list,
+                description="Required nonempty support for covered factual requirements; may be omitted for process/format requirements. Runtime enforces factual support.")),
+            missing_aspects=(list[str] | None, Field(default=None,
+                description="Explicitly return remaining aspects (or []) for every covered factual answer. May be omitted for process/format checks; runtime enforces factual completeness declarations.")))
+        verified_coverage = GenericAlias(list, coverage_schema)
+        schema = create_model("VerifiedReportReview", __base__=schema,
+            coverage=(verified_coverage, Field(..., min_length=len(required_ids), max_length=len(required_ids))))
+    result = await require_report_runtime().invoke("report_review", messages, cfg, span_name="lead.report_review", schema=schema)
+    if fields["_run_schema_version"] >= 20 and payload.get("examples"):
+        # Metadata repair does not change the draft or its executable examples.
+        checks = payload.get("_verified_example_checks")
+        if checks is None:
+            checks = await _invoke_example_reviewer(payload, config, cfg)
+            if isinstance(payload, dict):
+                payload["_verified_example_checks"] = checks
+        result.example_checks = checks
+    if fields["_run_schema_version"] >= 20:
+        from .boundaries import audit_boundaries, needs_boundary_audit
+        if needs_boundary_audit(payload["draft_markdown"]) or payload.get("required_boundary_cases"):
+            boundary_issues = payload.get("_verified_boundary_issues")
+            if boundary_issues is None:
+                boundary_issues = await audit_boundaries(payload, config, cfg, require_report_runtime().invoke)
+                if isinstance(payload, dict):
+                    payload["_verified_boundary_issues"] = boundary_issues
+            result._verified_boundary_issues = boundary_issues
+            result._verified_boundary_cases = set(payload.get("_verified_boundary_cases", ()))
+        from .guarantees import audit_guarantees, GuaranteeReviewUnavailable
+        guarantee_issues = payload.get("_verified_guarantee_issues")
+        if guarantee_issues is None:
+            try:
+                guarantee_issues = await audit_guarantees(payload, config, cfg, require_report_runtime().invoke)
+            except GuaranteeReviewUnavailable as exc:
+                # Preserve the completed prose/example findings for diagnosis;
+                # publication still fails closed on the unavailable check.
+                result._auxiliary_review_error = f"{exc}: {exc.__cause__}"[:2000]
+                return result
+            if isinstance(payload, dict):
+                payload["_verified_guarantee_issues"] = guarantee_issues
+        result._verified_guarantee_issues = guarantee_issues
+    return result
+
+
+async def _invoke_example_reviewer(payload, config, cfg):
+    """Audit code separately from the much larger prose/source coverage object."""
+    from agentscope.exception import StructuredOutputError
+    from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
+    from open_deep_research.agentscope_runtime.runtime_limits import structured_attempt_budget
+    from open_deep_research.quality.planning import prioritize_evidence
+    from .models import ReportExecutionReview
+    from .verification import check_answers
+    from .writing import writing_messages
+
+    examples = payload["examples"]
+    example_ids = [row["example_id"] for row in examples]
+    example_schema = create_model("VerifiedExecutableExample", __base__=ReportExampleReview,
+        example_id=(str, Field(default=example_ids[0] if len(example_ids) == 1 else ...,
+            json_schema_extra={"enum": example_ids})),
+        expected_lifecycle=(ReportExampleReview.model_fields["expected_lifecycle"].annotation,
+            Field(default="not_applicable", description="Optional example-level summary; each command still requires its own expected_lifecycle.")),
+        observed_lifecycle=(ReportExampleReview.model_fields["observed_lifecycle"].annotation,
+            Field(default="not_applicable", description="Optional example-level summary; each command still requires its own observed_lifecycle.")),
+        execution_checks=(list[ReportExecutionReview], Field(...,
+            description="Exactly one row per execution_units entry, in input order; [] only when there are no units.")))
+    schema = create_model("ReportExampleAudit",
+        example_checks=(GenericAlias(list, example_schema), Field(..., min_length=len(examples), max_length=len(examples))))
+    records, seen = [], set()
+    for example in examples:
+        for record in prioritize_evidence(payload["evidence_registry"], [{"text": example["code"]}])[:4]:
+            if record["evidence_id"] not in seen:
+                records.append(record)
+                seen.add(record["evidence_id"])
+    data = {"draft_markdown": payload["draft_markdown"], "examples": examples,
+            "research_brief": payload["research_brief"],
+            "scope_context": payload["coverage_contract"].get("scope_context", []),
+            "_run_schema_version": config["metadata"]["run_config_schema_version"],
+            "_quality_policy_version": config["metadata"].get("quality_policy_version", QUALITY_POLICY_VERSION)}
+    prompt = (
+        "Audit only the complete code/configuration examples in this report. Return example_checks, "
+        "one row per example_id, and no coverage scores or prose review. Trace actual control flow "
+        "against the example's stated purpose. Distinguish finite primary work from persistent helpers; "
+        "a resource/controller label or restart policy cannot make an infinite loop finish normally. "
+        "For every execution_units entry return an execution_checks row in input order, with unit_id, "
+        "expected_lifecycle, observed_lifecycle and its actual stopping_condition (or none). "
+        "The example-level lifecycle fields are optional summaries; use not_applicable for mixed "
+        "finite work and persistent helpers. The lifecycle fields for every execution unit remain mandatory. "
+        "An image_entrypoint_unavailable unit has unknown behavior: its image name and controller "
+        "type do not establish a stopping condition. Mark such a batch example unverified and "
+        "request an explicit finite primary command. For declarative examples with no units, "
+        "explain the actual configuration effect without claiming unobserved image behavior. "
+        "An unconditional_loop observation cannot be finite. Check actual commands, not a similar "
+        "reference example. Use contradicts for conflicts and unverified if behavior cannot be "
+        "established. Keep explanations concise. Do not execute code."
+    )
+    attempts = min(2, max(1, cfg.max_structured_output_retries))
+    token = structured_attempt_budget.set([attempts])
+    try:
+        for attempt in range(attempts):
+            try:
+                messages = writing_messages(prompt, data, records, audit=True)
+                result = await require_report_runtime().invoke("report_review", messages, cfg,
+                    span_name="lead.report_example_review", schema=schema)
+                candidate = ReportReview(example_checks=result.example_checks).model_copy(deep=True)
+                _, errors, _ = check_answers(candidate, [], payload["draft_markdown"], [], examples)
+                if errors:
+                    raise ModelOutputProtocolError(", ".join(errors))
+                return candidate.example_checks
+            except (StructuredOutputError, ModelOutputProtocolError) as exc:
+                remaining = structured_attempt_budget.get()
+                if attempt + 1 >= attempts or remaining is not None and remaining[0] <= 0:
+                    raise RuntimeError("report_example_reviewer_unavailable") from exc
+                data["protocol_feedback"] = str(exc)[:2000]
+        raise RuntimeError("report_example_reviewer_unavailable")
+    finally:
+        structured_attempt_budget.reset(token)
 
 
 async def review_report(
@@ -1417,6 +1673,7 @@ async def review_report(
         structured_attempt_budget,
     )
     shared_budget = structured_attempt_budget.set([2]) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else None
+    last_result = None
     try:
         protocol_codes = {
             "unknown_requirement_id", "unknown_evidence_id", "review_protocol_invalid",
@@ -1424,16 +1681,31 @@ async def review_report(
             "citation_audit_missing",
             "review_issue_not_actionable",
             "review_issue_identity_invalid", "review_issue_resolution_missing_or_invalid",
+            "report_answer_witness_invalid", "report_example_checks_missing_or_invalid",
         }
         attempts = min(2, max(1, cfg.max_structured_output_retries)) if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 18 else max(1, cfg.max_structured_output_retries)
         previous_errors = None
         for repair in range(attempts):
-            raw = await _invoke_reviewer(payload, runnable_config, cfg, attempt=resolved_attempt)
+            from agentscope.exception import StructuredOutputError
+            from open_deep_research.agentscope_runtime.recovery import ModelOutputProtocolError
+            try:
+                raw = await _invoke_reviewer(payload, runnable_config, cfg, attempt=resolved_attempt)
+            except (StructuredOutputError, ModelOutputProtocolError) as exc:
+                remaining = structured_attempt_budget.get()
+                if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) < 20 or repair + 1 >= attempts or (remaining is not None and remaining[0] <= 0):
+                    raise
+                payload = {**payload, "review_protocol_feedback": {
+                    "errors": ["review_protocol_invalid"], "validation_error": str(exc)[:2000],
+                    "instruction": "Repair the review object, not the draft. Include every required field, "
+                    "every example_id and unit_id, and select existing draft/source passage indices.",
+                }}
+                continue
             result = _normalize_candidate(
                 raw, draft=normalized_draft, state=normalized_state,
                 config=runnable_config, payload=payload, model_name=model_name,
                 attempt=resolved_attempt,
             )
+            last_result = result
             errors = [code for code in result.deterministic_failures if code in protocol_codes]
             remaining = structured_attempt_budget.get()
             if not errors or repair + 1 >= attempts or errors == previous_errors or (remaining is not None and remaining[0] <= 0):
@@ -1441,6 +1713,9 @@ async def review_report(
             previous_errors = errors
             payload = {**payload, "review_protocol_feedback": {
                 "errors": errors,
+                **({"answer_verification_feedback": result.provenance.get("answer_verification_feedback", []),
+                    "citation_binding_feedback": result.provenance.get("citation_binding_feedback", [])}
+                   if runnable_config.get("metadata", {}).get("run_config_schema_version", 18) >= 20 else {}),
                 "instruction": "Correct the review metadata, not the draft. Use the exact supplied "
                 "requirement and evidence IDs, cover every requirement, and include all score "
                 "dimensions and citation audits. Every non-info issue needs a complete description, "
@@ -1469,6 +1744,13 @@ async def review_report(
             if recovery is not None and recovery.problem is not None:
                 raise
         fail_open = bool(getattr(cfg, "report_review_fail_open", True))
+        if last_result is not None and isinstance(exc, (StructuredOutputError, ModelOutputProtocolError)):
+            # A failed metadata repair must not erase already observed defects.
+            last_result.decision, last_result.status = "fail", "failed"
+            last_result.hard_failures = list(dict.fromkeys([*last_result.hard_failures, "report_review_protocol_repair_failed"]))
+            last_result.provenance["repair_error"] = str(exc)[:500]
+            last_result.summary = "评审格式修正未完成；保留已得到的质量意见，报告未放行。"
+            return last_result
         fallback = _normalize_candidate(
             {},
             draft=normalized_draft,
@@ -1537,18 +1819,32 @@ def _revision_prompt(
         by_id = {row["evidence_id"]: row for row in records}
         preferred = [by_id[eid] for eid in issue_ids if eid in by_id]
         extra["required_evidence_ids"] = [row["evidence_id"] for row in preferred]
-        ordered = order_evidence(records, extra["requirement_to_evidence"])
+        if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+            from .writing import answer_evidence_order
+            ordered = answer_evidence_order(records, requirements, extra["requirement_to_evidence"],
+                answer_text=body_without_references(draft.markdown))
+        else:
+            ordered = order_evidence(records, extra["requirement_to_evidence"])
         records = preferred + [row for row in ordered if row["evidence_id"] not in issue_ids]
     else:
         records = _review_evidence(records, draft)
 
+    review_payload = review.model_dump(mode="json")
+    if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+        extra["verified_calculations"] = review_payload.get("provenance", {}).pop("phase_calculations", [])
+        # The Revisor already receives the full sources. Avoid resending the
+        # same passages inside the review's coverage metadata.
+        for row in review_payload.get("coverage", []):
+            row.pop("answer_excerpt", None)
+            for support in row.get("supporting_evidence", []):
+                support.pop("quote", None)
     return writing_messages(
         getattr(_prompts, "report_revision_prompt", "{payload}"),
         {"research_brief": str(state.get("research_brief") or ""),
          **extra,
          "_run_schema_version": config.get("metadata", {}).get("run_config_schema_version", 18),
          "requirements": requirements, "draft_markdown": draft.markdown,
-         "review": review.model_dump(mode="json"), "report_type": draft.report_type,
+         "review": review_payload, "report_type": draft.report_type,
          "output_format": draft.output_format, "reference_style": draft.reference_style},
         records,
         guidance="Use report_evidence.records as accepted_evidence. Preserve the complete draft; "
@@ -1559,7 +1855,19 @@ def _revision_prompt(
            "supported facts even if a review paraphrase overlooks the next source sentence. "
            "Do not replace a required input with an uncertainty disclaimer when the evidence supplies it. "
            "Optional editorial advice must not trigger a wholesale rewrite or new unsupported claims."
-           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else ""),
+           if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else "")
+        + (" Blocking issues and their revision_instruction take priority over positive coverage scores "
+           "or a prose assurance elsewhere in the review. Correct the actual answer and any dependent "
+           "worked example or checklist. A numerical counterexample is not itself a replacement formula: "
+           "give the full applicable equation, explain its source-grounded derivation and preconditions, "
+           "and check the same inputs and ordering. Do not reframe a required correction as optional "
+           "capacity advice, or invent a distinction between configured resource accounting and physical "
+           "use to preserve a disproved equation. Claims about actual implementation behavior still "
+           "require supplied evidence."
+           " When verified_calculations is present, use those exact hypothetical demands, phase totals, "
+           "orderings and peaks for the replacement worked example. Remove superseded numerical "
+           "comparisons instead of rescaling the inputs or recomputing a different example."
+           if config.get("metadata", {}).get("run_config_schema_version", 18) >= 20 else ""),
     )
 
 

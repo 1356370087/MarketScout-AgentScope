@@ -24,7 +24,7 @@ from open_deep_research.agentscope_runtime.sandbox_provider import (
     NativeGatewayProvider,
 )
 from open_deep_research.configuration import Configuration
-from open_deep_research.models.protocol_errors import ModelGatewayError
+from open_deep_research.models.protocol_errors import ModelGatewayError, parse_structured_json
 from open_deep_research.sandbox.approvals import SecurityApproval, SecurityApprovalStore
 from open_deep_research.sandbox.crypto import (
     NonceReplayCache,
@@ -63,6 +63,7 @@ from open_deep_research.sandbox.internal_api import (
     TaskActivityPublishRequest,
     ToolBudgetReserveRequest,
     ToolBudgetSettleRequest,
+    ToolOperationGetRequest,
 )
 from open_deep_research.sandbox.policy import egress_target_from_url
 from open_deep_research.sandbox.schema import (
@@ -180,7 +181,7 @@ def _wire_structured_args(message: dict[str, Any] | None) -> dict[str, Any] | No
     args = function.get("arguments", call.get("args"))
     if isinstance(args, str):
         try:
-            args = json.loads(args)
+            args = parse_structured_json(args)
         except ValueError:
             return None
     return args if isinstance(args, dict) else None
@@ -300,6 +301,10 @@ class RemoteBudgetGate:
             if path.endswith("/budgets/reserve"):
                 self.deadline_at = result.get("deadline_at")
             del self._pending_posts[0]
+
+    def discard_pending(self) -> None:
+        """A failed signed request cannot be sent again with its consumed nonce."""
+        self._pending_posts.clear()
 
     def reserve_model_call(
         self,
@@ -1364,6 +1369,15 @@ class GatewayRuntime:
             run_embedding_accounting.reset(accounting_token)
             reset_run_key(token)
 
+    async def lookup_tool_operation(self, request, context):
+        lookup = self.internal.signed(ToolOperationGetRequest,
+            run_id=request.run_id, task_id=request.task_id, stage=request.stage,
+            fence_token=context.fence_token, logical_operation_id=request.logical_operation_id,
+            tool_name=request.tool_name)
+        record = await self.internal.post("/internal/sandbox/operations/tool-get", lookup)
+        outcome = record.get("outcome")
+        return GatewayToolOutcomeV1.model_validate(outcome) if outcome else None
+
     async def _invoke_tool(
         self,
         request: GatewayToolRequestV1,
@@ -2213,6 +2227,30 @@ class GatewayRuntime:
         outcome = operation.get("outcome")
         return GatewayModelOutcomeV2.model_validate(outcome) if outcome else None
 
+    async def _close_undispatched_model(self, request, context):
+        """Close a possible reservation only with proof the provider was not entered."""
+        outcome = GatewayModelOutcomeV2(
+            logical_operation_id=request.logical_operation_id,
+            status="failed", requested_model=request.model, error_code="model_not_dispatched",
+        )
+        # The reservation reply may have been lost. Never repeat its signed POST
+        # or transition a nonexistent operation. Keep any reservation held when
+        # the authority is still unavailable.
+        with suppress(httpx.HTTPError, ValueError, KeyError):
+            lookup = self.internal.signed(OperationGetRequest,
+                run_id=request.run_id, fence_token=context.fence_token,
+                logical_operation_id=request.logical_operation_id,
+                request_digest=hashlib.sha256(request.model_dump_json().encode()).hexdigest())
+            record = await self.internal.post("/internal/sandbox/operations/get", lookup)
+            if record.get("found"):
+                await self.internal.post("/internal/sandbox/operations/transition",
+                    self.internal.signed(OperationTransitionRequest,
+                        run_id=request.run_id, fence_token=context.fence_token,
+                        logical_operation_id=request.logical_operation_id,
+                        status="failed", outcome=outcome.model_dump(mode="json"),
+                        error_type=outcome.error_code))
+        return outcome
+
     async def _invoke_model_operation_v2_locked(
         self,
         request: GatewayModelRequestV2,
@@ -2268,7 +2306,14 @@ class GatewayRuntime:
             self.model_gateways[request.run_id] = gateway
         tools = list(request.tools)
         tool_choice = request.tool_choice
-        if request.structured_schema is not None:
+        messages = request.messages
+        if request.structured_schema is not None and tool_choice == "none":
+            messages = [*messages, {"role": "system", "content":
+                "Return only one complete JSON object matching this JSON Schema. "
+                "Include every required property exactly once, use concise values, "
+                "and do not include Markdown fences or tool calls. JSON Schema: "
+                + json.dumps(request.structured_schema, ensure_ascii=False, separators=(",", ":"))}]
+        elif request.structured_schema is not None:
             tools = [
                 {
                     "type": "function",
@@ -2289,7 +2334,7 @@ class GatewayRuntime:
                 "function": {"name": STRUCTURED_OUTPUT_TOOL_NAME},
             }
         estimated_input = max(1, len(json.dumps({
-            "messages": request.messages, "tools": tools, "tool_choice": tool_choice,
+            "messages": messages, "tools": tools, "tool_choice": tool_choice,
         }, ensure_ascii=False).encode("utf-8")))
         dispatched = False
         try:
@@ -2305,7 +2350,6 @@ class GatewayRuntime:
                 request_digest=hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
             )
             await budget.flush_pending()
-            dispatched = True
             await self._model_activity_v2(request, context, "model.started")
             from open_deep_research.agentscope_runtime.web_progress import (
                 WebProgress,
@@ -2321,7 +2365,10 @@ class GatewayRuntime:
                 from open_deep_research.agentscope_runtime.runtime_limits import limited
 
                 async def complete_model():
-                    return await gateway.complete(request.model_copy(update={"tools": tools, "tool_choice": tool_choice}))
+                    nonlocal dispatched
+                    dispatched = True
+                    return await gateway.complete(request.model_copy(update={
+                        "messages": messages, "tools": tools, "tool_choice": tool_choice}))
 
                 if enabled(context.config):
                     cfg = Configuration.from_runnable_config(context.config)
@@ -2358,6 +2405,10 @@ class GatewayRuntime:
             # server could still have completed and billed the call, so the
             # attempt stays uncertain and the journal must not remain
             # "dispatched" for replays of the same logical operation.
+            budget.discard_pending()
+            if not dispatched:
+                await self._close_undispatched_model(request, context)
+                raise
             with suppress(Exception):
                 budget.fail_model_call(operation_key, uncertain=True)
                 await budget.flush_pending()
@@ -2381,6 +2432,7 @@ class GatewayRuntime:
                 )
             raise
         except Exception as exc:
+            budget.discard_pending()
             # Once dispatched, only an explicit provider rejection proves that
             # no billable response was produced. Transport/receipt failures do not.
             if not dispatched and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {408, 429}:
@@ -2396,7 +2448,11 @@ class GatewayRuntime:
                 "budget_or_rate_limit", "gateway_budget_exceeded",
                 "server_search_failed",
             }
-            uncertain = dispatched and not definite_rejection
+            if not dispatched:
+                outcome = await self._close_undispatched_model(request, context)
+                await self._model_activity_v2(request, context, "model.failed", outcome=outcome)
+                return outcome
+            uncertain = not definite_rejection
             budget.fail_model_call(operation_key, uncertain=uncertain)
             with suppress(httpx.HTTPError, ValueError, KeyError):
                 await budget.flush_pending()
@@ -2404,10 +2460,6 @@ class GatewayRuntime:
             error_code = exc.code if isinstance(exc, ModelGatewayError) else "gateway_model_failed"
             if getattr(exc, "provider_error_code", None) == GATEWAY_TOKEN_LIMIT_MARKER:
                 error_code = GATEWAY_TOKEN_LIMIT_MARKER
-            if not dispatched and isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
-                detail = exc.response.json().get("detail", "")
-                if isinstance(detail, str) and detail.startswith("budget_exhausted:"):
-                    error_code = detail
             outcome = GatewayModelOutcomeV2(
                 logical_operation_id=request.logical_operation_id,
                 status="uncertain" if uncertain else "failed",
@@ -2581,6 +2633,20 @@ def create_gateway_app(
         except ValueError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         return await runtime.invoke_tool(request, context)
+
+    @app.post("/v1/tools/lookup", response_model=GatewayToolOutcomeV1 | None)
+    async def lookup_tool(
+        request: GatewayToolRequestV1,
+        authorization: str = Header(default="", alias="Authorization"),
+        timestamp: float = Header(alias="X-Sandbox-Timestamp"),
+        nonce: str = Header(alias="X-Sandbox-Nonce"),
+    ):
+        try:
+            _claims, context = runtime.authorize_task(request, authorization=authorization,
+                timestamp=timestamp, nonce=nonce)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        return await runtime.lookup_tool_operation(request, context)
 
     @app.post("/v1/tools/authorize-local", response_model=GatewayToolOutcomeV1)
     async def authorize_local_tool(

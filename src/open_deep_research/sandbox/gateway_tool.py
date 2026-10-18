@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from open_deep_research.platform.runtime import environment as config_environment
 
+import asyncio
 import hashlib
 import json
 import os
@@ -30,6 +31,8 @@ from open_deep_research.tools.governance import (
     ToolError,
     ToolOutcomeError,
 )
+
+TOOL_RECEIPT_LOOKUP_SECONDS = 60
 
 
 def _request_for(
@@ -83,20 +86,46 @@ async def _call_gateway(
     task_token = task_token.get_secret_value() if task_token is not None else config_environment.get("SANDBOX_TASK_TOKEN", "")
     if not gateway_url or not task_token:
         raise RuntimeError("sandbox_gateway_not_configured")
-    headers = {
-        "Authorization": f"Bearer {task_token}",
-        "Content-Type": "application/json",
-        "X-Sandbox-Timestamp": str(time.time()),
-        "X-Sandbox-Nonce": secrets.token_urlsafe(24),
-    }
+    def headers():
+        return {"Authorization": f"Bearer {task_token}",
+                "Content-Type": "application/json",
+                "X-Sandbox-Timestamp": str(time.time()),
+                "X-Sandbox-Nonce": secrets.token_urlsafe(24)}
+
+    request = _request_for(tool, input, context)
     async with httpx.AsyncClient(base_url=gateway_url, timeout=None) as client:
-        response = await client.post(
-            path,
-            content=_request_for(tool, input, context).model_dump_json(),
-            headers=headers,
-        )
-        response.raise_for_status()
-        return GatewayToolOutcomeV1.model_validate(response.json())
+        try:
+            response = await client.post(path, content=request.model_dump_json(), headers=headers())
+            response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            if path != "/v1/tools/call" or (
+                isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500
+            ):
+                raise
+            outcome = None
+            deadline = time.monotonic() + TOOL_RECEIPT_LOOKUP_SECONDS
+            while (remaining := deadline - time.monotonic()) > 0:
+                try:
+                    response = await client.post("/v1/tools/lookup", content=request.model_dump_json(),
+                        headers=headers(), timeout=min(5, remaining))
+                    response.raise_for_status()
+                    if response.json() is not None:
+                        outcome = GatewayToolOutcomeV1.model_validate(response.json())
+                        break
+                except httpx.HTTPStatusError as error:
+                    if error.response.status_code < 500:
+                        break
+                except httpx.RequestError:
+                    pass
+                await asyncio.sleep(min(2, max(0, deadline - time.monotonic())))
+            if outcome is None:
+                raise  # Preserve unknown execution; never repeat the tool POST.
+        else:
+            outcome = GatewayToolOutcomeV1.model_validate(response.json())
+        if (outcome.logical_operation_id != request.logical_operation_id
+                or outcome.tool_call_id != request.tool_call_id):
+            raise RuntimeError("sandbox_gateway_tool_response_mismatch")
+        return outcome
 
 
 @dataclass(frozen=True, slots=True)

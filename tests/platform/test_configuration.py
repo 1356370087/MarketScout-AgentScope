@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from open_deep_research.platform import schema as s
-from open_deep_research.platform.contracts import ConfigurationDocument, DraftRequest, PublishRequest, UpdateDraft, CredentialRequest
+from open_deep_research.platform.contracts import ConfigurationDocument, DraftRequest, PublishRequest, UpdateDraft, CredentialRequest, UserQuotaLimits
 from open_deep_research.platform.crypto import CredentialCipher
 from open_deep_research.platform.store import PlatformStore, PlatformError
 from open_deep_research.platform import quota
@@ -96,6 +96,44 @@ async def test_concurrent_monthly_reservation_and_idempotent_settlement(store):
     async with store.engine.connect() as conn:
         row = (await conn.execute(select(s.months))).mappings().one()
         assert row["settled"] == 40 and row["reserved"] == 60
+
+
+@pytest.mark.asyncio
+async def test_unlimited_user_keeps_accounting_isolation_and_other_limits(store):
+    user, other = principal(), principal()
+    await activate(store, user, amount=100)
+    limits = UserQuotaLimits(monthly_cost_unlimited=True)
+    async with store.engine.begin() as conn:
+        await conn.execute(insert(s.quotas).values(owner_id=user.user_id, limits=limits.model_dump(), version=1))
+    effective = await store.limits(user.user_id)
+    assert effective["monthly_cost_unlimited"] is True
+    assert effective["max_run_cost_micro_usd"] == 100
+    await asyncio.gather(*(quota.reserve(user.user_id, "unlimited-" + str(i), 600, "test", store=store) for i in range(3)))
+    await quota.settle("unlimited-0", 400, store=store)
+    await quota.settle("unlimited-0", 400, store=store)
+    await quota.mark_unknown("unlimited-1", store=store)
+    with pytest.raises(quota.QuotaExceeded):
+        await quota.reserve(other.user_id, "other-owner", 600, "test", store=store)
+    async with store.engine.connect() as conn:
+        month = (await conn.execute(select(s.months).where(s.months.c.owner_id == user.user_id))).mappings().one()
+        assert (month["reserved"], month["settled"]) == (1200, 400)
+    # Re-enabling the monthly ceiling preserves prior spend and unknown calls.
+    async with store.engine.begin() as conn:
+        await conn.execute(update(s.quotas).where(s.quotas.c.owner_id == user.user_id)
+            .values(limits=UserQuotaLimits().model_dump()))
+    with pytest.raises(quota.QuotaExceeded):
+        await quota.reserve(user.user_id, "after-reenable", 1, "test", store=store)
+    await quota.settle("unlimited-2", 200, store=store)
+    async with store.engine.connect() as conn:
+        month = (await conn.execute(select(s.months).where(s.months.c.owner_id == user.user_id))).mappings().one()
+        assert (month["reserved"], month["settled"]) == (600, 600)
+
+
+def test_monthly_unlimited_is_an_explicit_user_override_not_a_global_default():
+    assert UserQuotaLimits().monthly_cost_unlimited is False
+    assert UserQuotaLimits(monthly_cost_micro_usd=None).monthly_cost_unlimited is False
+    with pytest.raises(ValueError, match="monthly_cost_unlimited"):
+        ConfigurationDocument(quotas={"monthly_cost_unlimited": True})
 
 
 @pytest.mark.asyncio

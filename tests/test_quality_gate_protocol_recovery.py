@@ -106,6 +106,41 @@ class TestProtocolValidatorOwnsCoverage:
             if error.startswith("requirement_coverage_missing")
         ]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("corrected", [False, True])
+    async def test_mistyped_supporting_id_uses_bounded_judge_repair_not_research(self, corrected):
+        from open_deep_research.agentscope_runtime.research_quality import NativeResearchQuality
+        from open_deep_research.quality.gate import QualityProtocolError
+        calls = []
+        known = "ev_547b14d1a07950ab252b"
+        typo = "ev_547b14d1a07550ab252b"
+        async def structured(role, prompt, schema, state, *, messages):
+            calls.append(messages[-1].get_text_content())
+            if len(calls) == 2:
+                assert typo in calls[-1] and "protocol" in calls[-1]
+            return HandoffAssessment(accepted=True, relevance=5, source_quality=5,
+                evidence_coverage=5, groundedness=5, reason="Supported by the supplied record.",
+                requirement_coverage=[{"requirement_id": "COV-1", "status": "supported",
+                    "evidence_ids": [known if corrected and len(calls) == 2 else typo]}])
+        config = {"configurable": {"max_structured_output_retries": 2},
+                  "metadata": {"run_config_schema_version": 20, "quality_policy_version": "quality-gate-v6"}}
+        adapter = NativeResearchQuality(SimpleNamespace(structured=structured), lambda: config)
+        async def evaluate():
+            return await adapter.evaluate(HandoffAssessment, "Check supplied evidence.",
+                {"evidence_registry": [{"evidence_id": known, "claim": "The supported fact."}]}, config,
+                span_name="supervisor.evaluate_handoff",
+                protocol_validator=lambda candidate: _handoff_protocol_errors(candidate, checks=_checks(),
+                    policy=_policy(), exclusive_requirement_ids=("COV-1",), evidence_ids=(known,),
+                    validate_coverage_evidence=True))
+        if corrected:
+            result = await evaluate()
+            assert result.accepted and result.protocol_repair_count == 1
+            assert result.requirement_coverage[0].evidence_ids == (known,)
+        else:
+            with pytest.raises(QualityProtocolError):
+                await evaluate()
+        assert len(calls) == 2
+
 
 class TestDeterministicFollowUpTasks:
     def test_hard_rejections_become_requirement_specific_tasks(self):

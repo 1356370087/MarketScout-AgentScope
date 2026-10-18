@@ -22,11 +22,14 @@ async def main(root):
 
     async def stop_after_commit(point):
         if point == "operation_committed":
+            # Cold imports can block the event loop longer than a one-second
+            # lease. Start that expiry window at the crash checkpoint itself.
+            await store.renew(session.lease, 1)
             (root / "model-ready").write_text(point, encoding="utf-8")
             await asyncio.Event().wait()
 
     snapshot = state()
-    session = await RecoverySession.open(store, snapshot.run_id, "owner", ttl=1, failpoint=stop_after_commit)
+    session = await RecoverySession.open(store, snapshot.run_id, "owner", ttl=30, failpoint=stop_after_commit)
     try:
         with session.scope("final_report_generation", 0):
             await NativeReportWriter(ResearchModels(RecordedFactory(), recovery=session))(snapshot, config(root))
