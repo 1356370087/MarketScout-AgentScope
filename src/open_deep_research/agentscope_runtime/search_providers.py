@@ -372,6 +372,38 @@ def bing_query(query, domains, *, simplified=False):
     return " ".join(words[:3] + ["documentation"]) if simplified else " ".join(words[:8])
 
 
+async def deepseek_request(endpoint, payload, config, resources, *, max_bytes):
+    """Read one bounded Search/Fetch response with the active run's credential."""
+    key = resolve_named_api_key("DEEPSEEK_API_KEY", config)
+    if not key:
+        raise SearchProviderError(
+            "missing_credential", diagnostics={"provider_requests": 0}
+        )
+    client = resources.client("deepseek", config)
+    async with client.stream(
+        "POST",
+        endpoint,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json=payload,
+        follow_redirects=False,
+    ) as response:
+        if response.is_redirect:
+            raise SearchProviderError("provider_redirect_refused")
+        response.raise_for_status()
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise SearchProviderError("provider_response_too_large")
+    try:
+        data = json.loads(body)
+    except ValueError as exc:
+        raise SearchProviderError("invalid_provider_response") from exc
+    if not isinstance(data, dict):
+        raise SearchProviderError("invalid_provider_response")
+    return data
+
+
 class SearchService:
     """Provider strategies share filtering, concurrency and deterministic merging."""
 
@@ -444,6 +476,48 @@ class SearchService:
                 "content": item.get("description", ""),
             }
             for item in (data.get("web") or {}).get("results", [])
+        ], ""
+
+    async def _deepseek(self, query: str, request: SearchRequest):
+        # DeepSeek accepts site/date operators in query, not Tavily-style fields.
+        parts = [query]
+        if request.allowed_domains:
+            parts.append(
+                " OR ".join(f"site:{domain}" for domain in request.allowed_domains)
+            )
+        parts.extend(f"-site:{domain}" for domain in request.blocked_domains)
+        if request.published_after:
+            parts.append(f"after:{request.published_after.date().isoformat()}")
+        effective_query = " ".join(parts).strip()
+        if not effective_query or len(effective_query) > 128:
+            raise SearchProviderError(
+                "deepseek_invalid_query", diagnostics={"provider_requests": 0}
+            )
+        payload = {
+            "query": effective_query,
+            "count": min(10, request.candidate_limit),
+            "need_content": self.legacy,
+        }
+        if request.objective.strip() and len(request.objective) <= 128:
+            payload["ori_question"] = request.objective
+        data = await deepseek_request(
+            PROVIDER_URLS["deepseek"],
+            payload,
+            self.config,
+            self.resources,
+            max_bytes=2 * 1024 * 1024,
+        )
+        rows = data.get("results")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise SearchProviderError("invalid_provider_response")
+        return [
+            {
+                "url": row.get("url") or "",
+                "title": row.get("title") or "",
+                "content": row.get("summary") or row.get("snippet") or "",
+                "raw_content": row.get("content") if self.legacy else None,
+            }
+            for row in rows
         ], ""
 
     async def _model_search(self, provider: str, query: str, request: SearchRequest):
@@ -535,7 +609,12 @@ class SearchService:
                     f"specific_domain_query_limit_exceeded:{total}:{MAX_SPECIFIC_DOMAIN_QUERIES}"
                 )
         semaphore = asyncio.Semaphore(self.settings.search_max_concurrency)
-        strategies = {"tavily": self._tavily, "bing": self._bing, "brave": self._brave}
+        strategies = {
+            "tavily": self._tavily,
+            "bing": self._bing,
+            "brave": self._brave,
+            "deepseek": self._deepseek,
+        }
 
         async def run(provider, index, query):
             async with semaphore:

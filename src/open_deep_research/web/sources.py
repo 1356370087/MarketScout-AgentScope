@@ -12,6 +12,7 @@ PROVIDER_URLS = {
     "anthropic": "https://api.anthropic.com/v1/messages",
     "bing": "https://www.bing.com/search",
     "brave": "https://api.search.brave.com/res/v1/web/search",
+    "deepseek": "https://api.deepseek.com/v1/tools/search",
 }
 
 

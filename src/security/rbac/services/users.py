@@ -35,6 +35,7 @@ class UserView:
     authz_version: int
     role_codes: tuple[str, ...]
     created_at: str
+    create_time: str
 
 
 def _to_view(user: User, role_codes: tuple[str, ...]) -> UserView:
@@ -48,7 +49,8 @@ def _to_view(user: User, role_codes: tuple[str, ...]) -> UserView:
         email_verified_at=verified.isoformat() if verified else None,
         authz_version=int(user.authz_version),
         role_codes=role_codes,
-        created_at=user.created_at.isoformat(),
+        created_at=user.created_at or "",
+        create_time=user.create_time.isoformat(),
     )
 
 
@@ -66,7 +68,7 @@ async def list_users(
     limit: int = 50,
 ) -> list[UserView]:
     """Return users (optionally filtered) as read models newest first."""
-    query = select(User).order_by(User.created_at.desc()).limit(min(max(limit, 1), 200))
+    query = select(User).order_by(User.create_time.desc()).limit(min(max(limit, 1), 200))
     if status:
         query = query.where(User.status == status)
     if search:

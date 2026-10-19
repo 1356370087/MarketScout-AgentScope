@@ -83,14 +83,65 @@ async def test_alembic_upgrade_heads_from_empty(test_db_url):
                 "research_document_units", "research_document_segments",
                 "knowledge_entities", "knowledge_entity_aliases",
                 "research_generation_entity_links", "research_document_operations",
-                "knowledge_queries",
+                "knowledge_queries", "research_teams", "research_team_tasks",
+                "research_team_members", "research_team_dependencies",
+                "research_team_plans", "research_team_proposals",
+                "research_coordination_transactions", "research_coordination_events",
+                "research_coordination_receipts", "research_coordination_outbox",
+                "research_coordination_rejections", "platform_state",
+                "platform_profiles", "platform_revisions", "platform_applications",
+                "platform_credentials", "platform_preferences",
+                "platform_credential_versions", "platform_quotas",
+                "platform_quota_months", "platform_quota_operations",
+                "platform_audit_events", "platform_job_bindings",
             ):
                 assert required in tables, f"missing table {required}"
             assert (await conn.execute(text("SELECT count(*) FROM iam_permissions"))).scalar() >= 28
             assert (await conn.execute(text("SELECT count(*) FROM iam_roles WHERE is_system"))).scalar() == 4
-            assert (await conn.execute(text("SELECT count(*) FROM iam_role_permissions"))).scalar() == 43
+            assert (await conn.execute(text("SELECT count(*) FROM iam_role_permissions"))).scalar() == 56
             rev = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-            assert rev == "0015_knowledge_health"
+            assert rev == "0022_team_task_fields"
+            business_tables = (
+                await conn.execute(text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='public' AND table_type='BASE TABLE' "
+                    "AND table_name <> 'alembic_version'"
+                ))
+            ).scalars().all()
+            for table_name in business_tables:
+                columns = {
+                    row[0]
+                    for row in (
+                        await conn.execute(text(
+                            "SELECT column_name FROM information_schema.columns "
+                            "WHERE table_schema='public' AND table_name=:table"
+                        ), {"table": table_name})
+                    ).all()
+                }
+                assert {"id", "create_time", "update_time", "created_at", "updated_at", "is_deleted"} <= columns
+                actor_types = {
+                    row[0]: row[1]
+                    for row in (
+                        await conn.execute(text(
+                            "SELECT column_name, data_type FROM information_schema.columns "
+                            "WHERE table_schema='public' AND table_name=:table "
+                            "AND column_name IN ('created_at','updated_at')"
+                        ), {"table": table_name})
+                    ).all()
+                }
+                assert actor_types == {"created_at": "text", "updated_at": "text"}, table_name
+                primary_key = [
+                    row[0]
+                    for row in (
+                        await conn.execute(text(
+                            "SELECT kcu.column_name FROM information_schema.table_constraints tc "
+                            "JOIN information_schema.key_column_usage kcu USING(constraint_name,table_schema,table_name) "
+                            "WHERE tc.table_schema='public' AND tc.table_name=:table "
+                            "AND tc.constraint_type='PRIMARY KEY' ORDER BY kcu.ordinal_position"
+                        ), {"table": table_name})
+                    ).all()
+                ]
+                assert primary_key == ["id"], table_name
         await engine.dispose()
 
         # The knowledge-base migration must refuse uncleared legacy documents.

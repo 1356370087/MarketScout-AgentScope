@@ -344,9 +344,17 @@ class MemberLoop:
                             if not any(
                                 event.event_id == request_id for event in pending
                             ):
-                                await asyncio.sleep(0.5)
-                                continue
+                                async with self.team.transport.store.pool.acquire() as db:
+                                    applied = await db.fetchval(
+                                        "SELECT applied FROM research_coordination_receipts WHERE event_id=$1 AND recipient=$2",
+                                        request_id, self.member_id,
+                                    )
+                                if not applied:
+                                    await asyncio.sleep(0.5)
+                                    continue
                             for event in pending:
+                                if event.event_id != request_id:
+                                    continue
 
                                 async def checkpoint(db, item):
                                     await db.execute(

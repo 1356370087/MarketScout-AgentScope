@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { EmptyState, SearchSelect, Tabs } from "@/components/ui/workspace";
 import { Disclosure, MetricStrip, StructuredContent, LoadingSkeleton } from "@/components/ui/insight";
-import { TeamBoard } from "./agents/team-board";
+import { TeamBoard, type BoardTask } from "./agents/team-board";
 import { StatusBadge } from "@/components/ui/workspace";
 import { apiFetch } from "@/lib/api";
 
@@ -15,7 +15,7 @@ type Team = {
   execution_mode?: string;
   metrics?: { claim_conflicts: number; message_backlog: number; member_recoveries: number; plan_review_seconds: number | null };
   members: { member_id: string; name: string; purpose: string; status: string; execution_mode?: string; mode_override?: boolean; current_task_id?: string }[];
-  tasks: { task_id: string; version: number; display_title: string; status: string; owner: string | null; admission_status: string; admission_reason?: string; termination?: string; blocked_by: string[]; blocks?: string[]; unresolvedBlockedBy?: string[]; phase?: string; execution_mode?: string; handoff_assessment?: { reason: string; caveats?: string[] } }[];
+  tasks: (BoardTask & { version: number; admission_reason?: string; termination?: string; execution_mode?: string; handoff_assessment?: { reason: string; caveats?: string[] } })[];
   messages: { event_id: string; sender: string; recipients: string[]; delivery_status?: string; payload: { message?: string | Record<string, unknown>; content?: string } }[];
   plans?: { task_id: string; version: number; owner: string; content: Record<string, unknown>; status: string; feedback: string; reviewed_by?: string }[];
   proposals?: { event_id: string; member_id: string; status: string; task_id?: string; content: { subject: string; description: string; rejection_reason?: string } }[];
@@ -81,13 +81,13 @@ export function ResearchTeamPanel({ runId, revision, terminal, onTask, activityT
         {!team && !error && <LoadingSkeleton label="正在读取团队状态" />}
         {tab === "members" && team && <><TeamBoard tasks={team.tasks} members={team.members} onTask={onTask} activityTaskIds={activityTaskIds} />{!team.tasks.length && <EmptyState title="等待研究任务分配" description="任务开始后，会按真实执行状态与交接情况分组。" />}</>}
         {tab === "plans" && <>      {!terminal && team?.tasks.filter((task) => task.phase === "awaiting_human").map((task) => <form key={task.task_id} onSubmit={(event) => { event.preventDefault(); void revise(task); }}>
-        <p>{task.display_title}：计划已达到自动修订上限。请补充指导；成员重新规划后仍须 Lead 审核。</p>
+        <p>{task.subject}：计划已达到自动修订上限。请补充指导；成员重新规划后仍须 Lead 审核。</p>
         <textarea aria-label={`计划修订指导 ${task.task_id}`} value={planFeedback[task.task_id] || ""} maxLength={12000}
           onChange={(event) => setPlanFeedback((value) => ({ ...value, [task.task_id]: event.target.value }))} />
         <button disabled={sending || !planFeedback[task.task_id]?.trim()}>允许继续修订计划</button>
       </form>)}
       {!!team?.plans?.length && <section className="team-records"><h3>成员计划与 Lead 审核</h3>{team.plans.map((plan) => <article key={`${plan.task_id}:${plan.version}`}>
-        <h3>{team.tasks.find((task) => task.task_id === plan.task_id)?.display_title || plan.task_id} · 计划 v{plan.version}</h3><StatusBadge status={plan.status} label={labels[plan.status] || plan.status} />
+        <h3>{team.tasks.find((task) => task.task_id === plan.task_id)?.subject || plan.task_id} · 计划 v{plan.version}</h3><StatusBadge status={plan.status} label={labels[plan.status] || plan.status} />
         <p>成员：{name(plan.owner)}；审核：{plan.reviewed_by || "待 Lead 审核"}</p>
         <StructuredContent value={plan.content} />
         {plan.feedback && <p>审核意见：{plan.feedback}</p>}
@@ -95,7 +95,7 @@ export function ResearchTeamPanel({ runId, revision, terminal, onTask, activityT
 {!team?.plans?.length && <EmptyState title="尚无成员计划" description="计划与审核记录会显示在这里。" />}</>}
         {tab === "quality" && <>      <section className="team-records"><h3>质量评估与补证记录</h3>
         {team?.tasks.filter((task) => task.handoff_assessment || task.admission_reason).map((task) => <article key={task.task_id}>
-          <h3>{task.display_title} · {labels[task.admission_status] || task.admission_status}</h3>
+          <h3>{task.subject} · {labels[task.admission_status] || task.admission_status}</h3>
           {task.admission_reason && <p>任务准入原因：{task.admission_reason === "research_execution_not_completed: exceed_max_iters" ? "研究达到迭代上限，未正常完成；质量评分通过也不会自动解锁下游。" : task.admission_reason === "quality_evaluator_unavailable" ? "质量评估不可用，结果尚未准入。" : task.admission_reason}</p>}
           <p>{task.handoff_assessment?.reason}</p>
           {!!task.handoff_assessment?.caveats?.length && <p>保留意见：{task.handoff_assessment.caveats.join("；")}</p>}

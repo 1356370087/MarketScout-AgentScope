@@ -88,7 +88,7 @@ async def materialize_proxy(store, row):
     """保留历史物理部署；配置文件中的秘密仍是加密数据或进程环境引用。"""
     async with store.engine.connect() as conn:
         retained = [dict(item) for item in (await conn.execute(select(s.revisions).where(s.revisions.c.status != "draft")
-            .order_by(s.revisions.c.created_at))).mappings()]
+            .order_by(s.revisions.c.create_time))).mappings()]
     routes, envelopes, fallback_routes, context_fallbacks = {}, {}, [], []
     for revision in retained:
         doc = revision["document"]

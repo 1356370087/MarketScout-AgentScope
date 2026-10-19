@@ -96,7 +96,17 @@ async def current_count(
     With ``window_seconds`` the count is reported as zero once the window has
     elapsed (the stored row is left as-is; the next consume resets it).
     """
-    row = await db.get(RateLimit, (bucket, identity))
+    # The schema convention migration gives every business table a surrogate
+    # ``id`` primary key while retaining ``(bucket, identity)`` as the unique
+    # rate-limit key.  ``Session.get`` only accepts the mapped primary key, so
+    # use the business key consistently with the locked read path.
+    result = await db.execute(
+        select(RateLimit).where(
+            RateLimit.bucket == bucket,
+            RateLimit.identity == identity,
+        )
+    )
+    row = result.scalar_one_or_none()
     if row is None:
         return 0
     if window_seconds is not None:

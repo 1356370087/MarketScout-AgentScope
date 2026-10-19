@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func, update
 from . import schema as s
 from .quota import current_period
-from .store import get_store, now
+from .store import audit_now, get_store, now
 
 
 async def import_native_usage(native_store):
@@ -44,8 +44,9 @@ async def import_native_usage(native_store):
                 created = (await conn.execute(store.upsert(s.charges).values(operation_id=identity,
                     owner_id=row["user_id"], period=period, status="unknown" if unknown else "settled",
                     reserved=reserve, actual=None if unknown else actual, source=row["kind"],
-                    detail={"imported": True}, created_at=datetime.fromtimestamp(row["started_at"], timezone.utc).isoformat(),
-                    updated_at=now()).on_conflict_do_nothing().returning(s.charges.c.operation_id))).scalar_one_or_none()
+                    detail={"imported": True}, create_time=datetime.fromtimestamp(row["started_at"], timezone.utc),
+                    update_time=audit_now(), created_at=row["user_id"], updated_at=row["user_id"]
+                    ).on_conflict_do_nothing().returning(s.charges.c.operation_id))).scalar_one_or_none()
                 if not created:
                     continue
                 await conn.execute(store.upsert(s.months).values(owner_id=row["user_id"], period=period,

@@ -22,7 +22,7 @@ deny_write = []
 mode = "gateway-only"
 allow_domains = []
 # 启用 Web 搜索时，按实际渠道配置服务域名：api.tavily.com、www.bing.com、
-# api.search.brave.com；使用外部提取时另需 api.firecrawl.dev 或 api.tavily.com。
+# api.search.brave.com、api.deepseek.com；外部提取需对应的 api.firecrawl.dev、api.tavily.com 或 api.deepseek.com。
 # 服务域名的准入不代表搜索结果网页获准访问，网页仍按来源边界和出网审批处理。
 deny_domains = []
 allow_ports = [80, 443]

@@ -59,52 +59,43 @@ async def mutate_task(db, identity, kind, payload):
         return {"claimed": True, **dict(row)}
     if identity.role != "lead":
         raise PermissionError("team_lead_required")
-    if kind == "task_assign":
-        target = await db.fetchval(
-            """SELECT member_id FROM research_team_members WHERE run_id=$1
-               AND (member_id=$2 OR name=$2) AND member_id<>'lead' AND status NOT IN ('closed','stopping')""",
-            run,
-            payload["owner"],
-        )
-        if target is None:
-            raise ValueError("unknown_member")
-        version = await db.fetchval(
-            """UPDATE research_team_tasks SET owner=$3,version=version+1
-               WHERE run_id=$1 AND task_id=$2 AND status='pending' AND version=$4 RETURNING version""",
-            run,
-            task_id,
-            target,
-            payload["version"],
-        )
-        if version is None:
-            raise ValueError("task_version_conflict")
-        return {"task_id": task_id, "owner": target, "version": version}
-    if kind == "task_update":
+    if kind in {"task_assign", "task_update"}:
+        target = None
+        if payload.get("owner"):
+            target = await db.fetchval(
+                """SELECT member_id FROM research_team_members WHERE run_id=$1
+                   AND (member_id=$2 OR name=$2) AND member_id<>'lead'
+                   AND status NOT IN ('closed','stopping','failed')""",
+                run, payload["owner"],
+            )
+            if target is None:
+                raise ValueError("unknown_member")
         row = await db.fetchrow(
-            """UPDATE research_team_tasks SET version=version+1 WHERE run_id=$1 AND task_id=$2
-               AND status='pending' AND version=$3 RETURNING snapshot""",
-            run,
-            task_id,
-            payload["version"],
+            """UPDATE research_team_tasks SET version=version+1,
+               owner=CASE WHEN $4 THEN $5::text ELSE owner END,
+               subject=coalesce($6,subject),description=coalesce($7,description)
+               WHERE run_id=$1 AND task_id=$2 AND status='pending' AND version=$3
+               RETURNING snapshot,version,owner""",
+            run, task_id, payload["version"], "owner" in payload, target,
+            payload.get("subject"), payload.get("description"),
         )
         if row is None:
             raise ValueError("task_version_conflict_or_started")
         snapshot = json.loads(row["snapshot"])
-        for field, target in (
-            ("subject", "display_title"),
-            ("description", "research_topic"),
-            ("activeForm", "activeForm"),
-        ):
-            if field in payload and payload[field] is not None:
-                snapshot[target] = payload[field]
+        if payload.get("activeForm") is not None:
+            snapshot["activeForm"] = payload["activeForm"]
         await db.execute(
-            "UPDATE research_team_tasks SET snapshot=$3::jsonb,metadata=metadata || $4::jsonb WHERE run_id=$1 AND task_id=$2",
+            """UPDATE research_team_tasks SET snapshot=$3::jsonb,
+               metadata=(metadata || $4::jsonb) - ARRAY(
+                   SELECT key FROM jsonb_each($4::jsonb) WHERE value='null'::jsonb)
+               WHERE run_id=$1 AND task_id=$2""",
             run,
             task_id,
             json.dumps(snapshot),
             json.dumps(payload.get("metadata") or {}),
         )
-        return {"task_id": task_id}
+        return {"task_id": task_id, "owner": row["owner"], "version": row["version"],
+                "updated_fields": [key for key in payload if key not in {"task_id", "version"}]}
     raise ValueError("unknown_task_mutation")
 
 
@@ -327,9 +318,22 @@ async def apply_message(db, identity, event):
             raise ValueError("shutdown_request_not_current")
         if not body["approve"]:
             await db.execute(
-                """UPDATE research_team_members SET status='idle',
+                """UPDATE research_team_members m SET status=coalesce((
+                    SELECT coalesce(t.phase,'executing') FROM research_team_tasks t
+                    WHERE t.run_id=m.run_id AND t.owner=m.member_id AND t.status='running'), 'idle'),
                 session=(session-'shutdown_request') || $3::jsonb WHERE run_id=$1 AND member_id=$2""",
                 run,
                 sender,
                 json.dumps({"shutdown_declined": body["reason"]}),
+            )
+        else:
+            await db.execute(
+                """UPDATE research_team_members SET session=session || $3::jsonb
+                   WHERE run_id=$1 AND member_id=$2""",
+                run, sender, json.dumps({"shutdown_applied": body["request_id"], "exit_reason": "graceful_shutdown"}),
+            )
+            await db.execute(
+                """UPDATE research_team_tasks SET owner=NULL,version=version+1
+                   WHERE run_id=$1 AND owner=$2 AND status='pending'""",
+                run, sender,
             )

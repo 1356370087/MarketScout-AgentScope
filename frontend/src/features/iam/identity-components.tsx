@@ -20,5 +20,5 @@ export function PermissionMatrix({ roles, permissions }: { roles: Role[]; permis
 }
 
 export function AuditItem({ event }: { event: Audit }) {
-  return <article className="identity-audit"><header><b>{event.action}</b><time>{new Date(event.created_at).toLocaleString("zh-CN")}</time></header><p>{event.actor_email || "系统"}{event.target_user_id && ` · 成员 ${event.target_user_id}`}</p>{event.detail && Object.keys(event.detail).length > 0 && <Disclosure title="变更详情"><StructuredContent value={event.detail} /></Disclosure>}</article>;
+  return <article className="identity-audit"><header><b>{event.action}</b><time>{new Date(event.create_time).toLocaleString("zh-CN")}</time></header><p>{event.actor_email || "系统"}{event.target_user_id && ` · 成员 ${event.target_user_id}`}</p>{event.detail && Object.keys(event.detail).length > 0 && <Disclosure title="变更详情"><StructuredContent value={event.detail} /></Disclosure>}</article>;
 }

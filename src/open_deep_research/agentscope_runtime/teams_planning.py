@@ -40,6 +40,7 @@ async def wait_for_plan(worker, researcher, snapshot):
                     {
                         "instruction": "你是成员，不是 Lead。仅规划当前 task 与 requirement_ids 对应的研究，不建队、不派发任务、不规划整个团队或最终报告。生成计划期间只读取已有材料，不执行搜索或抓取；计划应描述获批后实际执行的步骤，可列出获批后需要的搜索、抓取工具与来源，不要误写为整个研究禁止搜索。明确步骤、拟使用来源和工具、预算估算及验收标准。计划会交由 Lead 审核。requirement_ids 由运行时绑定，不可扩大职责。",
                         "task": snapshot["research_topic"],
+                        "member_context": snapshot.get("member_context", {}),
                         "requirement_ids": snapshot["requirement_ids"],
                         "requirements": [
                             item

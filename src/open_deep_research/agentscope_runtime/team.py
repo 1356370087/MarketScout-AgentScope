@@ -365,7 +365,7 @@ class NativeResearchTeam:
         async with self.transport.store.pool.acquire() as db, db.transaction():
             await self.transport.guard(db)
             await db.execute(
-                "UPDATE research_team_members SET session=$3::jsonb WHERE run_id=$1 AND member_id=$2",
+                "UPDATE research_team_members SET session=session || $3::jsonb WHERE run_id=$1 AND member_id=$2",
                 self.lease.run_id,
                 member_id,
                 json.dumps({"session_id": session_id, "task_id": task_id}),
@@ -381,6 +381,19 @@ class NativeResearchTeam:
                 self.lease.user_id, agent_id, session_id, session.state
             )
         return session
+
+    async def member_context(self, member_id):
+        """The persisted role and team goal accompany every member model call."""
+        async with self.transport.store.pool.acquire() as db:
+            row = await db.fetchrow(
+                """SELECT m.name,m.purpose,t.name AS team_name,
+                   lead.session->>'description' AS team_description
+                   FROM research_team_members m JOIN research_teams t ON t.run_id=m.run_id
+                   JOIN research_team_members lead ON lead.run_id=m.run_id AND lead.member_id='lead'
+                   WHERE m.run_id=$1 AND m.member_id=$2""",
+                self.lease.run_id, member_id,
+            )
+        return dict(row)
 
     async def pending(self, member_id):
         """Read control-first durable input; no ack-on-read or legacy pool lookup."""

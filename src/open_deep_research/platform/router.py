@@ -17,7 +17,7 @@ from . import schema as s
 from .contracts import (BootstrapRequest, ConfigurationDocument, DraftRequest, UpdateDraft, PublishRequest,
     PreviewRequest, PreferencesRequest, CredentialRequest, CredentialReplacement, ImportRequest,
     UserQuotaLimits, MaintenanceRequest)
-from .store import get_store, PlatformError, require, check_scope, now
+from .store import audit_now, get_store, PlatformError, require, check_scope, now
 
 class PlatformRoute(APIRoute):
     def get_route_handler(self):
@@ -336,11 +336,12 @@ async def replace_credential(identity: str, body: CredentialReplacement, user=De
         payload = cipher.encrypt(f"{identity}:{version}:{row['owner_id'] or 'global'}", body.secret)
         changed = await conn.execute(update(s.credentials).where(s.credentials.c.id == identity,
             s.credentials.c.version == body.expected_version).values(version=version, ciphertext=payload,
-                key_id=cipher.key_id, updated_at=now()))
+                key_id=cipher.key_id, update_time=audit_now(), updated_at=user.user_id))
         if changed.rowcount != 1:
             raise PlatformError("credential_version_conflict", 409)
         await conn.execute(insert(s.credential_versions).values(credential_id=identity, version=version,
-            ciphertext=payload, key_id=cipher.key_id, created_at=now()))
+            ciphertext=payload, key_id=cipher.key_id, create_time=audit_now(), update_time=audit_now(),
+            created_at=user.user_id, updated_at=user.user_id))
         await store.audit(conn, user.user_id, "credential.replaced", identity, {"version": version})
         return store.public_credential(await store.credential(identity, conn=conn))
 
@@ -350,7 +351,8 @@ async def disable_credential(identity: str, user=Depends(real_user)):
     store = get_store()
     async with store.engine.begin() as conn:
         await _owned_credential(identity, user, conn, store)
-        await conn.execute(update(s.credentials).where(s.credentials.c.id == identity).values(disabled=True, updated_at=now()))
+        await conn.execute(update(s.credentials).where(s.credentials.c.id == identity).values(
+            disabled=True, update_time=audit_now(), updated_at=user.user_id))
         await store.audit(conn, user.user_id, "credential.disabled", identity)
     return {"disabled": True}
 
@@ -383,7 +385,7 @@ async def set_quotas(owner_id: str, body: UserQuotaLimits, user=Depends(real_use
 async def audit(limit: int = 100, user=Depends(real_user)):
     require(user, "platform.audit.read")
     async with get_store().engine.connect() as conn:
-        rows = (await conn.execute(select(s.audit).order_by(s.audit.c.created_at.desc()).limit(min(max(1, limit), 500)))).mappings()
+        rows = (await conn.execute(select(s.audit).order_by(s.audit.c.create_time.desc()).limit(min(max(1, limit), 500)))).mappings()
         return {"items": [dict(row) for row in rows]}
 
 

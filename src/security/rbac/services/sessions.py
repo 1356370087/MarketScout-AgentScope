@@ -91,6 +91,8 @@ async def create_session(
         ip_address=ip_address,
         absolute_expires_at=now + timedelta(seconds=settings.session_absolute_ttl),
         last_activity_at=now,
+        created_at=str(user.id),
+        updated_at=str(user.id),
     )
     db.add(session)
     await db.flush()
@@ -355,7 +357,7 @@ async def list_user_sessions(db: AsyncSession, user_id: str) -> list[Session]:
     result = await db.execute(
         select(Session)
         .where(Session.user_id == str(user_id))
-        .order_by(Session.created_at.desc())
+        .order_by(Session.create_time.desc())
     )
     return list(result.scalars().all())
 

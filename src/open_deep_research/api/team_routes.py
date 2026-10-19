@@ -112,12 +112,12 @@ def build_team_router(service):
                     run_id,
                 )
                 plans = await db.fetch("SELECT task_id,version,owner,request_id,content,status,feedback,reviewed_by FROM research_team_plans WHERE run_id=$1 ORDER BY task_id,version", run_id)
-                proposals = await db.fetch("SELECT event_id,member_id,content,status,task_id FROM research_team_proposals WHERE run_id=$1 ORDER BY created_at", run_id)
+                proposals = await db.fetch("SELECT event_id,member_id,content,status,task_id FROM research_team_proposals WHERE run_id=$1 ORDER BY create_time,event_id", run_id)
                 metrics = await db.fetchrow("""SELECT
                     (SELECT count(*) FROM research_coordination_transactions WHERE run_id=$1 AND event->>'type'='task_claim' AND result->>'claimed'='false') AS claim_conflicts,
                     (SELECT count(*) FROM research_coordination_outbox o JOIN research_coordination_events e USING(event_id) WHERE e.run_id=$1 AND o.published_at IS NULL) AS message_backlog,
                     (SELECT coalesce(sum(greatest(execution_epoch-1,0)),0) FROM research_team_members WHERE run_id=$1) AS member_recoveries,
-                    (SELECT avg(extract(epoch FROM reviewed_at-created_at)) FROM research_team_plans WHERE run_id=$1 AND reviewed_at IS NOT NULL) AS plan_review_seconds
+                    (SELECT avg(extract(epoch FROM reviewed_at-create_time)) FROM research_team_plans WHERE run_id=$1 AND reviewed_at IS NOT NULL) AS plan_review_seconds
                     """, run_id)
             from types import SimpleNamespace
             from open_deep_research.tasks.team_service import TeamService, task_view
@@ -199,9 +199,6 @@ def build_team_router(service):
             team = getattr(service.pipeline_factory, "active", {}).get(run_id, {}).get("team")
             if team is None:
                 raise HTTPException(409, "team_run_not_active")
-            if request.owner and any((request.addBlocks, request.addBlockedBy, request.removeBlocks, request.removeBlockedBy)):
-                raise HTTPException(400, "assign_and_dependency_edit_require_separate_versions")
-            kind = "task_assign" if request.owner else "task_update"
-            return await team.command("human-task:" + uuid4().hex, kind, request.model_dump(exclude_none=True))
+            return await team.command("human-task:" + uuid4().hex, "task_update", request.model_dump(exclude_unset=True))
 
     return router

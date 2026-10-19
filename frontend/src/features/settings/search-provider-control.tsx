@@ -2,7 +2,7 @@
 
 import { effectiveSearchProviders, WEB_SEARCH_PROVIDERS } from "@/lib/settings";
 
-const labels = { tavily: "Tavily", openai: "OpenAI", anthropic: "Anthropic", bing: "Bing", brave: "Brave" };
+const labels = { tavily: "Tavily", openai: "OpenAI", anthropic: "Anthropic", bing: "Bing", brave: "Brave", deepseek: "DeepSeek" };
 
 export function SearchProviderControl({ value, legacy, onChange }: {
   value: unknown; legacy: unknown; onChange: (value: string[] | null) => void;

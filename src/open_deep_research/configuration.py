@@ -320,6 +320,7 @@ class SearchAPI(Enum):
     TAVILY = "tavily"
     BING = "bing"
     BRAVE = "brave"
+    DEEPSEEK = "deepseek"
     NONE = "none"
 
 
@@ -770,6 +771,7 @@ class Configuration(BaseModel):
                     {"label": "Anthropic Native Web Search", "value": SearchAPI.ANTHROPIC.value},
                     {"label": "Bing", "value": SearchAPI.BING.value},
                     {"label": "Brave", "value": SearchAPI.BRAVE.value},
+                    {"label": "DeepSeek", "value": SearchAPI.DEEPSEEK.value},
                     {"label": "None", "value": SearchAPI.NONE.value}
                 ]
             }
@@ -1487,7 +1489,7 @@ class Configuration(BaseModel):
     @classmethod
     def validate_fetch_backends(cls, values, info):
         """Normalize the historical Tavily alias at the configuration boundary."""
-        allowed = {"tavily_extract", "firecrawl"}
+        allowed = {"tavily_extract", "firecrawl", "deepseek"}
         if info.field_name == "fetch_backend_order":
             allowed |= {"local", "playwright"}
         normalized = ["tavily_extract" if value == "tavily" else value for value in values]

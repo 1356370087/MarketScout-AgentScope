@@ -469,6 +469,7 @@ def test_gateway_registration_collects_only_allowed_environment_credentials(
     monkeypatch.setenv("GET_API_KEYS_FROM_CONFIG", "false")
     monkeypatch.setenv("TAVILY_API_KEY", "tavily-secret")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-secret")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-secret")
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-be-forwarded")
 
     frozen, credentials = gateway_client.split_gateway_registration(
@@ -478,6 +479,7 @@ def test_gateway_registration_collects_only_allowed_environment_credentials(
     assert credentials == {
         "TAVILY_API_KEY": "tavily-secret",
         "FIRECRAWL_API_KEY": "firecrawl-secret",
+        "DEEPSEEK_API_KEY": "deepseek-secret",
     }
     assert "apiKeys" not in frozen["configurable"]
 

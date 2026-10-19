@@ -306,7 +306,7 @@ async def list_audit_events(
     db: AsyncSession = Depends(get_transactional_db),
 ) -> list[AuditEventOut]:
     """Query the audit log newest first."""
-    query = select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)
+    query = select(AuditEvent).order_by(AuditEvent.create_time.desc()).limit(limit)
     if action:
         query = query.where(AuditEvent.action == action)
     if target_user_id:
@@ -321,7 +321,8 @@ async def list_audit_events(
             action=event.action,
             detail=event.detail,
             ip_address=event.ip_address,
-            created_at=event.created_at.isoformat(),
+            created_at=event.created_at or "",
+            create_time=event.create_time.isoformat(),
         )
         for event in result.scalars().all()
     ]

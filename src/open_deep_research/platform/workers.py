@@ -7,7 +7,7 @@ import os
 from sqlalchemy import select, func
 from . import schema as s, runtime
 from .components import config_directory, policy_path, execution_document, _atomic_json
-from .store import get_store, now, PlatformError
+from .store import audit_now, get_store, now, PlatformError
 from .accounting import UncertainServiceCall
 
 
@@ -85,7 +85,7 @@ async def job_context(component, identity, owner):
     async with store.engine.begin() as conn:
         active = await store.active(conn)
         await conn.execute(store.upsert(s.job_bindings).values(job_id=key, owner_id=owner,
-            revision_id=active["id"], created_at=now()).on_conflict_do_nothing())
+            revision_id=active["id"], create_time=audit_now()).on_conflict_do_nothing())
         revision = await conn.scalar(select(s.job_bindings.c.revision_id).where(s.job_bindings.c.job_id == key))
         pending = await conn.scalar(select(func.count()).select_from(s.charges).where(s.charges.c.source == key,
             s.charges.c.status.in_(["unknown", "reserved"])))

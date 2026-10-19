@@ -1,7 +1,7 @@
 """原生搜索提供商与摘要调用（T029）。
 
-在 AgentScope 运行时中提供四个 ``search_api`` 分支（tavily/openai/anthropic/
-none）的搜索工具，不依赖 LangChain：
+在 AgentScope 运行时中提供 Tavily、OpenAI、Anthropic、Bing、Brave 与 DeepSeek
+搜索工具，支持显式关闭提供商搜索，不依赖 LangChain：
 
 - 并行多查询搜索（``asyncio.gather``）、按 URL 去重保留首见顺序、输出格式
   与旧实现一致。

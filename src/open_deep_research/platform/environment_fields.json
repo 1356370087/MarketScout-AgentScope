@@ -90,7 +90,7 @@
     "secret": true
   },
   "DEEPSEEK_API_KEY": {
-    "description": "DeepSeek API Key；YAML 启用 deepseek/* 部署时填写。",
+    "description": "DeepSeek API Key；默认留空，启用 DeepSeek 模型、搜索或网页抓取时必填。Search/Fetch 使用官方 /v1/tools/ 接口，无需配置搜索模型。",
     "bootstrap": false,
     "secret": true
   },
@@ -160,13 +160,13 @@
     "secret": false
   },
   "SEARCH_API": {
-    "description": "兼容单搜索服务设置；默认 tavily，可选 tavily、openai、anthropic、bing、brave、none。 SEARCH_PROVIDERS 未填写时使用此项；none 仅关闭提供商搜索，不代表禁止指定 URL 抓取。",
+    "description": "兼容单搜索服务设置；默认 tavily，可选 tavily、openai、anthropic、bing、brave、deepseek、none。SEARCH_PROVIDERS 未填写时使用此项；none 仅关闭提供商搜索，不代表禁止指定 URL 抓取。",
     "bootstrap": false,
     "secret": false,
     "default": "tavily"
   },
   "SEARCH_PROVIDERS": {
-    "description": "并行搜索服务列表，填写 JSON 数组，例如 [\"tavily\",\"bing\",\"brave\"]。 默认留空，沿用 SEARCH_API；[] 关闭提供商搜索。各渠道分别使用自己的凭据与配额。",
+    "description": "并行搜索服务列表，填写 JSON 数组，例如 [\"tavily\",\"deepseek\"]。默认留空，沿用 SEARCH_API；[] 关闭提供商搜索。DeepSeek 使用 DEEPSEEK_API_KEY，查询含站点和日期条件不超过 128 个 Unicode 字符。",
     "bootstrap": false,
     "secret": false
   },
@@ -246,12 +246,12 @@
     "secret": false
   },
   "FETCH_BACKEND_ORDER": {
-    "description": "网页获取后端的执行顺序，使用 JSON 数组；仅在允许回退的失败类型下尝试下一项。 默认先本地 HTTP，再受管浏览器、Tavily Extract 和 Firecrawl。",
+    "description": "网页获取后端的执行顺序，使用 JSON 数组；仅在允许回退的失败类型下尝试下一项。默认先本地 HTTP，再受管浏览器、Tavily Extract 和 Firecrawl。可选 deepseek，需同时在 EXTERNAL_EXTRACT_BACKENDS 中启用。",
     "bootstrap": false,
     "secret": false
   },
   "EXTERNAL_EXTRACT_BACKENDS": {
-    "description": "允许的外部提取器，使用 JSON 数组；默认两项，实际顺序由 FETCH_BACKEND_ORDER 决定。 需要对应密钥和出网授权；兼容旧值 tavily，内部统一为 tavily_extract。",
+    "description": "允许的外部提取器，使用 JSON 数组；默认 Tavily Extract 和 Firecrawl，实际顺序由 FETCH_BACKEND_ORDER 决定。可选 deepseek，需 DEEPSEEK_API_KEY 和出网授权，返回 Markdown 正文但不返回重定向后的 URL；兼容旧值 tavily，内部统一为 tavily_extract。",
     "bootstrap": false,
     "secret": false
   },

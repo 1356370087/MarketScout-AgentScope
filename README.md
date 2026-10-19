@@ -717,13 +717,17 @@ Trace Payload 默认为 `preview`，常见凭据和 Bearer Token 默认脱敏。
 | `report_review_model` / `REPORT_REVIEW_MODEL` | 空 | Reviewer 模型；为空时复用 `quality_evaluation_model` |
 | `report_review_max_revisions` / `REPORT_REVIEW_MAX_REVISIONS` | `1` | Reviewer 触发后允许的有界修订轮数（0-3） |
 | `model_fallbacks` / `MODEL_FALLBACKS` | `{}` | 按八个模型角色配置候选链；默认关闭，仅在限流、瞬态错误或模型不可用时切换 |
-| `search_api` / `SEARCH_API` | `tavily` | `tavily`、`openai`、`anthropic` 或 `none` |
+| `search_api` / `SEARCH_API` | `tavily` | `tavily`、`openai`、`anthropic`、`bing`、`brave`、`deepseek` 或 `none` |
 | `max_concurrent_research_units` | `5` | 同步研究单元最大并发 |
 | `max_researcher_iterations` | `6` | Supervisor 最大研究迭代 |
 | `max_react_tool_calls` | `10` | 单个 Researcher 最大工具循环 |
 | `allow_clarification` | `true` | 是否允许研究前向用户澄清 |
 
 所选 Researcher 模型必须与搜索方式兼容，并支持 Tool Calling；参与结构化计划、摘要或质量评估的模型还需要支持相应的 Structured Output。
+
+DeepSeek 网页资源使用独立的 [Search / Fetch API](https://api-docs.deepseek.com/zh-cn/guides/search)，与研究模型无关。配置 `DEEPSEEK_API_KEY`，设置 `SEARCH_PROVIDERS=["deepseek"]` 可使用搜索，也可与 Tavily、Bing 等渠道组合。启用抓取需将 `deepseek` 同时加入 `FETCH_BACKEND_ORDER` 和 `EXTERNAL_EXTRACT_BACKENDS`；仅使用 DeepSeek 抓取时，两项均设为 `["deepseek"]`。搜索词连同站点和日期条件最多 128 个 Unicode 字符，超长会返回该渠道的查询错误；正文抓取返回 Markdown，服务不提供重定向后的 URL。资源在 Gateway 模式装配，仍需满足其数据库、模型后端和出网配置前提。
+
+真实 API 集成测试位于 `tests/as_runtime/test_deepseek_web.py`。提供环境变量 `DEEPSEEK_API_KEY`、`DEEPSEEK_WEB_LIVE=1` 并设置模块搜索路径后，执行 `uv run pytest tests/as_runtime/test_deepseek_web.py -k live -s`，会调用 Search 和 Fetch 并验证项目工具返回的正文；未显式启用时跳过付费接口，其余契约测试保持离线。
 
 模型标识、provider 推断、API key/base URL 和兼容参数统一由 `model_resolution.py` 解析。`model_fallbacks` 可配置 `supervisor`、`researcher`、`summarization`、`message_summary`、`compression`、`final_report`、`quality_evaluation`、`report_review`；候选链在运行开始时冻结，跨 provider 切换前会清理专有消息元数据。切换会记录到 Trace，并以 `query.model_fallback` 公共事件暴露 `{turn, from_model, to_model, reason}`。
 

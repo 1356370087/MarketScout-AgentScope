@@ -259,7 +259,8 @@ async def list_sessions(
     return [
         SessionItem(
             id=str(session.id),
-            created_at=session.created_at.isoformat(),
+            created_at=session.created_at or "",
+            create_time=session.create_time.isoformat(),
             last_activity_at=session.last_activity_at.isoformat(),
             user_agent=session.user_agent,
             ip_address=session.ip_address,

@@ -1,7 +1,7 @@
 """Lead and member tools share one authenticated team service."""
 
 from typing import Literal
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from open_deep_research.agentscope_runtime.research_agents import (
     _control_tool,
@@ -27,9 +27,10 @@ class SpawnInput(BaseModel):
 
 
 class TaskCreateInput(BaseModel):
-    research_topic: str = Field(default="", description=_Topic.model_fields["research_topic"].description)
-    subject: str | None = None
-    description: str | None = None
+    model_config = ConfigDict(extra="forbid")
+    research_topic: str = Field(default="", exclude=True)
+    subject: str = Field(min_length=1, description='简短、明确的祈使句标题，例如“核实市场规模”。')
+    description: str = Field(min_length=1, description=_Topic.model_fields["research_topic"].description)
     activeForm: str | None = None
     metadata: dict = Field(default_factory=dict)
     requirement_ids: list[str] = Field(
@@ -43,6 +44,7 @@ class TaskCreateInput(BaseModel):
     @classmethod
     def model_json_schema(cls, **kwargs):
         schema = super().model_json_schema(**kwargs)
+        schema["properties"].pop("research_topic", None)
         # Keep the model-facing value a string: the configured model emits
         # literal "null" for either nullable schema form. Empty maps to SQL NULL.
         owner = schema["properties"]["owner"]
@@ -50,13 +52,32 @@ class TaskCreateInput(BaseModel):
         owner["type"] = "string"
         return schema
 
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_task_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        legacy = value.get("research_topic")
+        if legacy and value.get("description") and legacy != value["description"]:
+            raise ValueError("conflicting_task_descriptions")
+        # Previous frozen tool calls used research_topic or a subject-only input.
+        if "description" not in value:
+            value["description"] = legacy or value.get("subject", "")
+        if "subject" not in value:
+            value["subject"] = legacy or value.get("description", "")
+        return value
+
+    @field_validator("subject", "description")
+    @classmethod
+    def nonempty_content(cls, value):
+        if not value.strip():
+            raise ValueError("task_content_required")
+        return value
+
     @model_validator(mode="after")
     def task_description(self):
-        self.research_topic = (
-            self.description or self.research_topic or self.subject or ""
-        )
-        if not self.research_topic.strip():
-            raise ValueError("task_description_required")
+        self.research_topic = self.description
         if self.owner == "null":
             raise ValueError('自主认领请传空字符串 owner=""，不能传字符串 "null"。')
         if self.owner == "":
@@ -65,9 +86,10 @@ class TaskCreateInput(BaseModel):
 
 
 class TaskUpdateInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     task_id: str
-    version: int
-    owner: str | None = None
+    version: int = Field(ge=1)
+    owner: str | None = Field(default=None, description='不传则保留负责人；传成员 ID 或姓名进行分配；空字符串或 null 将待办任务放回公共任务池。')
     subject: str | None = None
     description: str | None = None
     activeForm: str | None = None
@@ -77,10 +99,40 @@ class TaskUpdateInput(BaseModel):
     removeBlocks: list[str] = Field(default_factory=list, description="移除反向依赖；未解除的阻塞必须为同一下游在本次调用中加入替代前置，否则事务拒绝。补证优先更新下游的 removeBlockedBy/addBlockedBy。")
     removeBlockedBy: list[str] = Field(default_factory=list, description="移除前置依赖；尚未完成且质量接纳的前置不可单独删除。先创建补证任务，再在同一次调用中 addBlockedBy 新任务并 removeBlockedBy 旧任务。")
 
+    @field_validator("subject", "description")
+    @classmethod
+    def nonempty_content(cls, value):
+        if value is not None and not value.strip():
+            raise ValueError("task_content_required")
+        return value
+
+    @field_validator("owner")
+    @classmethod
+    def normalize_owner(cls, value):
+        if value == "null":
+            raise ValueError('解除分配请传空字符串或 null，不能传字符串 "null"。')
+        return value or None
+
 
 class ProposalDecision(BaseModel):
     proposal_id: str
     reason: str
+
+
+def dependency_synthesis_ids(input, tasks, coverage):
+    """Permit a synthesis only within the factual scope of its predecessors."""
+    if not input.blockedBy:
+        return None
+    from open_deep_research.quality.contract import canonicalize_requirement_ids, validate_requirement_ids
+
+    by_id = {task["task_id"]: task for task in tasks}
+    if any(task_id not in by_id for task_id in input.blockedBy):
+        raise ValueError("dependency_task_not_found")
+    predecessor_ids = {rid for task_id in input.blockedBy for rid in by_id[task_id]["requirement_ids"]}
+    ids = canonicalize_requirement_ids(input.requirement_ids, coverage)
+    if not ids or not set(ids).issubset(predecessor_ids):
+        return None
+    return validate_requirement_ids(ids, coverage, required=True, allow_cross_dimension=True)
 
 
 class SendMessageTool:
@@ -167,27 +219,9 @@ def lead_tools(host, cfg):
         return ToolResult(output={"member_id": member})
 
     async def update(input, context, progress):
-        value = input.model_dump(exclude_none=True)
-        if input.owner:
-            # Assignment and graph edits are explicit separate operations, each CAS guarded.
-            if any(
-                value.get(k)
-                for k in (
-                    "addBlocks",
-                    "addBlockedBy",
-                    "removeBlocks",
-                    "removeBlockedBy",
-                )
-            ):
-                raise ValueError("assign_and_dependency_edit_require_separate_versions")
-            return ToolResult(
-                output=await team.command(
-                    "assign:" + context.tool_call_id, "task_assign", value
-                )
-            )
         return ToolResult(
             output=await team.command(
-                "update:" + context.tool_call_id, "task_update", value
+                "update:" + context.tool_call_id, "task_update", input.model_dump(exclude_unset=True)
             )
         )
 

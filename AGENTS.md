@@ -75,6 +75,16 @@ pnpm dev
 - 本项目的 PostgreSQL 统一使用远程服务 `172.22.208.30:5432`，连接用户名为 `postgres`。密码仅保存在未纳入版本控制的本地环境文件中，不写入本文、示例配置或日志。
 - 项目启动、Docker 部署及 E2E 验证不得自行部署或启动本地 PostgreSQL/pgvector 容器；应用数据库、AgentScope 恢复库及 LiteLLM 数据库均连接上述远程服务。先检查远程连通性、目标数据库和所需扩展，再执行迁移。验收使用独立命名的数据库，不清空或覆盖已有业务库；数据库服务由外部维护。
 
+当前工作区的应用数据库运行配置如下，真实密码和密钥仍只放在本地 `.env`：
+
+| 用途 | 环境变量 | 连接格式与当前数据库 |
+| --- | --- | --- |
+| IAM、业务迁移、文档、知识库、Agent Teams、平台表 | `IAM_DATABASE_URL`、`DOCUMENT_DATABASE_URL`、`COORDINATION_DATABASE_URL` | `postgresql://postgres:<密码>@172.22.208.30:5432/market_scout`；IAM 使用 `postgresql+asyncpg://`，文档与团队协调使用 `postgresql://` |
+| AgentScope 恢复账本 | `AS_DATABASE_URL` | `postgresql+asyncpg://postgres:<密码>@172.22.208.30:5432/market_scout`，框架表使用独立 schema `AS_DATABASE_SCHEMA=agentscope_runtime` |
+| LiteLLM 控制库 | `LITELLM_DATABASE_URL` | 仍连接 `172.22.208.30:5432`，必须使用独立的 LiteLLM 数据库名，不得与 `market_scout` 业务表混用 |
+
+密码包含特殊字符时必须进行 URL 编码。常规启动前至少提供 `IAM_DATABASE_URL`；启用文档/知识库、异步团队、Gateway 或 LiteLLM 时，再提供对应连接变量。数据库迁移统一执行 `uv run alembic upgrade head`，当前 schema 头为 `0021_audit_actor_columns`。测试使用 `AS_TEST_DATABASE_URL`、`IAM_TEST_DATABASE_URL` 或 `TEAM_TEST_DATABASE_URL` 指向独立验收库，不能指向 `market_scout`。
+
 `RESEARCH_ENGINE` 默认且仅接受 `native`。`AS_NATIVE_RESOURCES` 决定资源装配方式，和模型后端、认证旁路是不同设置：
 
 | 模式 | 用途与前提 |
@@ -134,8 +144,8 @@ uv run python -m security.cli bootstrap-admin --email admin@example.com --passwo
 | --- | --- |
 | 模型后端 | `.env.example` 与 Compose 使用 `MODEL_BACKEND=litellm` 和 `if-*-v1` 别名；`Configuration` 的代码默认仍为 `legacy`。直连后端使用 `provider:model`，`legacy` 在这里指模型接入方式，研究引擎仍是原生。 |
 | 模型角色 | 研究、摘要、压缩、质量、报告审阅、知识检索、Web 证据等角色以 `agentscope_runtime/models.py:ROLES` 为准；离线 Judge 由 `evaluation/session.py` 装配，不能再假定仅有七个角色。 |
-| 搜索 | 支持 Tavily、OpenAI、Anthropic、Bing、Brave；`search_providers` 可并行选择，未设置时沿用 `search_api`，显式 `[]` 关闭提供商搜索。OpenAI/Anthropic 搜索有独立模型配置。 |
-| Web 管线 | `web_pipeline_mode` 为 `legacy`、`shadow`、`enforced`（默认）；抓取可配置 local、Playwright、Tavily Extract、Firecrawl，实际可用性受凭据、工具治理与来源范围约束。 |
+| 搜索 | 支持 Tavily、OpenAI、Anthropic、Bing、Brave、DeepSeek；`search_providers` 可并行选择，未设置时沿用 `search_api`，显式 `[]` 关闭提供商搜索。OpenAI/Anthropic 搜索有独立模型配置；DeepSeek 使用独立 Search API 和 `DEEPSEEK_API_KEY`。 |
+| Web 管线 | `web_pipeline_mode` 为 `legacy`、`shadow`、`enforced`（默认）；抓取可配置 local、Playwright、Tavily Extract、Firecrawl、DeepSeek。DeepSeek 需在 `fetch_backend_order` 与 `external_extract_backends` 中显式启用，实际可用性受凭据、工具治理与来源范围约束。 |
 | 执行与质量 | 并发、迭代、预算、效率策略、质量严格度和 Judge 输入预算见 `configuration.py`；质量门禁必须绑定 `NativeResearchQuality`，报告必须使用原生报告端口，不能以 `fail_open` 掩盖缺失运行时。 |
 
 模型通过 `ModelFactory`、`model_policy.py` 与 `model_accounting.py` 执行，统一有限重试、回退、熔断和计账。直连凭据由 `models/resolution.py` 与 `CredentialBinding` 解析；LiteLLM 生产运行使用冻结目录及限模型/费用的 Run Key，离线 Judge 和摄取等服务任务使用各自的服务凭据。凭据不写入 SQL 检查点，模型、Run Key、Gateway 登记和沙箱由所属运行统一管理与关闭。

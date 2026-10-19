@@ -23,6 +23,11 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def audit_now():
+    """Return a timezone-aware value for the canonical time audit fields."""
+    return datetime.now(timezone.utc)
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -50,7 +55,8 @@ class PlatformStore:
 
     async def audit(self, conn, actor, action, subject=None, detail=None):
         await conn.execute(insert(s.audit).values(id=str(uuid4()), actor_id=actor,
-            action=action, subject_id=subject, detail=detail or {}, created_at=now()))
+            action=action, subject_id=subject, detail=detail or {}, create_time=audit_now(),
+            update_time=audit_now(), created_at=actor, updated_at=actor))
 
     async def state(self, conn=None):
         if conn is None:
@@ -93,7 +99,7 @@ class PlatformStore:
                 s.profiles.c.owner_id == principal.user_id, s.profiles.c.scope == "global"))
             if "platform.config.read" not in principal.permissions:
                 query = query.where(or_(s.profiles.c.owner_id == principal.user_id, s.revisions.c.status != "draft"))
-            rows = (await conn.execute(query.order_by(s.revisions.c.created_at.desc()))).mappings().all()
+            rows = (await conn.execute(query.order_by(s.revisions.c.create_time.desc()))).mappings().all()
             return [{k: v for k, v in row.items() if k != "document"} for row in rows]
 
     async def create_draft(self, principal, request, *, conn=None):
@@ -121,12 +127,15 @@ class PlatformStore:
                 raise PlatformError("configuration_not_found", 404)
         else:
             await conn.execute(insert(s.profiles).values(id=profile_id, name=request.name,
-                owner_id=owner, scope=request.scope, created_at=now()))
+                owner_id=owner, scope=request.scope, create_time=audit_now(), update_time=audit_now(),
+                created_at=principal.user_id, updated_at=principal.user_id))
         number = (await conn.scalar(select(func.max(s.revisions.c.number)).where(s.revisions.c.profile_id == profile_id)) or 0) + 1
         identity = str(uuid4())
         await conn.execute(insert(s.revisions).values(id=identity, profile_id=profile_id,
             number=number, version=1, status="draft", document=document, fingerprint=digest,
-            base_revision=request.base_revision, created_by=principal.user_id, created_at=now()))
+            base_revision=request.base_revision, created_by=principal.user_id,
+            create_time=audit_now(), update_time=audit_now(),
+            created_at=principal.user_id, updated_at=principal.user_id))
         await self.audit(conn, principal.user_id, "configuration.draft_created", identity)
         return await self.revision(identity, principal, conn=conn)
 
@@ -234,14 +243,16 @@ class PlatformStore:
             previous = await self.active(conn) if state["active_revision"] else None
             for component, mode in required_components(published, previous["document"] if previous else None).items():
                 await conn.execute(insert(s.applications).values(revision_id=identity, component=component,
-                    status="pending", detail={"mode": mode}, updated_at=now()))
+                    status="pending", detail={"mode": mode}, update_time=audit_now(),
+                    updated_at=principal.user_id))
             await self.audit(conn, principal.user_id, "configuration.published", identity, {"reason": request.reason})
         return await self.revision(identity, principal)
 
     async def application(self, identity, component, status, detail):
         async with self.engine.begin() as conn:
             await conn.execute(update(s.applications).where(s.applications.c.revision_id == identity,
-                s.applications.c.component == component).values(status=status, detail=detail, updated_at=now()))
+                s.applications.c.component == component).values(status=status, detail=detail,
+                update_time=audit_now()))
 
     async def activate(self, principal, identity):
         async with self.engine.begin() as conn:
@@ -307,9 +318,12 @@ class PlatformStore:
         await conn.execute(insert(s.credentials).values(id=identity, name=request.name,
             owner_id=owner, provider=request.provider, version=1, disabled=False,
             ciphertext=cipher.encrypt(f"{identity}:1:{owner or 'global'}", request.secret),
-            key_id=cipher.key_id, created_at=now(), updated_at=now()))
+            key_id=cipher.key_id, create_time=audit_now(), update_time=audit_now(),
+            created_at=principal.user_id, updated_at=principal.user_id))
         await conn.execute(insert(s.credential_versions).values(credential_id=identity, version=1,
-            ciphertext=(await self.credential(identity, conn=conn))["ciphertext"], key_id=cipher.key_id, created_at=now()))
+            ciphertext=(await self.credential(identity, conn=conn))["ciphertext"], key_id=cipher.key_id,
+            create_time=audit_now(), update_time=audit_now(), created_at=principal.user_id,
+            updated_at=principal.user_id))
         await self.audit(conn, principal.user_id, "credential.created", identity, {"provider": request.provider})
         return self.public_credential(await self.credential(identity, conn=conn))
 

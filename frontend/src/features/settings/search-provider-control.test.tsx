@@ -22,8 +22,9 @@ describe("parallel search settings", () => {
     expect(screen.getByRole("checkbox", { name: "Tavily" })).toBeChecked();
     fireEvent.click(screen.getByRole("checkbox", { name: "Bing" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Brave" }));
-    expect(screen.getByTestId("selection")).toHaveTextContent('["tavily","bing","brave"]');
-    for (const name of ["Tavily", "Bing", "Brave"]) fireEvent.click(screen.getByRole("checkbox", { name }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "DeepSeek" }));
+    expect(screen.getByTestId("selection")).toHaveTextContent('["tavily","bing","brave","deepseek"]');
+    for (const name of ["Tavily", "Bing", "Brave", "DeepSeek"]) fireEvent.click(screen.getByRole("checkbox", { name }));
     expect(screen.getByTestId("selection")).toHaveTextContent("[]");
     expect(screen.getByText(/已关闭搜索服务/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "恢复默认搜索渠道" }));
@@ -35,7 +36,7 @@ describe("parallel search settings", () => {
     const capabilities = { editable_config_keys: ["search_providers"], config_schema: { properties: {
       search_providers: { anyOf: [{ type: "array" }, { type: "null" }] },
     } } };
-    for (const value of [null, [], ["bing", "brave"]]) expect(sanitizeSettings({ search_providers: value }, capabilities)).toEqual({ search_providers: value });
+    for (const value of [null, [], ["bing", "brave", "deepseek"]]) expect(sanitizeSettings({ search_providers: value }, capabilities)).toEqual({ search_providers: value });
     expect(sanitizeSettings({ search_providers: ["unknown"] }, capabilities)).toEqual({});
     expect(effectiveSearchProviders(null, "none")).toEqual([]);
     expect(effectiveSearchProviders([], "tavily")).toEqual([]);

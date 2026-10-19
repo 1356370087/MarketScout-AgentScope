@@ -25,6 +25,11 @@ from security.rbac.app_extension import StartupError, assert_schema_current
 
 logger = logging.getLogger(__name__)
 
+# Keep the API admission check aligned with the latest business migration. The
+# migration is deployed before the API, so serving against an older schema is
+# unsafe for the task metadata and team lifecycle contracts.
+CURRENT_BUSINESS_SCHEMA_REVISION = "0022_team_task_fields"
+
 
 class ApplicationLifecycle:
     """Own maintenance tasks and coordinate the host's runtime services."""
@@ -56,7 +61,7 @@ class ApplicationLifecycle:
         # A configured database and valid signing keys are bootstrap prerequisites.
         # Models, SMTP and Workers are initialized only after a release is active.
         await startup_checks()
-        await assert_schema_current("0019_platform_management")
+        await assert_schema_current(CURRENT_BUSINESS_SCHEMA_REVISION)
         from open_deep_research.platform.store import get_store, PlatformError
         await get_store().state()
 
@@ -127,7 +132,7 @@ class ApplicationLifecycle:
             if get_document_settings().enabled:
                 try:
                     from open_deep_research.platform.runtime import enabled as platform_enabled
-                    await assert_schema_current("0019_platform_management" if platform_enabled() else "0018_knowledge_execution")
+                    await assert_schema_current(CURRENT_BUSINESS_SCHEMA_REVISION)
                 except StartupError as exc:
                     if not str(exc).startswith("schema_revision_mismatch:"):
                         raise
@@ -137,7 +142,7 @@ class ApplicationLifecycle:
             else:
                 try:
                     from open_deep_research.platform.runtime import enabled as platform_enabled
-                    await assert_schema_current("0019_platform_management" if platform_enabled() else "0018_knowledge_execution")
+                    await assert_schema_current(CURRENT_BUSINESS_SCHEMA_REVISION)
                 except StartupError as exc:
                     expected_old_revision = (
                         "schema_revision_mismatch:got=0012_facts:"

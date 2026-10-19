@@ -111,7 +111,7 @@ async def maintain(app, user, body):
             async with pool.acquire() as conn:
                 if body.action == "knowledge_maintenance":
                     row = await conn.fetchrow("""UPDATE knowledge_jobs SET status='queued',available_at=now(),
-                        lease_until=NULL,updated_at=now() WHERE id=$1::uuid AND status='failed' RETURNING actor_id""", body.resource_id)
+                        lease_until=NULL,update_time=now() WHERE id=$1::uuid AND status='failed' RETURNING actor_id""", body.resource_id)
                     if not row:
                         raise PlatformError("knowledge_job_not_retryable", 409)
                     owner = str(row["actor_id"])

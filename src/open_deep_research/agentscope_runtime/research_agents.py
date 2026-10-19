@@ -852,7 +852,7 @@ class Supervisor:
                 accept_covered_on_exit=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
             )
 
-        def assign(input):
+        def assign(input, *, synthesis_ids=None):
             if cfg.research_efficiency_mode == "bounded":
                 from open_deep_research.agentscope_runtime.search_providers import (
                     source_allowed,
@@ -873,9 +873,10 @@ class Supervisor:
                 validate_requirement_ids,
             )
             requested_ids = scopes_by_id[input.scope_id] if use_scopes else input.requirement_ids
-            ids = validate_requirement_ids(canonicalize_requirement_ids(requested_ids, coverage),
-                                           coverage, required=bool(requested_ids))
-            if bounded and fixed_urls and len(fixed_urls) <= 5 and len(available_ids) <= 3:
+            ids = (synthesis_ids if synthesis_ids is not None else
+                   validate_requirement_ids(canonicalize_requirement_ids(requested_ids, coverage),
+                                            coverage, required=bool(requested_ids)))
+            if synthesis_ids is None and bounded and fixed_urls and len(fixed_urls) <= 5 and len(available_ids) <= 3:
                 process = " ".join(r.text for r in coverage.requirements if r.kind == "process")
                 if not re.search(r"(?:并行|多名|多个|两个).{0,24}(?:研究员|研究任务|智能体)|parallel|multiple researchers", process, re.IGNORECASE):
                     ids = available_ids
@@ -1023,7 +1024,12 @@ class Supervisor:
 
         async def conduct(input, context, progress):
             nonlocal efficiency_state, budget_stop
-            assignment = assign(input)
+            synthesis_ids = None
+            if teams_mode and input.blockedBy:
+                from open_deep_research.agentscope_runtime.teams_tools import dependency_synthesis_ids
+                synthesis_ids = dependency_synthesis_ids(input,
+                    await self.team_workers.team.service.tasks(self.run_id), coverage)
+            assignment = assign(input, synthesis_ids=synthesis_ids)
             if bounded:
                 from open_deep_research.agentscope_runtime.efficiency import (
                     research_budget_reason,
@@ -1032,7 +1038,7 @@ class Supervisor:
 
                 budget_stop = await research_budget_reason(self.models, self.config_provider())
                 efficiency_state = await cache.progress()
-                if contract.get("schema_version", 2) >= 3:
+                if synthesis_ids is None and contract.get("schema_version", 2) >= 3:
                     active_ids = [rid for rid in assignment.requirement_ids
                                   if ledger.get(rid, {}).get("status") != "supported"
                                   and stop_reason(efficiency_state, [rid], self.config_provider()) is None]
@@ -1042,7 +1048,8 @@ class Supervisor:
                             "requirement_ids": assignment.requirement_ids,
                             "instruction": "These IDs are already covered or have exhausted supplements. Continue only other uncovered IDs; otherwise ResearchComplete."})
                     assignment.requirement_ids = active_ids
-                reason = budget_stop or stop_reason(efficiency_state, assignment.requirement_ids, self.config_provider())
+                reason = budget_stop or (stop_reason(efficiency_state, assignment.requirement_ids, self.config_provider())
+                                         if synthesis_ids is None else None)
                 if reason:
                     assignments.pop(assignment.task_id, None)
                     return ToolResult(output={"status": "research_stopped", "reason": reason,
@@ -1050,7 +1057,8 @@ class Supervisor:
                         "instruction": "停止重复补证，调用 ResearchComplete；保留已准入证据并列明缺口。"})
             async with scheduling:
                 if bounded:
-                    key = fingerprint([sorted(assignment.requirement_ids), fixed_urls])
+                    key = fingerprint([sorted(assignment.requirement_ids), fixed_urls,
+                                       sorted(input.blockedBy) if teams_mode else []])
                     duplicate = active_work.get(key)
                     if duplicate is not None and not duplicate.done():
                         assignments.pop(assignment.task_id, None)
@@ -1258,6 +1266,8 @@ class Supervisor:
                     "需要新建补证任务并 TaskUpdate 修改尚未开始的下游依赖。"
                     "补证任务不能依赖被拒绝的原任务，否则永远无法领取；在描述中引用原任务，blockedBy 只列质量可接纳的前置。将汇总的旧依赖原子替换为补证任务，不能仅追加补证而保留失败阻塞。"
                     "通过 ListAgents/SendMessage 直接沟通，纯文本回复不会自动发给成员。"
+                    "用户要求汇总任务时，创建带 blockedBy 的任务并复用前置任务的事实 requirement_ids；"
+                    "这些事实已获接纳仍可汇总。汇总成员使用 TaskGet 读取前置研究工件，避免重复外部研究。"
                     "WaitForTeamEvents 等待变化；不要在任务进行中提前结束。所有任务终结且所有提议处理后调用 ResearchComplete，"
                     "它将关闭成员并检查团队收尾。\n{tool_guidance}"
                 )

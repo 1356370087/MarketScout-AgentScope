@@ -108,8 +108,11 @@ class User(Base):
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     roles: Mapped[list[UserRole]] = relationship(
         "UserRole",
@@ -136,8 +139,11 @@ class Role(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     permissions: Mapped[list[RolePermission]] = relationship(
         "RolePermission",
@@ -157,7 +163,11 @@ class Permission(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     domain: Mapped[str] = mapped_column(String(32), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class UserRole(Base):
@@ -165,14 +175,22 @@ class UserRole(Base):
 
     __tablename__ = "iam_user_roles"
 
+    id: Mapped[str] = mapped_column(PG_UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     user_id: Mapped[str] = mapped_column(
-        PG_UUID(as_uuid=False), ForeignKey("iam_users.id", ondelete="CASCADE"), primary_key=True,
+        PG_UUID(as_uuid=False), ForeignKey("iam_users.id", ondelete="CASCADE"), nullable=False,
     )
     role_id: Mapped[str] = mapped_column(
-        PG_UUID(as_uuid=False), ForeignKey("iam_roles.id", ondelete="CASCADE"), primary_key=True,
+        PG_UUID(as_uuid=False), ForeignKey("iam_roles.id", ondelete="CASCADE"), nullable=False,
     )
     assigned_by: Mapped[Optional[str]] = mapped_column(PG_UUID(as_uuid=False), nullable=True)
     assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (UniqueConstraint("user_id", "role_id", name="iam_user_roles_unique"),)
 
     user: Mapped[User] = relationship("User", back_populates="roles")
     role: Mapped[Role] = relationship("Role", lazy="joined")
@@ -183,12 +201,18 @@ class RolePermission(Base):
 
     __tablename__ = "iam_role_permissions"
 
+    id: Mapped[str] = mapped_column(PG_UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
     role_id: Mapped[str] = mapped_column(
-        PG_UUID(as_uuid=False), ForeignKey("iam_roles.id", ondelete="CASCADE"), primary_key=True,
+        PG_UUID(as_uuid=False), ForeignKey("iam_roles.id", ondelete="CASCADE"), nullable=False,
     )
     permission_id: Mapped[str] = mapped_column(
-        PG_UUID(as_uuid=False), ForeignKey("iam_permissions.id", ondelete="CASCADE"), primary_key=True,
+        PG_UUID(as_uuid=False), ForeignKey("iam_permissions.id", ondelete="CASCADE"), nullable=False,
     )
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     role: Mapped[Role] = relationship("Role", back_populates="permissions")
     permission: Mapped[Permission] = relationship("Permission", lazy="joined")
@@ -211,7 +235,11 @@ class Session(Base):
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     revocation_reason: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     refresh_tokens: Mapped[list[RefreshToken]] = relationship(
         "RefreshToken", back_populates="session", cascade="all, delete-orphan", lazy="selectin",
@@ -228,15 +256,20 @@ class RefreshToken(Base):
 
     __tablename__ = "iam_refresh_tokens"
 
-    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(PG_UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
+    jti: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     session_id: Mapped[str] = mapped_column(
         PG_UUID(as_uuid=False), ForeignKey("iam_sessions.id", ondelete="CASCADE"), nullable=False, index=True,
     )
     digest: Mapped[str] = mapped_column(String(128), nullable=False)
     previous_jti: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     session: Mapped[Session] = relationship("Session", back_populates="refresh_tokens")
 
@@ -256,9 +289,13 @@ class EmailToken(Base):
     )
     purpose: Mapped[str] = mapped_column(String(32), nullable=False)
     digest: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         CheckConstraint(
@@ -282,7 +319,11 @@ class AuditEvent(Base):
     detail: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class RateLimit(Base):
@@ -290,8 +331,15 @@ class RateLimit(Base):
 
     __tablename__ = "iam_rate_limits"
 
-    bucket: Mapped[str] = mapped_column(String(32), nullable=False, primary_key=True)
-    identity: Mapped[str] = mapped_column(String(320), nullable=False, primary_key=True)
+    id: Mapped[str] = mapped_column(PG_UUID(as_uuid=False), primary_key=True, server_default=text("gen_random_uuid()"))
+    bucket: Mapped[str] = mapped_column(String(32), nullable=False)
+    identity: Mapped[str] = mapped_column(String(320), nullable=False)
     count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    create_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    update_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    created_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    updated_at: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (UniqueConstraint("bucket", "identity", name="iam_rate_limits_unique"),)

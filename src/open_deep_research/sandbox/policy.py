@@ -65,6 +65,8 @@ def allowed_domains(configurable: Configuration) -> list[str]:
         domains.add("api.tavily.com")
     if "firecrawl" in configurable.external_extract_backends:
         domains.add("api.firecrawl.dev")
+    if "deepseek" in configurable.external_extract_backends:
+        domains.add("api.deepseek.com")
 
     if configurable.mcp_config and configurable.mcp_config.url:
         host = urlparse(configurable.mcp_config.url).hostname

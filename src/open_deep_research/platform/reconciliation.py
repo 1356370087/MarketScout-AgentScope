@@ -12,7 +12,7 @@ async def reconcile_service_charges():
     store = get_store()
     async with store.engine.connect() as conn:
         rows = (await conn.execute(select(s.charges).where(s.charges.c.status == "unknown",
-            s.charges.c.operation_id.not_like("run:%")).order_by(s.charges.c.created_at).limit(100))).mappings().all()
+            s.charges.c.operation_id.not_like("run:%")).order_by(s.charges.c.create_time).limit(100))).mappings().all()
     if not rows:
         return {"checked": 0, "settled": 0, "unresolved": 0}
     base = os.getenv("LITELLM_BASE_URL", "").rstrip("/").removesuffix("/v1")

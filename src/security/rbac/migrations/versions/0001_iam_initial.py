@@ -25,9 +25,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 from security.rbac.models import (  # noqa: E402
     EmailTokenPurpose,
-    Permission,
-    Role,
-    RolePermission,
     UserStatus,
 )
 from security.rbac.permissions import PERMISSIONS  # noqa: E402
@@ -193,9 +190,28 @@ def upgrade() -> None:
 def _seed_catalog_and_roles() -> None:
     """Insert the fixed permission catalog, system roles and their grants."""
     bind = op.get_bind()
-    permission_table = Permission.__table__
-    role_table = Role.__table__
-    role_permission_table = RolePermission.__table__
+    # Keep the historical seed independent from later audit columns added to
+    # the ORM models.  Alembic is upgrading the table definitions in this
+    # revision, so a bulk insert must name only columns that exist at 0001.
+    permission_table = sa.table(
+        "iam_permissions",
+        sa.column("code", sa.String(96)),
+        sa.column("name", sa.String(160)),
+        sa.column("description", sa.Text()),
+        sa.column("domain", sa.String(32)),
+    )
+    role_table = sa.table(
+        "iam_roles",
+        sa.column("code", sa.String(64)),
+        sa.column("name", sa.String(160)),
+        sa.column("description", sa.Text()),
+        sa.column("is_system", sa.Boolean()),
+    )
+    role_permission_table = sa.table(
+        "iam_role_permissions",
+        sa.column("role_id", postgresql.UUID(as_uuid=False)),
+        sa.column("permission_id", postgresql.UUID(as_uuid=False)),
+    )
 
     op.bulk_insert(
         permission_table,

@@ -445,7 +445,13 @@ class _Worker:
                 self.team.lease.fence,
             )
             self.member_id = row["owner"]
-            return {**json.loads(row["snapshot"]), "execution_mode": row["execution_mode"], "phase": row["phase"]}
+            from open_deep_research.tasks.team_service import task_snapshot
+            blockers = await db.fetch(
+                "SELECT blocker_id FROM research_team_dependencies WHERE run_id=$1 AND task_id=$2 ORDER BY blocker_id",
+                self.team.lease.run_id, self.task_id,
+            )
+            return {**task_snapshot(row), "execution_mode": row["execution_mode"], "phase": row["phase"],
+                    "blockedBy": [item["blocker_id"] for item in blockers]}
 
     async def guard(self, db):
         await self.parent_guard(db)
@@ -490,6 +496,28 @@ class _Worker:
         async with self.team.transport.store.pool.acquire() as db, db.transaction():
             await self.guard(db)
         for event in await self.team.pending(self.member_id):
+
+            body = event.payload.get("message")
+            if event.type == "send_message" and isinstance(body, dict) and body.get("type") == "shutdown_request":
+                async with self.team.transport.store.pool.acquire() as db:
+                    current = await db.fetchval(
+                        "SELECT session->>'shutdown_request' FROM research_team_members WHERE run_id=$1 AND member_id=$2",
+                        self.team.lease.run_id, self.member_id,
+                    )
+                if current == event.event_id:
+                    await self.team.send_message(
+                        MemberIdentity(run_id=self.team.lease.run_id, member_id=self.member_id, name=self.member_id),
+                        "shutdown-busy:" + event.event_id, "lead",
+                        {"type": "shutdown_response", "request_id": event.event_id, "approve": False,
+                         "reason": "当前研究任务尚未结束；请等待完成，或先使用 TaskStop 取消该任务后再关闭成员。"},
+                    )
+
+                async def acknowledge_shutdown(db, item):
+                    # The response transaction owns the lifecycle decision.
+                    pass
+
+                await self.team.apply_input(self.member_id, event.event_id, acknowledge_shutdown)
+                continue
 
             stop = event.type == "cancel_request" or (
                 event.type == "task_stop" and event.payload.get("task_id") == self.task_id
@@ -615,6 +643,8 @@ class _Worker:
         quality = NativeResearchQuality(researcher.models, researcher.config_provider)
         researcher.quality = quality
         await self.team.task_session(self.task_id, self.member_id)
+        member_context = await self.team.member_context(self.member_id)
+        snapshot["member_context"] = member_context
         watcher = asyncio.create_task(self.watch())
         try:
             with self.session.scope("team-worker", 0), self.session.task(self.task_id):
@@ -630,6 +660,11 @@ class _Worker:
                     )
                 else:
                     execution_feedback = list(snapshot.get("pending_update_instructions", []))
+                    execution_feedback.insert(0, "团队成员职责与目标（仍须遵守本任务的需求和来源契约）：" +
+                                              json.dumps(member_context, ensure_ascii=False))
+                    if snapshot.get("blockedBy"):
+                        execution_feedback.append("本任务前置已完成并通过质量接纳。使用 TaskGet 读取以下任务的研究工件并汇总，"
+                                                  "仅在工件不能覆盖本任务时补充研究：" + json.dumps(snapshot["blockedBy"]))
                     if snapshot.get("execution_mode") == "plan_approval":
                         from open_deep_research.agentscope_runtime.teams_planning import wait_for_plan
                         approved_plan = await wait_for_plan(self, researcher, snapshot)

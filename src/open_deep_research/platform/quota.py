@@ -4,7 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, insert
 from . import schema as s
-from .store import PlatformError, get_store, now
+from .store import PlatformError, audit_now, get_store, now
 from open_deep_research.budgets import BudgetExhausted, BudgetDimension
 
 
@@ -31,7 +31,8 @@ async def reserve(owner, operation_id, amount, source, *, store=None, at=None, d
             raise PlatformError("monthly_quota_not_configured", 503)
         created = (await conn.execute(store.upsert(s.charges).values(operation_id=operation_id,
             owner_id=owner, period=period, status="reserved", reserved=amount, actual=None,
-            source=source, detail=detail or {}, created_at=now(), updated_at=now()).on_conflict_do_nothing()
+            source=source, detail=detail or {}, create_time=audit_now(), update_time=audit_now(),
+            created_at=owner, updated_at=owner).on_conflict_do_nothing()
             .returning(s.charges.c.operation_id))).scalar_one_or_none()
         if not created:
             old = (await conn.execute(select(s.charges).where(s.charges.c.operation_id == operation_id))).mappings().one()
@@ -40,7 +41,8 @@ async def reserve(owner, operation_id, amount, source, *, store=None, at=None, d
             if old["status"] != "released":
                 return dict(old)
             changed = await conn.execute(update(s.charges).where(s.charges.c.operation_id == operation_id,
-                s.charges.c.status == "released").values(status="reserved", actual=None, period=period, updated_at=now()))
+                s.charges.c.status == "released").values(status="reserved", actual=None, period=period,
+                update_time=audit_now(), updated_at=owner))
             if changed.rowcount != 1:
                 raise PlatformError("quota_operation_conflict", 409)
         await conn.execute(store.upsert(s.months).values(owner_id=owner, period=period, reserved=0, settled=0).on_conflict_do_nothing())
@@ -60,7 +62,7 @@ async def settle(operation_id, actual, *, store=None):
     async with store.engine.begin() as conn:
         row = (await conn.execute(update(s.charges).where(s.charges.c.operation_id == operation_id,
             s.charges.c.status.in_(["reserved", "unknown"]))
-            .values(status="settled", actual=actual, updated_at=now()).returning(s.charges))).mappings().one_or_none()
+            .values(status="settled", actual=actual, update_time=audit_now()).returning(s.charges))).mappings().one_or_none()
         if row is None:
             old = (await conn.execute(select(s.charges).where(s.charges.c.operation_id == operation_id))).mappings().one_or_none()
             if old and old["actual"] != actual:
@@ -75,7 +77,7 @@ async def mark_unknown(operation_id, *, store=None):
     store = store or get_store()
     async with store.engine.begin() as conn:
         await conn.execute(update(s.charges).where(s.charges.c.operation_id == operation_id,
-            s.charges.c.status == "reserved").values(status="unknown", updated_at=now()))
+            s.charges.c.status == "reserved").values(status="unknown", update_time=audit_now()))
 
 
 async def release(operation_id, *, store=None):
@@ -84,7 +86,7 @@ async def release(operation_id, *, store=None):
     async with store.engine.begin() as conn:
         row = (await conn.execute(update(s.charges).where(s.charges.c.operation_id == operation_id,
             s.charges.c.status.in_(["reserved", "unknown"]))
-            .values(status="released", actual=0, updated_at=now()).returning(s.charges))).mappings().one_or_none()
+            .values(status="released", actual=0, update_time=audit_now()).returning(s.charges))).mappings().one_or_none()
         if row:
             await conn.execute(update(s.months).where(s.months.c.owner_id == row["owner_id"],
                 s.months.c.period == row["period"]).values(reserved=s.months.c.reserved-row["reserved"]))
@@ -103,7 +105,7 @@ async def correct(operation_id, actual, *, store=None):
         outstanding = row["reserved"] if row["status"] in {"reserved", "unknown"} else 0
         changed = await conn.execute(update(s.charges).where(s.charges.c.operation_id == operation_id,
             s.charges.c.status == row["status"], s.charges.c.actual == row["actual"])
-            .values(status="settled", actual=actual, updated_at=now()))
+            .values(status="settled", actual=actual, update_time=audit_now()))
         if changed.rowcount != 1:
             raise PlatformError("quota_correction_conflict", 409)
         await conn.execute(update(s.months).where(s.months.c.owner_id == row["owner_id"],

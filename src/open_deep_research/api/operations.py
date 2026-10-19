@@ -91,6 +91,7 @@ def _search_readiness(configurable: Configuration) -> dict[str, str]:
         "tavily": "TAVILY_API_KEY",
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
     }.get(provider)
     if key_name and config_environment.get(key_name):
         return {"status": "ok", "provider": provider}

@@ -36,6 +36,8 @@ async def record(
         detail=detail,
         ip_address=ip_address,
         user_agent=user_agent,
+        created_at=actor_id,
+        updated_at=actor_id,
     )
     try:
         db.add(event)

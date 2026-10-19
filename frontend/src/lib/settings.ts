@@ -4,7 +4,7 @@ import type { PublicationTheme } from "./types";
 export const SETTINGS_KEY = "odr.frontend.settings.v1";
 export const PRESETS_KEY = "odr.frontend.presets.v1";
 export const PUBLICATION_THEME_KEY = "odr.frontend.publication-theme.v1";
-export const WEB_SEARCH_PROVIDERS = ["tavily", "openai", "anthropic", "bing", "brave"] as const;
+export const WEB_SEARCH_PROVIDERS = ["tavily", "openai", "anthropic", "bing", "brave", "deepseek"] as const;
 
 /** A null selection inherits the legacy setting; [] explicitly disables discovery. */
 export function effectiveSearchProviders(value: unknown, legacy: unknown = "tavily"): string[] {

@@ -107,6 +107,7 @@ class SessionItem(BaseModel):
 
     id: str
     created_at: str
+    create_time: str
     last_activity_at: str
     user_agent: str | None
     ip_address: str | None
@@ -224,6 +225,7 @@ class UserOut(BaseModel):
     authz_version: int
     role_codes: list[str]
     created_at: str
+    create_time: str
 
 
 class AuditEventOut(BaseModel):
@@ -237,6 +239,7 @@ class AuditEventOut(BaseModel):
     detail: dict[str, Any] | None
     ip_address: str | None
     created_at: str
+    create_time: str
 
 
 def role_to_dict(role) -> dict[str, Any]:
@@ -262,4 +265,5 @@ def user_to_dict(user) -> dict[str, Any]:
         "authz_version": user.authz_version,
         "role_codes": list(user.role_codes),
         "created_at": user.created_at,
+        "create_time": user.create_time,
     }

@@ -38,7 +38,7 @@ def canonicalize_requirement_ids(values, contract):
     return result
 
 
-def validate_requirement_ids(values, contract, *, required):
+def validate_requirement_ids(values, contract, *, required, allow_cross_dimension=False):
     """Keep one delegation within its factual, atomic requirement scope."""
     normalized = list(dict.fromkeys(values))
     known = set(contract.requirement_ids()) if contract is not None else set(normalized)
@@ -53,7 +53,7 @@ def validate_requirement_ids(values, contract, *, required):
         raise ValueError(f"too_many_coverage_requirement_ids:{MAX_REQUIREMENTS_PER_RESEARCH_TASK}")
     dimensions = {item.dimension_id for item in contract.requirements
                   if item.requirement_id in selected and item.dimension_id} if contract is not None else set()
-    if len(dimensions) > 1:
+    if len(dimensions) > 1 and not allow_cross_dimension:
         raise ValueError("cross_dimension_requirement_ids:" + ",".join(sorted(dimensions)))
     if required and not selected and delegable:
         raise ValueError("non_delegable_requirement_ids_only" if normalized else "coverage_requirement_ids_required")

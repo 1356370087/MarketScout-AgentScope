@@ -10,6 +10,7 @@ import aiohttp
 from open_deep_research.agentscope_runtime.search_providers import (
     SearchProviderError,
     candidate,
+    deepseek_request,
     source_allowed,
 )
 from open_deep_research.configuration import Configuration
@@ -87,6 +88,31 @@ async def firecrawl_extract(url, config, resources):
         "text/markdown",
         "firecrawl",
     )
+
+
+async def deepseek_fetch(url, config, resources):
+    """Fetch Markdown through DeepSeek's standalone, model-free endpoint."""
+    endpoint = "https://api.deepseek.com/v1/tools/fetch"
+    if (
+        egress_authorizer.get() is not None
+        and await authorize_url(endpoint, "external.extract", consume=True) != "allow"
+    ):
+        raise PermissionError("external_service_not_allowed")
+    data = await deepseek_request(
+        endpoint,
+        {"url": url},
+        config,
+        resources,
+        max_bytes=Configuration.from_runnable_config(config).html_max_bytes,
+    )
+    content = data.get("content")
+    if not isinstance(content, str):
+        raise SearchProviderError("invalid_provider_response")
+    if not content.strip():
+        return None
+    source = candidate("direct", url, str(data.get("title") or url), "", 1, "direct")
+    # The Fetch schema contains only title/content; it does not expose redirects.
+    return text_document(source, content, url, "text/markdown", "deepseek")
 
 
 class BrowserRenderer:
@@ -193,6 +219,8 @@ def configured_fetch_backends(config, settings, resources, browser_tools=()):
             "FIRECRAWL_API_KEY", config
         ):
             raise SearchProviderError("missing_credential")
+        if name == "deepseek" and not resolve_named_api_key("DEEPSEEK_API_KEY", config):
+            raise SearchProviderError("missing_credential")
         if name == "playwright" and not {
             "browser_navigate",
             "browser_snapshot",
@@ -213,6 +241,8 @@ def configured_fetch_backends(config, settings, resources, browser_tools=()):
             document = await tavily_extract(
                 url, lambda current: resources.client("tavily", current), config
             )
+        elif name == "deepseek":
+            document = await deepseek_fetch(url, config, resources)
         else:
             document = await firecrawl_extract(url, config, resources)
         if document is not None:

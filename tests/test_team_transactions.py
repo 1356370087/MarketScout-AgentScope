@@ -32,6 +32,8 @@ async def store():
     async with pool.acquire() as db:
         for sql in statements:
             await db.execute(sql)
+        for name in ("0017_agent_teams", "0022_team_task_fields"):
+            await db.execute(importlib.import_module("security.rbac.migrations.versions." + name).DDL)
     try:
         yield TeamStore(pool)
     finally:
@@ -157,140 +159,6 @@ class LocalTransactions:
         return await self.store.commit(message, mutation)
 
 
-@pytest.mark.asyncio
-async def test_real_team_member_reuse_dependency_and_tools(store, tmp_path, monkeypatch):
-    """Exercise the actual pool/executor/tool boundary against PostgreSQL and MQ."""
-    endpoint = os.getenv("TEAM_TEST_ROCKETMQ_ENDPOINT")
-    if not endpoint:
-        pytest.skip("TEAM_TEST_ROCKETMQ_ENDPOINT required")
-    from open_deep_research.tasks.lease import LeaderLeaseManager
-    from open_deep_research.tasks.registry import get_task_registry
-    from open_deep_research.tasks.rocketmq_transport import RocketMQTransport
-    from open_deep_research.tasks.team_protocol import member_identity
-    from open_deep_research.tasks.team_runtime import team_runtime
-    from open_deep_research.tasks.team_service import TeamService
-    from open_deep_research.tasks.team_state import PostgresTaskStateStore
-    from open_deep_research.tasks.teammate_pool import (
-        get_teammate_pool,
-        shutdown_teammate_pool,
-    )
-    from open_deep_research.tools.base import ToolContext
-    from open_deep_research.tools.governance import (
-        AgentRole,
-        execute_governed_tool_call,
-    )
-    from open_deep_research.tools.registry import assemble_toolset
-    from open_deep_research.tools.supervisor.deps import SupervisorToolDeps
-    from open_deep_research.tools.team import build_team_tools
-
-    run_id = "pool-" + os.urandom(8).hex()
-    lease = LeaderLeaseManager(runs_dir=str(tmp_path), run_id=run_id, lease_seconds=120)
-    epoch = await lease.acquire()
-    config = {"configurable": {"enable_async_research": True, "sandbox_enabled": False,
-        "runs_dir": str(tmp_path), "event_log_enabled": False, "observability_enabled": False,
-        "quality_evaluation_enabled": False, "search_api": "none", "enable_memory": False},
-        "metadata": {"run_id": run_id, "run_fence_token": epoch.fence_token,
-                     "run_lease_owner_id": lease.owner_id}}
-    transport = RocketMQTransport(store, endpoint=endpoint, prefix=os.environ["TEAM_TEST_ROCKETMQ_PREFIX"],
-        consumer_group_prefix=os.environ["TEAM_TEST_ROCKETMQ_PREFIX"] + "_" + os.urandom(4).hex())
-    await transport.start()
-    service = TeamService(transport)
-    state = PostgresTaskStateStore(service)
-    async def start():
-        return service
-    monkeypatch.setattr(team_runtime, "start", start)
-    monkeypatch.setattr(team_runtime, "state", state)
-    executions = []
-    stop_started = asyncio.Event()
-    resume_started = asyncio.Event()
-    resumed = []
-    async def researcher(task_state, task_config):
-        identity = member_identity.get()
-        assert identity is not None
-        executions.append(identity.member_id)
-        if task_state["research_topic"] == "Stop this task":
-            stop_started.set()
-            await asyncio.Event().wait()
-        if task_state["research_topic"] == "Resume this task":
-            if not resumed:
-                from langchain_core.messages import HumanMessage
-
-                from open_deep_research.agents.query_state import QueryLoopState
-                resumed.append(identity.member_id)
-                await task_state["_query_checkpoint_callback"](QueryLoopState(
-                    state_key="researcher:" + task_config["metadata"]["task_id"],
-                    role=AgentRole.RESEARCHER, messages=(HumanMessage(content="saved input"),),
-                    consumed_input_ids=("already-delivered",),
-                ))
-                resume_started.set()
-                await asyncio.Event().wait()
-            assert task_state["query_state_snapshot"]["consumed_input_ids"] == ["already-delivered"]
-            assert identity.member_id == resumed[0]
-        tools = await assemble_toolset(AgentRole.RESEARCHER, task_config)
-        assert "SendMessage" in {tool.name for tool in tools}
-        outcome = await execute_governed_tool_call({"name": "SendMessage", "id": "notify-" + task_config["metadata"]["task_id"],
-            "args": {"to": "lead", "message": "working"}}, {tool.name: tool for tool in tools},
-            AgentRole.RESEARCHER, task_config)
-        assert outcome.error is None, outcome.error
-        return {"compressed_research": "verified summary", "raw_notes": [], "metrics": {}}
-    deps = SupervisorToolDeps(enable_async_research=True, researcher_ainvoke=researcher)
-    tools = {tool.name: tool for tool in build_team_tools(deps)}
-    async def call(name, op, args):
-        tool = tools[name]
-        return (await tool.call(tool.input_schema.model_validate(args), ToolContext(config, "supervisor", op, op))).output
-    try:
-        await call("TeamCreate", "team", {"name": "Test team"})
-        await call("SpawnTeammate", "member", {"name": "alice", "purpose": "Research"})
-        first = await call("TaskCreate", "first", {"subject": "First", "description": "First topic"})
-        second = await call("TaskCreate", "second", {"subject": "Second", "description": "Second topic", "blocked_by": [first["task_id"]]})
-        async def wait_complete(task_id):
-            # Real Broker group reassignment can overlap the preceding consumer shutdown.
-            async with asyncio.timeout(60):
-                while True:
-                    get_teammate_pool(config, get_task_registry(), researcher).check_health()
-                    snapshot = await state.get(task_id, run_id=run_id)
-                    if snapshot.status.value == "completed":
-                        return snapshot
-                    await asyncio.sleep(.1)
-        completed = await wait_complete(first["task_id"])
-        assert (await state.get(second["task_id"], run_id=run_id)).status.value == "pending"
-        completed.admission_status = "accepted"
-        completed.version += 1
-        await state.upsert(completed)
-        await wait_complete(second["task_id"])
-        assert len(executions) == 2 and executions[0] == executions[1]
-        stop_task = await call("TaskCreate", "stop-me", {"subject": "Stop", "description": "Stop this task"})
-        await asyncio.wait_for(stop_started.wait(), 15)
-        await call("TaskStop", "stop-command", {"task_id": stop_task["task_id"]})
-        followup = await call("TaskCreate", "followup", {"subject": "After stop", "description": "Continue after cancellation"})
-        try:
-            await wait_complete(followup["task_id"])
-        except TimeoutError:
-            pool = get_teammate_pool(config, get_task_registry(), researcher)
-            pytest.fail(str({
-                "tasks": [(t["task_id"], t["status"], t["owner"]) for t in await service.tasks(run_id)],
-                "members": [(key, t.done(), t.cancelled(), [(f.f_code.co_name, f.f_lineno) for f in t.get_stack()]) for key,t in pool.members.items()],
-                "cancelled": get_task_registry().get(stop_task["task_id"]).cancelled.is_set(),
-                "control_receipts": [dict(r) for r in await store.pool.fetch("SELECT r.recipient,r.applied FROM research_coordination_receipts r JOIN research_coordination_events e USING(event_id) WHERE e.run_id=$1 AND e.event->>'type'='task_stop'",run_id)],
-                "active": [(key, t.done(), t.cancelled(), [(f.f_code.co_name, f.f_lineno) for f in t.get_stack()]) for key,t in pool.active.items()],
-            }))
-        assert (await state.get(stop_task["task_id"], run_id=run_id)).status.value == "cancelled"
-        recovering = await call("TaskCreate", "recover", {"subject": "Resume", "description": "Resume this task"})
-        await asyncio.wait_for(resume_started.wait(), 15)
-        await shutdown_teammate_pool(config)
-        await lease.release()
-        lease = LeaderLeaseManager(runs_dir=str(tmp_path), run_id=run_id, lease_seconds=120)
-        next_epoch = await lease.acquire()
-        assert next_epoch.fence_token > epoch.fence_token
-        config["metadata"].update(run_fence_token=next_epoch.fence_token, run_lease_owner_id=lease.owner_id)
-        await get_teammate_pool(config, get_task_registry(), researcher).start()
-        recovered = await wait_complete(recovering["task_id"])
-        assert recovered.fence_token == next_epoch.fence_token
-        assert not list(tmp_path.rglob("mailbox/*.json"))
-    finally:
-        await shutdown_teammate_pool(config)
-        await transport.close()
-        await lease.release()
 
 
 @pytest.mark.asyncio

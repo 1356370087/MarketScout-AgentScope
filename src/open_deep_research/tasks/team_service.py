@@ -11,6 +11,14 @@ from open_deep_research.tasks.state import TaskSnapshot
 from open_deep_research.tasks.team_protocol import MemberIdentity, TeamEvent
 
 
+def task_snapshot(row):
+    """Read task metadata from SQL, retaining the execution snapshot contract."""
+    snapshot = json.loads(row["snapshot"])
+    return dict(snapshot, task_id=row["task_id"], run_id=row["run_id"],
+                subject=row["subject"], description=row["description"],
+                display_title=row["subject"], research_topic=row["description"])
+
+
 def task_view(row, *, summary=False):
     """Expose task facts, not Worker tokens or full model checkpoints."""
     termination = (row.get("result") or {}).get("termination")
@@ -33,15 +41,16 @@ def task_view(row, *, summary=False):
             **execution,
             **{key: value for key, value in row.items() if key in keys},
             "id": row["task_id"],
-            "subject": (row.get("display_title") or row.get("research_topic", ""))[:160],
+            "subject": row.get("subject") or row.get("display_title") or row.get("research_topic", ""),
+            "blockedBy": row.get("unresolvedBlockedBy", row.get("blockedBy", [])),
         }
     keys = {"task_id", "display_title", "research_topic", "requirement_ids", "owner", "status",
             "phase", "execution_mode", "version", "admission_status", "plan_version", "metadata",
             "blocks", "blockedBy", "blocked_by", "unresolvedBlockedBy", "activeForm", "handoff_assessment", "error_message"}
     result = {key: value for key, value in row.items() if key in keys}
     result.update(execution)
-    result.update(id=row["task_id"], subject=row.get("display_title") or row.get("research_topic", ""),
-                  description=row.get("research_topic", ""))
+    result.update(id=row["task_id"], subject=row.get("subject") or row.get("display_title") or row.get("research_topic", ""),
+                  description=row.get("description", row.get("research_topic", "")))
     if row.get("result"):
         result["result"] = {key: row["result"].get(key) for key in ("compressed_research", "evidence_registry", "assessment", "termination")}
     return result
@@ -206,9 +215,10 @@ class TeamService:
                     task_data["activeForm"] = payload["active_form"]
                 await db.execute(
                     """INSERT INTO research_team_tasks
-                       (run_id,task_id,snapshot,status,version,fence_token,owner,metadata)
-                       VALUES($1,$2,$3::jsonb,'pending',1,$4,$5,$6::jsonb)""",
+                       (run_id,task_id,snapshot,status,version,fence_token,owner,metadata,subject,description)
+                       VALUES($1,$2,$3::jsonb,'pending',1,$4,$5,$6::jsonb,$7,$8)""",
                     identity.run_id, snapshot.task_id, json.dumps(task_data), fence_token, owner, json.dumps(payload.get("metadata") or {}),
+                    snapshot.display_title or snapshot.research_topic, snapshot.research_topic,
                 )
                 await self._dependencies(db, identity.run_id, snapshot.task_id, payload.get("blocked_by", []))
                 if payload.get("proposal_id"):
@@ -225,6 +235,10 @@ class TeamService:
                 result = await mutate_task(db, identity, kind, payload)
                 if kind == "task_update":
                     await edit_dependencies(db, identity.run_id, payload["task_id"], payload)
+                    result["version"] = await db.fetchval(
+                        "SELECT version FROM research_team_tasks WHERE run_id=$1 AND task_id=$2",
+                        identity.run_id, payload["task_id"],
+                    )
                 return result
             if kind == "task_claim":
                 owner = payload.get("owner") or identity.member_id
@@ -322,9 +336,9 @@ class TeamService:
                    ARRAY(SELECT d.blocker_id FROM research_team_dependencies d JOIN research_team_tasks b
                        ON b.run_id=d.run_id AND b.task_id=d.blocker_id WHERE d.run_id=t.run_id AND d.task_id=t.task_id
                        AND (b.status<>'completed' OR b.admission_status NOT IN ('accepted','accepted_with_caveats')) ORDER BY d.blocker_id) AS unresolved
-                   FROM research_team_tasks t WHERE run_id=$1 ORDER BY created_at,task_id""", run_id,
+                   FROM research_team_tasks t WHERE run_id=$1 ORDER BY create_time,task_id""", run_id,
             )
-        return [dict(json.loads(row["snapshot"]), owner=row["owner"],
+        return [dict(task_snapshot(row), owner=row["owner"],
                      status=row["status"], admission_status=row["admission_status"],
                      version=row["version"], blocked_by=row["blocked_by"], blockedBy=row["blocked_by"],
                      blocks=row["blocks"], unresolvedBlockedBy=row["unresolved"], phase=row["phase"],

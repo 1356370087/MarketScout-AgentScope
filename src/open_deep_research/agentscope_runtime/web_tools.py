@@ -9,7 +9,7 @@ Fetch → Extract → Evidence）接入 AgentScope 运行时，不依赖 LangCha
 - 原生抓取额度账本：run/task 双上限、悲观预留与归还、transport 失败退款
   与失败配额、零分配短路（不烧搜索配额）；
 - SPECIFIC 来源边界（显式 URL/域名白名单）在发现与 fetch_url 两处生效；
-- 外部异常提取回退（Tavily Extract / Firecrawl）与预算内 JSON 压缩。
+- 外部异常提取回退（Tavily Extract / Firecrawl / DeepSeek）与预算内 JSON 压缩。
 """
 
 from __future__ import annotations
@@ -585,7 +585,7 @@ async def project_web_result(result, config, factory, metadata):
     records = [record.model_dump(mode="json", exclude_none=True) for record in result.evidence]
     discoveries = {}
     for item in result.candidates:
-        providers = {d.provider for d in item.discoveries if d.provider in {"tavily", "bing", "brave", "openai", "anthropic"}}
+        providers = {d.provider for d in item.discoveries if d.provider in {"tavily", "bing", "brave", "openai", "anthropic", "deepseek"}}
         if providers:
             discoveries[item.canonical_url.rstrip("/")] = {"providers": sorted(providers)}
     state = await cache.progress({"discoveries": discoveries}) if discoveries else await cache.progress()
