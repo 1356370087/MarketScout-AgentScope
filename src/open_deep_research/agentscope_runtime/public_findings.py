@@ -20,7 +20,7 @@ from open_deep_research.events.public import (
 logger = logging.getLogger(__name__)
 
 
-async def publish_handoff(models, outcome, *, context_chars):
+async def publish_handoff(models, outcome, *, context_chars, config=None):
     """Keep task findings on the run's durable public cursor, after admission."""
     recovery = getattr(models, "recovery", None)
     if recovery is None:
@@ -45,6 +45,11 @@ async def publish_handoff(models, outcome, *, context_chars):
             dedupe_key=f"task:{outcome.task_id}:source:{source['source_id']}",
         )
     if not outcome.compressed_research.strip() or outcome.termination == "task_time_reserved":
+        return
+    from .execution_budget import enabled
+    if enabled(config or {}) and outcome.termination in {
+        "report_time_reserved", "report_budget_reserved", "fetch_budget_exhausted",
+    }:
         return
     cache = getattr(recovery, "research_cache", None)
     if cache is not None:

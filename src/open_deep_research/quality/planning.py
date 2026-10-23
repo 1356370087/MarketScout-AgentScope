@@ -18,7 +18,7 @@ from open_deep_research.quality.contract import (
 )
 
 
-def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False, preserve_scope=False):
+def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False, preserve_scope=False, task_scopes=False):
     """Retain provenance and deterministic constraints without inventing facts."""
     original = {i: _message_content(m) for i, m in enumerate(messages)
                 if _message_role(m) in {"user", "human"}}
@@ -135,6 +135,20 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
                                             for i, a, b, _, _ in selected):
             selected.append((req.source_message_index, req.source_start, req.source_end, req.text, req.kind))
     if preserve_scope:
+        # 提取器用省略号改写场景时，该 atom 会因不是原文而被拒绝；仍需
+        # 从用户消息保留带明确标签的完整场景段落，作为计算/适用范围前提。
+        # 不删除其中单独提取的事实问题，也不把给定参数变成待外部证明的事实。
+        for i, content in original.items():
+            for match in re.finditer(
+                r"(?:^|\n)[ \t]*(?:(?:统一)?(?:业务)?场景|背景|scenario|context)\s*[：:][^\n]+",
+                content, re.IGNORECASE,
+            ):
+                text = match.group().strip()
+                if re.search(r"[?？]|是否|能否|请说明|(?<!待)(?:核实|验证)|\b(?:whether|how|verify|explain|check)\b",
+                             text, re.IGNORECASE):
+                    continue
+                start = match.start() + len(match.group()) - len(match.group().lstrip())
+                selected.append((i, start, start + len(text), text, "process"))
         # An explicitly supplied scenario is a premise, not an external fact
         # that a researcher must prove. Questions/verification within it remain
         # factual; source positions preserve the label even when the model omits it.
@@ -187,6 +201,8 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
             parsed.append((i, a, b))
         selected = expanded
         parents = sorted(dict.fromkeys(parents))
+    if task_scopes:
+        selected = _task_obligations(original, selected, entities)
     unique = {}
     for row in sorted(selected):
         unique.setdefault((row[0], row[1], row[2]), row)
@@ -226,10 +242,52 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     return compiled
 
 
+def _task_obligations(original, selected, entities):
+    """Keep quoted premises and synthesis goals out of external fact checking."""
+    subjects = _comparison_subjects(original, entities)
+    scenarios = [(i, m.start(), m.end()) for i, content in original.items()
+                 for m in re.finditer(r"(?:^|\n)[ \t]*(?:(?:统一)?(?:业务)?场景|背景|scenario|context)\s*[：:][^\n]+",
+                                      content, re.I)]
+    output = []
+    for i, a, b, text, kind in selected:
+        if kind != "factual":
+            output.append((i, a, b, text, kind))
+            continue
+        # A roster/selection goal does not require each worker to prove the
+        # entire comparison. Concrete prices, differences and questions remain.
+        if (len(subjects) >= 2 and re.search(r"(?:竞品|竞争|选型).{0,8}(?:研究|分析)", text)
+                and sum(name in text for name in subjects) >= 2
+                and not re.search(r"[?？]|价格|成本|区别|差异|为何|如何|是否|能否|条件|限制", text)):
+            output.append((i, a, b, text, "deliverable"))
+            continue
+        if re.match(r"(?:资料核对截止|研究|检索)日期(?:为|是)", text.strip()):
+            output.append((i, a, b, text, "process"))
+            continue
+        goal = re.search(r"[^，,；;。]*\bp95\b[^；;。]*(?:待验证|目标|不是已测)[^；;。]*", text, re.I)
+        if goal and not re.search(r"[?？]|能否|是否|核实|如何|(?<!待)验证", goal.group()):
+            prefix = text[:goal.start()].rstrip(" ，,")
+            if prefix:
+                output.append((i, a, a + len(prefix), prefix, "factual"))
+            output.append((i, a + goal.start(), a + goal.end(), goal.group(), "process"))
+            suffix = text[goal.end():].strip(" ，,。")
+            if suffix:
+                start = text.index(suffix, goal.end())
+                output.append((i, a + start, a + start + len(suffix), suffix, "factual"))
+            continue
+        if (any(owner == i and start <= a < b <= end for owner, start, end in scenarios)
+                and re.search(r"\d", text)
+                and not re.search(r"[?？]|支持|开销|费用|如何|是否|能否|核实|核查|(?<!待)验证|需.{0,12}(?:识别|说明)|请说明", text)):
+            kind = "process"
+        output.append((i, a, b, text, kind))
+    return output
+
+
 def _enumerated_object_facets(text):
     """Split explicit noun facets following a shared object's 的 qualifier."""
     prefix, marker, tail = text.rpartition("的")
-    if not marker or "、" not in tail or re.search(r"[?？]|分别|如何|怎样|是否|能否|之间|关系|差异|区别", tail):
+    # “混合检索、权限、重排的条件、计费”中的“的”属于一个列表项，
+    # 不是整段的共同对象。不能只保留其后半段，丢掉前面的研究义务。
+    if not marker or "、" in prefix or "、" not in tail or re.search(r"[?？]|分别|如何|怎样|是否|能否|之间|关系|差异|区别", tail):
         return []
     parts = _split_top_level_dimension_list(tail)
     if len(parts) < 2:
@@ -275,8 +333,17 @@ def _comparison_subjects(original, entities):
     names = [row.name if hasattr(row, "name") else row["name"] for row in entities]
     for content in original.values():
         for match in re.finditer(r"(?:比较|对比|对照|\bcompare\b|\bcomparison of\b)[^。；;\n!?]{1,240}", content, re.IGNORECASE):
-            found = [(match.group().casefold().find(name.casefold()), name) for name in names if name]
-            found = sorted((position, name) for position, name in found if position >= 0)
+            found = []
+            for name in names:
+                if not name.strip():
+                    continue
+                # 提取器可能省略产品名与部署形态间的“的”。只容忍这一语法
+                # 差异，并返回用户原文；不把模型的别名或外部实体补进比较范围。
+                pattern = r"\s*(?:的\s*)?".join(re.escape(part) for part in name.split())
+                subject = re.search(pattern, match.group(), re.IGNORECASE)
+                if subject is not None:
+                    found.append((subject.start(), subject.group()))
+            found.sort()
             if len(found) >= 2:
                 return list(dict.fromkeys(name for _, name in found))
     return []

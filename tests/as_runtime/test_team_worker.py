@@ -272,7 +272,7 @@ async def test_superseded_worker_cannot_commit_model_receipt(env, tmp_path, reco
     assert not (await team.service.tasks(team.lease.run_id))[0].get("_worker_error")
 
 
-async def test_supervisor_dispatches_native_worker_and_merges_admitted_coverage(
+async def test_supervisor_dispatches_native_worker_and_preserves_unassessed_coverage(
     env, tmp_path
 ):
     from test_research_migration import ScriptedModel, tool_call
@@ -318,11 +318,9 @@ async def test_supervisor_dispatches_native_worker_and_merges_admitted_coverage(
     with host.recovery.scope("research_supervisor", 0):
         outcomes, state = await lead.run("研究市场增长", contract)
     assert len(outcomes) == 1 and outcomes[0]["evidence_registry"]
-    assert state["middle_context"]["coverage_ledger"]
-    assert all(
-        row["status"] == "supported"
-        for row in state["middle_context"]["coverage_ledger"].values()
-    )
+    assert state["middle_context"]["coverage_ledger"] == {}
+    assert outcomes[0]["assessment"]["handoff"]["evaluation_status"] == "skipped"
+    assert outcomes[0]["assessment"]["tool_batches"][0]["accepted"]
     assert any(
         "Evidence ready" in text
         for text in host.recovery.snapshot.feedback_by_task["supervisor"]

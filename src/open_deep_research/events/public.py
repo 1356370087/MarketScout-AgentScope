@@ -148,6 +148,8 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
         "action_id", "approval_type", "status", "plan_id", "revision",
         "content_markdown", "allowed_actions",
         "source_plan", "version", "requirements",
+        "checkpoint", "report_step", "remaining_seconds", "estimated_report_seconds",
+        "suggested_extension_seconds", "extension_count", "max_requests", "completed_steps",
     },
     "approval.resolved": {"action_id", "approval_type", "action", "status"},
     "clarification.required": {
@@ -848,6 +850,10 @@ def project_public_events(events: list[PublicEvent]) -> PublicRunProjection:
                     "source_plan": payload.get("source_plan"),
                     "version": payload.get("version"),
                     "requirements": payload.get("requirements", []),
+                    **{key: payload[key] for key in (
+                        "checkpoint", "report_step", "remaining_seconds", "estimated_report_seconds",
+                        "suggested_extension_seconds", "extension_count", "max_requests", "completed_steps",
+                    ) if key in payload},
                 },
                 "allowed_actions": payload.get("allowed_actions", ["approve", "revise", "cancel"]),
             }

@@ -28,7 +28,10 @@ test("Agent Teams: authenticated research, dependency handoff, report and shutdo
       max_run_cost_micro_usd: 2_000_000, run_deadline_seconds: 1200,
       quality_evaluation_enabled: true, quality_evaluation_fail_open: false,
       quality_evaluation_min_sources: 1, report_review_enabled: true,
-      search_api: "none", search_providers: [], fetch_backend_order: ["local", "playwright"], external_extract_backends: [],
+      search_api: process.env.E2E_TEAMS_SEARCH_API ?? "none",
+      search_providers: JSON.parse(process.env.E2E_TEAMS_SEARCH_PROVIDERS ?? "[]"),
+      fetch_backend_order: JSON.parse(process.env.E2E_TEAMS_FETCH_BACKEND_ORDER ?? '["local", "playwright"]'),
+      external_extract_backends: JSON.parse(process.env.E2E_TEAMS_EXTERNAL_EXTRACT_BACKENDS ?? "[]"),
     },
   } });
   expect(response.ok(), await response.text()).toBeTruthy();
@@ -47,9 +50,18 @@ test("Agent Teams: authenticated research, dependency handoff, report and shutdo
       expect(["failed", "cancelled"], JSON.stringify(state)).not.toContain(state.status);
       if (state.pending_security_approvals?.length) {
         // The session authorizes only the two official sources in this test.
+        // DeepSeek Fetch itself may require a separate egress approval for its
+        // provider endpoint; that approval is part of this explicitly selected
+        // resource path and must not be confused with source expansion.
+        const extractBackends: string[] = JSON.parse(process.env.E2E_TEAMS_EXTERNAL_EXTRACT_BACKENDS ?? "[]");
+        const deepseekFetch = extractBackends.includes("deepseek");
         for (const approval of state.pending_security_approvals) {
-          const data = JSON.stringify(approval);
-          expect(data).toMatch(/postgresql\.org/);
+          expect(approval.kind).toBe("network");
+          expect(approval.target.port).toBe(443);
+          const source = ["postgresql.org", "www.postgresql.org"].includes(approval.target.domain);
+          const provider = deepseekFetch && approval.capability === "external.extract"
+            && approval.target.domain === "api.deepseek.com";
+          expect(source || provider, JSON.stringify(approval)).toBe(true);
         }
       }
       if (state.pending_human_action || state.pending_security_approvals?.length) {

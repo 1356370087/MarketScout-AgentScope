@@ -2302,7 +2302,13 @@ class GatewayRuntime:
         budget.trace_metadata = request.trace_metadata
         gateway = self.model_gateways.get(request.run_id)
         if gateway is None:
-            gateway = NativeGatewayProvider(api_key=litellm_key)
+            from open_deep_research.agentscope_runtime.efficiency import enabled
+
+            # The outer limiter owns the frozen logical-call deadline. An
+            # independent 180s HTTP timeout must not cut off its 360s allowance
+            # while LiteLLM is still completing a request or provider fallback.
+            timeout = Configuration.from_runnable_config(context.config).model_call_timeout_seconds + 5 if enabled(context.config) else 180
+            gateway = NativeGatewayProvider(api_key=litellm_key, request_timeout=timeout)
             self.model_gateways[request.run_id] = gateway
         tools = list(request.tools)
         tool_choice = request.tool_choice

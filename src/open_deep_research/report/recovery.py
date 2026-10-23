@@ -1,4 +1,4 @@
-"""Deterministic evidence-only report used after a quality-gate rejection."""
+"""Deterministic evidence-only report after an incomplete or rejected report."""
 
 from __future__ import annotations
 
@@ -119,12 +119,12 @@ def build_evidence_recovery_report(
     all_evidence = _deduplicate_evidence(evidence_records)
     evidence = all_evidence[:_MAX_EVIDENCE_RECORDS]
     lines = [
-        "# 质量门禁未通过的证据恢复报告",
+        "# 证据恢复报告",
         "",
         (
-            "> 本报告仅呈现当前可用的合格结构化证据，完整报告未通过生成或质量检查；不使用被拒绝的研究笔记补充结论。"
+            "> 完整分析报告尚未交付。以下仅呈现当前保留的结构化证据，不代表原始研究需求已全部满足；不使用被拒绝的研究笔记补充结论。"
             if evidence else
-            "> 当前没有可用于写作的合格结构化证据，无法形成有来源支持的研究结论。历史笔记不作为已验证证据。"
+            "> 当前没有可用于写作的结构化证据，无法形成有来源支持的研究结论。历史笔记不作为已验证证据。"
         ),
         "",
         "## 恢复状态",
@@ -149,7 +149,7 @@ def build_evidence_recovery_report(
         lines.extend(f"- {item}" for item in normalized_gaps)
         lines.append("")
     if normalized_reasons:
-        lines.extend(["拒绝原因：", ""])
+        lines.extend(["未完成原因：", ""])
         lines.extend(f"- {item}" for item in normalized_reasons)
         lines.append("")
 

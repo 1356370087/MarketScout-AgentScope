@@ -12,7 +12,7 @@ import { SurfaceDialog } from "@/components/ui/workspace";
 import { researchApi } from "@/lib/api";
 import { authFetch, iamApi, localAuthBypass } from "@/lib/auth";
 
-const statusLabel: Record<string, string> = { pending: "排队", running: "运行中", awaiting_clarification: "待澄清", awaiting_plan_approval: "待审批", awaiting_outline_approval: "待审批", awaiting_fetch_budget_approval: "待增额", completed: "已完成", failed: "失败", cancelled: "已取消" };
+const statusLabel: Record<string, string> = { pending: "排队", running: "运行中", awaiting_clarification: "待澄清", awaiting_plan_approval: "待审批", awaiting_outline_approval: "待审批", awaiting_fetch_budget_approval: "待增额", awaiting_report_time_extension_approval: "待延期确认", completed: "已完成", failed: "失败", cancelled: "已取消" };
 
 const narrowQuery = "(max-width: 1199px)";
 const subscribeViewport = (notify: () => void) => {

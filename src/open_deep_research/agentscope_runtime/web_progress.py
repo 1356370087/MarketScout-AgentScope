@@ -67,6 +67,10 @@ class WebProgress:
             str(payload.get(k, ""))
             for k in ("provider", "query_index", "query", "url", "backend")
         )
+        # One logical query can produce several bounded provider requests.
+        # Preserve their individual outcomes while still deduplicating replay.
+        if payload.get("effective_query") and payload["effective_query"] != payload.get("query"):
+            identity += ":" + payload["effective_query"]
         title = _TITLES.get(phase, "网页研究进度")
         if phase == "query_completed":
             title = {"all_filtered": "结果均不符合来源范围", "empty": "该查询没有检索结果"}.get(payload.get("result_status"), title)

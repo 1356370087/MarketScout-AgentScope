@@ -331,8 +331,15 @@ class SectionedStrategy:
 
     async def build(self, ctx: ReportContext) -> AssemblyResult:
         """Build through outline, concurrent sections, and concurrent framing."""
+        port = require_report_runtime()
+        if hasattr(port, "plan_section_writing"):
+            await port.plan_section_writing(_MAX_SECTIONS + 2, ctx.configurable)
         outline = await self._plan_outline(ctx)
+        if hasattr(port, "plan_section_writing"):
+            await port.plan_section_writing(len(outline.sections) + 2, ctx.configurable)
         sections = await self._write_sections(ctx, outline)
+        if hasattr(port, "plan_section_writing"):
+            await port.plan_section_writing(len(outline.sections) + 2, ctx.configurable)
         intro, conclusion = await _gather_writes([
             lambda: self._write_final_section(ctx, sections, "Introduction"),
             lambda: self._write_final_section(ctx, sections, "Conclusion"),

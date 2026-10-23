@@ -21,7 +21,7 @@ def task_snapshot(row):
 
 def task_view(row, *, summary=False):
     """Expose task facts, not Worker tokens or full model checkpoints."""
-    termination = (row.get("result") or {}).get("termination")
+    termination = (row.get("result") or {}).get("termination") or row.get("budget_stop_reason")
     execution = {"termination": termination, "error_message": row.get("error_message")}
     if row.get("admission_status") == "rejected" and termination not in {None, "completed", "research_complete"}:
         execution["admission_reason"] = "research_execution_not_completed: " + termination
@@ -32,7 +32,7 @@ def task_view(row, *, summary=False):
             "; ".join(assessment.get("hard_rejection_reasons") or []) or assessment.get("reason", "quality_rejected")
         )[:1200]
     elif row.get("status") in {"failed", "cancelled", "timed_out"}:
-        execution["admission_reason"] = row.get("error_message") or row["status"]
+        execution["admission_reason"] = row.get("budget_stop_reason") or row.get("error_message") or row["status"]
     if summary:
         keys = {"task_id", "owner", "status", "phase", "execution_mode", "version",
                 "requirement_ids", "admission_status", "plan_version", "blocks",
@@ -271,14 +271,28 @@ class TeamService:
                     raise PermissionError("team_lead_required")
                 await self._dependencies(db, identity.run_id, payload["task_id"], payload["blocked_by"])
                 return {"task_id": payload["task_id"], "blocked_by": payload["blocked_by"]}
+            if kind == "research_budget_close":
+                if identity.role != "lead":
+                    raise PermissionError("team_lead_required")
+                rows = await db.fetch(
+                    """UPDATE research_team_tasks SET status='cancelled',phase=NULL,version=version+1,
+                       snapshot=snapshot || $2::jsonb WHERE run_id=$1 AND status='pending' RETURNING task_id""",
+                    identity.run_id, json.dumps({"status": "cancelled", "budget_stop_reason": payload["reason"]}),
+                )
+                await db.execute("""UPDATE research_team_plans p SET status='superseded'
+                    WHERE run_id=$1 AND status='pending' AND EXISTS (
+                        SELECT 1 FROM research_team_tasks t WHERE t.run_id=p.run_id AND t.task_id=p.task_id AND t.status='cancelled')""", identity.run_id)
+                await db.execute("UPDATE research_team_proposals SET status='cancelled' WHERE run_id=$1 AND status='pending'", identity.run_id)
+                return {"cancelled_task_ids": [r["task_id"] for r in rows], "reason": payload["reason"]}
             if kind == "task_stop":
                 if identity.role != "lead":
                     raise PermissionError("team_lead_required")
                 status = await db.fetchval(
-                    """UPDATE research_team_tasks SET status='cancelled',version=version+1,
-                       snapshot=snapshot || '{"status":"cancelled"}'::jsonb
+                    """UPDATE research_team_tasks SET status='cancelled',phase=NULL,version=version+1,
+                       snapshot=snapshot || $3::jsonb
                        WHERE run_id=$1 AND task_id=$2 AND status IN ('pending','running','waiting_for_confirmation')
                        RETURNING status""", identity.run_id, payload["task_id"],
+                    json.dumps({"status": "cancelled", **({"budget_stop_reason": payload["budget_reason"]} if payload.get("budget_reason") else {})}),
                 )
                 await db.execute("UPDATE research_team_plans SET status='superseded' WHERE run_id=$1 AND task_id=$2 AND status='pending'", identity.run_id, payload["task_id"])
                 return {"task_id": payload["task_id"], "status": status or "already_terminal"}

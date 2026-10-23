@@ -47,7 +47,7 @@ async def cache(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rejected_handoff_retains_diagnostic_artifact_without_admission(cache):
+async def test_handoff_bypass_preserves_evidence_and_records_unassessed_progress(cache):
     from tests.as_runtime.test_research_migration import Models, cfg, contract, evidence, tool_call
     from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff, Supervisor
     from open_deep_research.quality.gate import HandoffAssessment
@@ -61,7 +61,8 @@ async def test_rejected_handoff_retains_diagnostic_artifact_without_admission(ca
     class Worker:
         async def run(self, assignment, contract, feedback):
             return ResearchHandoff(**assignment.model_dump(), compressed_research="Original grounded handoff",
-                                   evidence_registry=[evidence()], agent_state={"private": "must not archive"})
+                evidence_registry=[evidence()], agent_state={"private": "must not archive"},
+                assessment={"tool_batches": [{"gaps": [{"requirement_id": rid, "kind": "factual", "reason": "Limits not yet verified"}]}]})
 
     class Quality:
         async def handoff(self, outcome, contract):
@@ -69,12 +70,15 @@ async def test_rejected_handoff_retains_diagnostic_artifact_without_admission(ca
                                      groundedness=4, reason="Limits need further evidence.")
 
     findings, _ = await Supervisor(models, lambda: config, Worker(), run_id="efficiency", quality=Quality()).run("brief", coverage)
-    assert len(findings) == 1 and findings[0]["evidence_registry"] == []
-    original = await cache.get(findings[0]["assessment"]["rejected_handoff_ref"])
-    assert original["compressed_research"] == "Original grounded handoff"
-    assert original["evidence_registry"][0]["evidence_id"] == "ev1"
-    assert original["coverage_contract"] == coverage
-    assert "agent_state" not in original
+    assert len(findings) == 1 and findings[0]["evidence_registry"] == [evidence()]
+    assert findings[0]["compressed_research"] == "Original grounded handoff"
+    assert findings[0]["assessment"]["handoff"]["evaluation_status"] == "skipped"
+    assert "rejected_handoff_ref" not in findings[0]["assessment"]
+    progress = await cache.progress()
+    assert progress["requirements"][rid]["status"] == "unassessed"
+    assert progress["requirements"][rid]["rounds"] == 1
+    assert progress["requirements"][rid]["gaps"][0]["reason"] == "Limits not yet verified"
+    assert all(progress["admitted"]["ev1"][key] == value for key, value in evidence().items())
 
 
 @pytest.mark.asyncio
@@ -107,7 +111,8 @@ async def test_supervisor_can_assign_every_scope_despite_short_leaf_iteration_li
 
     findings, state = await Supervisor(models, lambda: config, Worker(), run_id="all-scopes", quality=Quality(), completion_policy=True).run("brief", coverage)
     assert len(findings) == 5
-    assert set(state["middle_context"]["coverage_ledger"]) == set(ids)
+    assert state["middle_context"]["coverage_ledger"] == {}
+    assert {rid for finding in findings for rid in finding["requirement_ids"]} == set(ids)
     assert state["middle_context"]["business_completion"]["action"] == "complete"
     import json
     assert "remaining_scopes" in json.dumps(models.created[0][2].calls, default=str)
@@ -140,7 +145,10 @@ async def test_allowed_supplement_does_not_consume_turns_needed_for_an_unassigne
     class Worker:
         async def run(self, assignment, contract, feedback):
             attempts.append(assignment.requirement_ids)
-            return ResearchHandoff(**assignment.model_dump(), compressed_research="Grounded finding.", evidence_registry=[evidence()])
+            gaps = [{"requirement_id": assignment.requirement_ids[0], "kind": "factual",
+                     "reason": "One fact needs a supplement."}] if len(attempts) == 1 else []
+            return ResearchHandoff(**assignment.model_dump(), compressed_research="Grounded finding.", evidence_registry=[evidence()],
+                assessment={"tool_batches": [{"accepted": not gaps, "decision": "continue" if gaps else "complete", "gaps": gaps}]})
 
     class Quality:
         async def handoff(self, outcome, contract):
@@ -153,7 +161,7 @@ async def test_allowed_supplement_does_not_consume_turns_needed_for_an_unassigne
     _, state = await Supervisor(models, lambda: config, Worker(), run_id="supplement-scopes", quality=Quality(), completion_policy=True).run("brief", coverage)
     if version >= 20:
         assert state["middle_context"]["business_completion"]["action"] == "complete"
-        assert all(state["middle_context"]["coverage_ledger"][rid]["status"] == "supported" for rid in ids)
+        assert state["middle_context"]["coverage_ledger"] == {}
         assert attempts.count([ids[0]]) == 2
     else:
         assert state["middle_context"]["business_completion"]["action"] != "complete"

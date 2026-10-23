@@ -59,6 +59,8 @@ class NativeResearchContext(MiddlewareBase):
 
     def __init__(self, models, role, model, config=None):
         self.models, self.role = models, role
+        self.before_compression = None
+        self.runtime_config = config
         self.recovery = getattr(models, "recovery", None)
         self.model = ContextModel(model)
         from open_deep_research.configuration import Configuration
@@ -114,11 +116,18 @@ class NativeResearchContext(MiddlewareBase):
         )
 
     async def on_compress_context(self, agent, input_kwargs, next_handler):
+        if self.before_compression and await self.before_compression(agent):
+            return
         if self.bounded and self.role == "researcher":
             from open_deep_research.agentscope_runtime.runtime_limits import current_deadline_at
 
             if self.recovery and self.recovery.problem:
                 raise ContextControlError(self.recovery.problem)
+            from .execution_budget import enabled
+            if enabled(self.runtime_config or {}):
+                from .efficiency import research_budget_reason
+                if await research_budget_reason(self.models, self.runtime_config):
+                    return
             deadline = current_deadline_at()
             if deadline is not None and deadline - time.time() <= self.model_call_timeout_seconds:
                 # SDK compression precedes the domain reasoning boundary. Leave

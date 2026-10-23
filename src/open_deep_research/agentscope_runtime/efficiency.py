@@ -51,6 +51,8 @@ def research_guidance(config, *, supervisor=False):
         "不能新增必答事实或扩大来源范围。质量反馈只在原始范围内补证；范围外的前提应标为缺口。"
         "按需求 ID、证据及已检查片段判断进展；改变查询措辞或新建任务不重置补证额度。"
         "收到 research_stopped 时调用 ResearchComplete，保留已准入证据，明确未完成要求。"
+        "原始需求提供了具体网页 URL 时，优先直接读取与当前任务相关的入口，再在批准来源内补充检索；"
+        "不要用猜测的文档路径代替用户给出的入口。未读取的入口不能列入报告引用来源。"
     )
     from open_deep_research.configuration import QUALITY_POLICY_VERSION
     if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
@@ -305,6 +307,11 @@ def finish_requirements(state, ids, assessment, before, task_id):
                 if gap.get("requirement_id") == rid
             ],
         }
+        if assessment.get("evaluation_status") == "skipped":
+            # 临时旁路只记录交付与尝试次数；不能覆盖旧质量结论或伪造 supported。
+            # unassessed 仅为进度缓存状态，不写入 ResearchCoverageContract/覆盖台账。
+            result[rid]["status"] = prior.get("status", "unassessed")
+            result[rid]["evaluation_status"] = "skipped"
     return result
 
 
@@ -324,6 +331,12 @@ async def research_budget_reason(models, config):
         return None
     cfg = Configuration.from_runnable_config(config)
     budget = await recovery.store.budget(recovery.lease.run_id, recovery.lease.user_id)
+    from .execution_budget import enabled as dynamic_enabled, research_stop_reason
+
+    if dynamic_enabled(config):
+        reason = await research_stop_reason(models, config)
+        if reason:
+            return reason
     roles = [
         ("final_report", cfg.final_report_model, cfg.final_report_model_max_tokens)
     ]
@@ -374,7 +387,11 @@ async def research_budget_reason(models, config):
         limit = budget["limits"].get(dimension)
         used = budget["used"].get(dimension, 0) + budget["reserved"].get(dimension, 0)
         if limit is not None and limit - used <= remaining:
+            if dynamic_enabled(config):
+                return await recovery.store.close_research(recovery.lease, "report_budget_reserved")
             return "report_budget_reserved"
+    if dynamic_enabled(config):
+        return None
     if (
         budget.get("deadline")
         and budget["deadline"] - time.time() <= min(calls * cfg.model_call_timeout_seconds,

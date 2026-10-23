@@ -142,6 +142,22 @@ class SendMessageTool:
         self.team, self.identity, self.prefix = team, identity, prefix
 
     async def call(self, input, context, progress):
+        from .execution_budget import enabled
+        message = input.message.model_dump() if hasattr(input.message, "model_dump") else input.message
+        if (enabled(context.config) and isinstance(message, dict)
+                and message.get("type") == "plan_approval_response" and message.get("approve")):
+            from .teams_planning import plan_source_checks
+            import json
+            async with self.team.transport.store.pool.acquire() as db:
+                row = await db.fetchrow("""SELECT p.content,t.snapshot FROM research_team_plans p
+                    JOIN research_team_tasks t ON t.run_id=p.run_id AND t.task_id=p.task_id
+                    WHERE p.run_id=$1 AND p.task_id=$2 AND p.version=$3""",
+                    self.identity.run_id, message["task_id"], message["version"])
+            if row:
+                checks = plan_source_checks(json.loads(row["content"]),
+                    json.loads(row["snapshot"])["coverage_contract"], context.config)
+                if checks["denied"]:
+                    raise ValueError("plan_sources_outside_authorized_scope:" + json.dumps(checks["denied"]))
         result = await self.team.send_message(
             self.identity,
             self.prefix + context.tool_call_id,

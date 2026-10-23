@@ -172,7 +172,8 @@ class NativeResearchStages:
                 atomic=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"},
                 entities=result.entities,
                 preserve_conditions=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
-                preserve_scope=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20)
+                preserve_scope=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20,
+                task_scopes=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 21)
         else:
             contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())
@@ -216,13 +217,31 @@ class NativeResearchStages:
         cfg = Configuration.from_runnable_config(self.config_provider())
         self.supervisor.initial_findings = state.findings
         self.supervisor.initial_coverage_ledger = state.coverage_ledger
+        from .execution_budget import enabled
+        if enabled(self.config_provider()):
+            import asyncio
+            findings_lock = asyncio.Lock()
+
+            async def persist_findings(findings):
+                async with findings_lock:
+                    merged = {row["task_id"]: row for row in state.findings}
+                    merged.update({row["task_id"]: row for row in findings})
+                    state.findings = list(merged.values())
+                    recovery = getattr(self.models, "recovery", None)
+                    if recovery:
+                        await recovery.save(state)
+
+            self.supervisor.persist_findings = persist_findings
         feedback = list(state.feedback)
         if cfg.enable_async_research and cfg.async_research_mode == "teams":
             feedback.extend("用户原始协作要求：" + message.get_text_content()
                 for message in state.messages if message.role == "user")
-        state.findings, agent_state = await self.supervisor.run(
-            state.research_brief, state.coverage_contract, feedback
-        )
+        try:
+            state.findings, agent_state = await self.supervisor.run(
+                state.research_brief, state.coverage_contract, feedback
+            )
+        finally:
+            self.supervisor.persist_findings = None
         state.agent_states["supervisor"] = agent_state
         state.completion_outcome = agent_state.get("middle_context", {}).get(
             "business_completion", {}
@@ -246,12 +265,6 @@ class NativeResearchStages:
             self.config_provider()
         ).enable_human_in_loop:
             return
-        if state.completion_outcome.get("action") == "complete_partial" and (
-            state.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
-            or not any(f.get("evidence_registry") for f in state.findings)
-        ):
-            state.outline = "部分研究说明：列出已有证据支持的结论、尚未证实的需求和受限的资料范围。"
-            return PendingDecision(stage="outline_approval", question=state.outline)
         if state.completion_outcome.get("action") == "complete_partial" and (
             state.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
             or not any(f.get("evidence_registry") for f in state.findings)
@@ -303,6 +316,10 @@ class NativeResearchStages:
 
     async def memory_extract_and_write(self, state):
         if state.completion_outcome.get("reason") == "deadline_exceeded":
+            return
+        if state.application.get("execution_budget", {}).get("extension_history"):
+            # 追加时间只用于报告，不能在其后启动新的记忆提取模型调用。
+            state.application.setdefault("skipped_optional_stages", {})["memory_extract_and_write"] = "report_only_time_authorization"
             return
         cfg = self._memory_scope()
         if (

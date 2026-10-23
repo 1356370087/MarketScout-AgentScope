@@ -15,15 +15,16 @@ from open_deep_research.agentscope_runtime.team_worker import _Worker
 pytestmark = pytest.mark.asyncio
 
 
-async def test_disabled_semantic_quality_still_admits_verified_completed_task(env, tmp_path):
+async def test_disabled_semantic_quality_also_skips_deterministic_handoff_gate(env, tmp_path):
     team = await env[0]()
     host, _, _ = await workers(team, env[1], tmp_path, quality_enabled=False)
     item, contract = assignment()
     try:
         outcome = await host.dispatch(item, contract)
         assessment = outcome.assessment["handoff"]
-        assert assessment["accepted"] and assessment["deterministic_checks"]["passed"]
-        assert "semantic_quality_disabled" in assessment["caveats"]
+        assert assessment["accepted"] and assessment["evaluation_status"] == "skipped"
+        assert assessment["admission_status"] == "accepted_with_caveats"
+        assert "deterministic_checks" not in assessment
     finally:
         await host.aclose()
 

@@ -30,6 +30,7 @@ from open_deep_research.agentscope_runtime.native_context import (
     NativeResearchContext,
 )
 from open_deep_research.agentscope_runtime.research_completion import BusinessCompletion
+from open_deep_research.agentscope_runtime.research_quality import skipped_handoff_assessment
 from open_deep_research.agentscope_runtime.tools import (
     ToolGovernanceMiddleware,
     prepare_toolkit,
@@ -44,7 +45,7 @@ from open_deep_research.evidence import (
 from open_deep_research.prompts import lead_researcher_prompt, research_system_prompt
 from open_deep_research.quality.contract import (
     ResearchCoverageContract,
-    merge_coverage_ledger,
+    # merge_coverage_ledger,  # 恢复交接质量门禁时还原。
     task_coverage_contract,
 )
 from open_deep_research.quality.gate import (
@@ -123,7 +124,7 @@ async def _evidence_handoff_notes(models, assignment, evidence, cfg, *, referenc
     def render(count):
         return _compression_context({
             "status": "candidate_evidence_handoff",
-            "compression_warning": "压缩摘要未通过引用校验，已弃用；以下候选证据仍须经过质量交接检查。",
+            "compression_warning": "压缩摘要未通过引用校验，已弃用；以下候选证据保留来源与工具反馈，不代表结论已核实。",
             "records": records[:count], "omitted_record_count": len(records) - count,
         }, urls)
 
@@ -437,10 +438,16 @@ class Researcher:
         model_contract = contract
         model_config = scoped_config()
         scoped_model_context = model_config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}
+        task_scope = None
         if scoped_model_context:
             from open_deep_research.quality.contract import researcher_coverage_view
             model_contract = researcher_coverage_view(contract, assignment.requirement_ids,
                 preserve_scope=model_config.get("metadata", {}).get("run_config_schema_version", 18) >= 20)
+            model_config = {**model_config, "metadata": {**model_config.get("metadata", {}), "coverage_contract": model_contract}}
+        if model_config.get("metadata", {}).get("run_config_schema_version", 18) >= 21:
+            from open_deep_research.quality.task_scope import TaskEvaluationScope
+            task_scope = TaskEvaluationScope.build(contract, assignment.requirement_ids)
+            model_contract = task_scope.contract_view(contract)
             model_config = {**model_config, "metadata": {**model_config.get("metadata", {}), "coverage_contract": model_contract}}
         completion = _Completion(cfg.max_react_tool_calls)
 
@@ -594,7 +601,10 @@ class Researcher:
                     else:
                         agent.state.middle_context["research_stagnant_rounds"] = 0
                     agent.state.middle_context["research_quality_progress"] = progress
-                if assessment.get("evaluator_error") and not cfg.quality_evaluation_fail_open:
+                if assessment.get("evaluator_error") in {"quality_scope_violation", "quality_input_incomplete"}:
+                    completion.stopped = True
+                    completion.stop_reason = assessment["evaluator_error"]
+                elif assessment.get("evaluator_error") and not cfg.quality_evaluation_fail_open:
                     completion.stopped = True
             if completion.requested:
                 latest = observations.assessments[-1] if observations.assessments else None
@@ -612,6 +622,7 @@ class Researcher:
         toolkit.journal = getattr(self.models, "recovery", None)
         model = self.models.agent_model("researcher", assignment.task_id)
         native_context = NativeResearchContext(self.models, "researcher", model, model_config)
+        from open_deep_research.quality.task_scope import TASK_SCOPE_RULES
         from open_deep_research.skills import get_skill_researcher_context
         skill_guidance = get_skill_researcher_context(cfg.skills)
         agent = Agent(
@@ -624,6 +635,7 @@ class Researcher:
                 tool_guidance="{tool_guidance}",
             ) + research_guidance(scoped_config()) + ("\n" + CONTEXT_RULES if scoped_model_context and contract.get("schema_version", 2) >= 3 else "")
             + ("\n" + SCOPE_CONTEXT_RULES if model_contract.get("scope_context") else "")
+            + ("\n" + TASK_SCOPE_RULES if task_scope else "")
             + ("\n\n" + skill_guidance if skill_guidance else ""),
             model_config=ModelConfig(max_retries=0),
             react_config=ReActConfig(max_iters=cfg.max_react_tool_calls),
@@ -645,6 +657,7 @@ class Researcher:
                     "topic": assignment.research_topic,
                     "requirement_ids": assignment.requirement_ids,
                     "coverage_contract": model_contract,
+                    **({"task_scope": task_scope.model_dump(mode="json")} if task_scope else {}),
                     "feedback": list(feedback),
                 },
             ),
@@ -685,7 +698,7 @@ class Researcher:
                                           observations.assessments, scoped_config())
         compression = {"status": "model_summary", "attempts": 0}
         for attempt in range(2):
-            if completion.stop_reason in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
+            if completion.stop_reason in {"report_budget_reserved", "report_time_reserved", "task_time_reserved", "fetch_budget_exhausted"}:
                 notes = "研究已停止新增调用，以遵守任务时限及报告预算。候选证据由独立 evidence_registry 完整携带；未核实问题不能据此视为已覆盖。"
                 compression.update(status="evidence_only", reason=completion.stop_reason)
                 break
@@ -772,6 +785,9 @@ class Supervisor:
             progress_signature,
             stop_reason,
         )
+        from .execution_budget import enabled as budget_enabled
+
+        modern_budget = budget_enabled(self.config_provider())
 
         cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
         bounded = cfg.research_efficiency_mode == "bounded" and cache is not None
@@ -814,6 +830,33 @@ class Supervisor:
         completion = _Completion(coordination_limit)
         ledger = dict(getattr(self, "initial_coverage_ledger", {})) if contract.get("schema_version", 2) >= 3 else {}
         assessments = {}
+        persisted_findings = set(results)
+
+        async def persist_deliveries():
+            if modern_budget and getattr(self, "persist_findings", None) and set(results) - persisted_findings:
+                saved = list(results)
+                await self.persist_findings([results[key].model_dump(mode="json") for key in saved])
+                persisted_findings.update(saved)
+
+        def delivered_requirements():
+            return {rid for outcome in results.values()
+                    if outcome.assessment.get("handoff", {}).get("accepted", True)
+                    and outcome.assessment.get("handoff", {}).get("admission_status") != "rejected"
+                    for rid in outcome.requirement_ids}
+
+        def tool_gap_requirements():
+            # 仅最新工具反馈中的实际缺口允许再次派发；未做交接评审不是补研理由。
+            needs_supplement = {}
+            for outcome in results.values():
+                batches = outcome.assessment.get("tool_batches", [])
+                latest = batches[-1] if batches else {}
+                gaps = latest.get("gaps", [])
+                factual_ids = {gap["requirement_id"] for gap in gaps if gap["kind"] in {"factual", "conflict"}}
+                unscoped_gap = not gaps and not latest.get("accepted") and (
+                    latest.get("missing_information") or latest.get("unresolved_conflicts"))
+                for rid in outcome.requirement_ids:
+                    needs_supplement[rid] = rid in factual_ids or bool(unscoped_gap)
+            return {rid for rid, needed in needs_supplement.items() if needed}
 
         def completion_facts():
             evidence = {
@@ -831,7 +874,9 @@ class Supervisor:
                 else ()
             )
             from open_deep_research.agentscope_runtime.efficiency import remaining_research_stop
-            per_requirement_stop = remaining_research_stop(efficiency_state, available_ids, ledger, self.config_provider()) if bounded else None
+            # 已交付不等于 supported；收尾只对尚未交付的任务考虑补研耗尽。
+            pending_ids = [rid for rid in available_ids if rid not in delivered_requirements()]
+            per_requirement_stop = remaining_research_stop(efficiency_state, pending_ids, ledger, self.config_provider()) if bounded else None
             return CompletionPolicyContext(
                 evidence_count=len(evidence),
                 independent_source_count=count_traceable_sources(evidence.values()),
@@ -852,7 +897,7 @@ class Supervisor:
                 accept_covered_on_exit=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
             )
 
-        def assign(input, *, synthesis_ids=None):
+        def assign(input, *, synthesis_ids=None, call_id=None):
             if cfg.research_efficiency_mode == "bounded":
                 from open_deep_research.agentscope_runtime.search_providers import (
                     source_allowed,
@@ -907,7 +952,8 @@ class Supervisor:
             claimed.update(ids)
             recovery = getattr(self.models, "recovery", None)
             if recovery:
-                assignment.task_id = recovery.assignment_id(len(assignments))
+                assignment.task_id = recovery.assignment_id(
+                    "call:" + call_id if modern_budget and call_id else len(assignments))
             assignments[assignment.task_id] = assignment
             return assignment
 
@@ -935,8 +981,16 @@ class Supervisor:
             )
 
         async def execute_inner(assignment):
-            nonlocal ledger, efficiency_state
+            # 恢复交接门禁时，ledger 也需重新列入 nonlocal。
+            nonlocal efficiency_state, budget_stop
             async with semaphore:
+                if modern_budget and self.team_workers is None:
+                    from .efficiency import research_budget_reason
+                    from .team_worker import TaskBudgetStopped
+
+                    reason = await research_budget_reason(self.models, self.config_provider())
+                    if reason:
+                        raise TaskBudgetStopped(reason)
                 before = progress_signature(await cache.progress(), assignment.requirement_ids) if bounded else ""
                 if not teams_mode:
                     await publish_task(assignment, "running")
@@ -945,47 +999,61 @@ class Supervisor:
                     if self.team_workers is not None
                     else await self.researcher.run(assignment, contract, feedback)
                 )
-                if self.quality and cfg.quality_evaluation_enabled:
-                    if self.team_workers is not None:
-                        from open_deep_research.quality.gate import HandoffAssessment
-
-                        assessment = HandoffAssessment.model_validate(
-                            outcome.assessment["handoff"]
-                        )
-                    elif outcome.termination in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
-                        from open_deep_research.quality.gate import HandoffAssessment
-
-                        assessment = HandoffAssessment(accepted=False, reason=outcome.termination)
-                    else:
-                        assessment = await self.quality.handoff(outcome, contract)
-                    assessments[assignment.task_id] = assessment.model_dump(mode="json")
-                    outcome.assessment["handoff"] = assessments[assignment.task_id]
-                    if not assessment.accepted:
-                        if bounded and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
-                            from open_deep_research.agentscope_runtime.efficiency import fingerprint
-                            original = {"task_id": assignment.task_id, "research_topic": outcome.research_topic,
-                                "requirement_ids": outcome.requirement_ids, "compressed_research": outcome.compressed_research,
-                                "evidence_registry": outcome.evidence_registry, "coverage_contract": contract}
-                            reference = "rejected_handoff:" + fingerprint(original)
-                            if await cache.get(reference) is None:
-                                await cache.begin(reference)
-                                await cache.commit(reference, original)
-                            outcome.assessment["rejected_handoff_ref"] = reference
-                        outcome.evidence_registry = []
-                        outcome.compressed_research = "交接被拒绝：" + assessment.reason
-                    else:
-                        ledger = merge_coverage_ledger(
-                            ledger,
-                            task_id=assignment.task_id,
-                            assessment=assessment,
-                            owned_requirement_ids=assignment.requirement_ids,
-                        )
+                if outcome.termination in {"report_budget_reserved", "report_time_reserved", "fetch_budget_exhausted"}:
+                    budget_stop = outcome.termination
+                # 临时停用交接评审及拒收；恢复时还原下方代码，并撤销跳过回执与调度适配。
+                # NativeResearchQuality.handoff 保留原实现；工具批次纠偏仍正常执行。
+                # if self.quality and cfg.quality_evaluation_enabled:
+                #     if self.team_workers is not None:
+                #         from open_deep_research.quality.gate import HandoffAssessment
+                #
+                #         assessment = HandoffAssessment.model_validate(
+                #             outcome.assessment["handoff"]
+                #         )
+                #     elif outcome.termination in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
+                #         from open_deep_research.quality.gate import HandoffAssessment
+                #
+                #         assessment = HandoffAssessment(accepted=False, reason=outcome.termination)
+                #     else:
+                #         assessment = await self.quality.handoff(outcome, contract)
+                #     assessments[assignment.task_id] = assessment.model_dump(mode="json")
+                #     outcome.assessment["handoff"] = assessments[assignment.task_id]
+                #     if not assessment.accepted:
+                #         if bounded and self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) in {"quality-gate-v5", "quality-gate-v6"}:
+                #             from open_deep_research.agentscope_runtime.efficiency import fingerprint
+                #             original = {"task_id": assignment.task_id, "research_topic": outcome.research_topic,
+                #                 "requirement_ids": outcome.requirement_ids, "compressed_research": outcome.compressed_research,
+                #                 "evidence_registry": outcome.evidence_registry, "coverage_contract": contract}
+                #             reference = "rejected_handoff:" + fingerprint(original)
+                #             if await cache.get(reference) is None:
+                #                 await cache.begin(reference)
+                #                 await cache.commit(reference, original)
+                #             outcome.assessment["rejected_handoff_ref"] = reference
+                #         outcome.evidence_registry = []
+                #         outcome.compressed_research = "交接被拒绝：" + assessment.reason
+                #     else:
+                #         ledger = merge_coverage_ledger(
+                #             ledger,
+                #             task_id=assignment.task_id,
+                #             assessment=assessment,
+                #             owned_requirement_ids=assignment.requirement_ids,
+                #         )
+                # 异步 Worker 已提交的回执必须原样重放，包括历史拒收；不重新解释旧结果。
+                assessment = (outcome.assessment["handoff"] if self.team_workers is not None
+                              else skipped_handoff_assessment())
+                assessments[assignment.task_id] = assessment
+                outcome.assessment["handoff"] = assessment
                 results[assignment.task_id] = outcome
+                await persist_deliveries()
                 if bounded:
                     state = await cache.progress()
                     assessment = assessments.get(assignment.task_id, {})
+                    progress_assessment = assessment
+                    if assessment.get("evaluation_status") == "skipped":
+                        latest_batch = (outcome.assessment.get("tool_batches") or [{}])[-1]
+                        progress_assessment = {**assessment, "gaps": latest_batch.get("gaps", [])}
                     efficiency_state = await cache.progress({
-                        "requirements": finish_requirements(state, assignment.requirement_ids, assessment, before, assignment.task_id),
+                        "requirements": finish_requirements(state, assignment.requirement_ids, progress_assessment, before, assignment.task_id),
                         "admitted": {row["evidence_id"]: row for row in outcome.evidence_registry},
                         "assessments": {assignment.task_id: assessment},
                         "tasks": {assignment.task_id: {**state.get("tasks", {}).get(assignment.task_id, {}),
@@ -995,10 +1063,12 @@ class Supervisor:
                     publish_handoff,
                 )
 
-                await publish_handoff(self.models, outcome, context_chars=self.context_chars)
+                await publish_handoff(self.models, outcome, context_chars=self.context_chars,
+                                      config=self.config_provider())
                 return outcome
 
         async def execute(assignment):
+            nonlocal budget_stop
             recovery = getattr(self.models, "recovery", None)
             try:
                 if recovery:
@@ -1010,6 +1080,14 @@ class Supervisor:
                 # 用户取消会撤销 fence；终态由 run.cancelled 投影。
                 raise
             except Exception as exc:
+                from .team_worker import TaskBudgetStopped
+                if isinstance(exc, TaskBudgetStopped):
+                    budget_stop = str(exc)
+                    if bounded:
+                        await cache.progress({"tasks": {assignment.task_id: {
+                            "status": "cancelled", "budget_stop_reason": str(exc)}}})
+                    await publish_task(assignment, "cancelled")
+                    raise
                 from open_deep_research.tools.governance import _is_runtime_control_error
                 if bounded and not _is_runtime_control_error(exc) and not (recovery and recovery.problem):
                     state = await cache.progress()
@@ -1029,7 +1107,21 @@ class Supervisor:
                 from open_deep_research.agentscope_runtime.teams_tools import dependency_synthesis_ids
                 synthesis_ids = dependency_synthesis_ids(input,
                     await self.team_workers.team.service.tasks(self.run_id), coverage)
-            assignment = assign(input, synthesis_ids=synthesis_ids)
+            assignment = assign(input, synthesis_ids=synthesis_ids, call_id=context.tool_call_id)
+            if modern_budget and assignment.task_id in results:
+                outcome = results[assignment.task_id]
+                return ToolResult(output={"task_id": assignment.task_id, "status": "completed"}
+                                  if cfg.enable_async_research else outcome.model_dump(mode="json", exclude={"agent_state"}))
+            # 冻结 scope 可按交付去重；普通任务可能共同承担同一需求，不能截掉同批排队任务。
+            if use_scopes and synthesis_ids is None:
+                delivered, tool_gaps = delivered_requirements(), tool_gap_requirements()
+                pending_ids = [rid for rid in assignment.requirement_ids if rid not in delivered or rid in tool_gaps]
+                if assignment.requirement_ids and not pending_ids:
+                    assignments.pop(assignment.task_id, None)
+                    return ToolResult(output={"status": "research_stopped", "reason": "requirements_already_delivered",
+                        "requirement_ids": assignment.requirement_ids,
+                        "instruction": "这些需求的任务已交付，交接质量未评估。不要因覆盖台账为空重复派发；继续未交付任务，或调用 ResearchComplete。"})
+                assignment.requirement_ids = pending_ids
             if bounded:
                 from open_deep_research.agentscope_runtime.efficiency import (
                     research_budget_reason,
@@ -1057,7 +1149,11 @@ class Supervisor:
                         "instruction": "停止重复补证，调用 ResearchComplete；保留已准入证据并列明缺口。"})
             async with scheduling:
                 if bounded:
+                    # 同一比较需求可由多项研究分别承担；仅凭需求 ID 会把不同竞品
+                    # 错当成同一任务。只复用主题、负责人和依赖均相同的在途请求。
                     key = fingerprint([sorted(assignment.requirement_ids), fixed_urls,
+                                       assignment.research_topic,
+                                       input.owner if teams_mode else None,
                                        sorted(input.blockedBy) if teams_mode else []])
                     duplicate = active_work.get(key)
                     if duplicate is not None and not duplicate.done():
@@ -1090,22 +1186,24 @@ class Supervisor:
                 output["remaining_scopes"] = [
                     {**row, "unassigned": not any(rid in claimed for rid in row["requirement_ids"])}
                     for row in delegation_scopes
-                    if any(ledger.get(rid, {}).get("status") != "supported" for rid in row["requirement_ids"])
+                    if any(rid not in delivered_requirements() for rid in row["requirement_ids"])
                 ]
                 output["coordination_instruction"] = (
-                    "Cover every remaining scope, including scopes not assigned yet. Evidence in one task "
-                    "does not mark a sibling scope covered. Select an unassigned scope before repeating "
-                    "completed work; the Researcher can reuse downloaded sources."
+                    "Complete delivery for every remaining scope, including scopes not assigned yet. "
+                    "Delivery is not a quality verdict: handoff assessment is temporarily skipped. "
+                    "Do not repeat delivered work because the coverage ledger is unassessed; "
+                    "only actionable tool feedback may justify a bounded supplement."
                 )
             return ToolResult(output=output)
 
         def snapshot(task_id):
+            from .team_worker import TaskBudgetStopped
             task = tasks[task_id]
             status = "running"
             if task.done():
                 status = (
                     "cancelled"
-                    if task.cancelled()
+                    if task.cancelled() or isinstance(task.exception(), TaskBudgetStopped)
                     else "failed"
                     if task.exception()
                     else "completed"
@@ -1178,19 +1276,82 @@ class Supervisor:
                 raise ValueError(
                     "ResearchComplete requires all research tasks to finish"
                 )
-            if not results and not source_proposals:
+            recovery = getattr(self.models, "recovery", None)
+            if modern_budget and recovery:
+                own_key = (f"{recovery.stage.get()}:{recovery.task_id.get()}:tool:{context.tool_call_id}"
+                           if context is not None else None)
+                await recovery.store.assert_call_outcomes(recovery.lease, ignore_key=own_key)
+            if not results and not source_proposals and not (modern_budget and budget_stop):
                 raise ValueError("ResearchComplete requires a research handoff")
             if self.completion_policy and not source_proposals:
                 decision = completion.evaluate(explicit=True)
                 if decision.action is CompletionDecision.CONTINUE_WITH_GAPS:
                     raise ValueError("research gaps: " + "; ".join(decision.gaps))
             if teams_mode:
-                await self.team_workers.finish_team()
+                if not (modern_budget and budget_stop) or await self.team_workers.team.members():
+                    await self.team_workers.finish_team()
             if self.completion_policy:
                 completion.request_completion()
             else:
                 completion.finished = True
             return ToolResult(output="ResearchComplete")
+
+        async def close_at_boundary(agent):
+            """Finish through the existing control entry before another model turn."""
+            nonlocal budget_stop
+            if completion.finished:
+                return True
+            recovery = getattr(self.models, "recovery", None)
+            if recovery and recovery.problem:
+                raise ContextControlError(recovery.problem)
+            from .efficiency import research_budget_reason
+
+            budget_stop = budget_stop or await research_budget_reason(self.models, self.config_provider())
+            if budget_stop:
+                if self.team_workers:
+                    await self.team_workers.close_pending_for_budget(budget_stop)
+                if tasks:
+                    # Do not cancel already dispatched external effects.
+                    await asyncio.gather(*tasks.values(), return_exceptions=True)
+            if self.team_workers:
+                for outcome in await self.team_workers.collect_completed(exclude=results):
+                    results[outcome.task_id] = outcome
+                    assignments.setdefault(outcome.task_id, ResearchAssignment(
+                        task_id=outcome.task_id, research_topic=outcome.research_topic,
+                        requirement_ids=outcome.requirement_ids))
+                    assessments[outcome.task_id] = outcome.assessment.get("handoff", {})
+            await persist_deliveries()
+            all_done = all(task.done() for task in tasks.values())
+            delivered = set(available_ids).issubset(delivered_requirements())
+            if not all_done or not (budget_stop or results and delivered):
+                return False
+            if self.team_workers:
+                # Apply existing messages before finish_team checks its invariants.
+                await self.team_workers.consume_leader_inputs()
+            try:
+                await complete(_Empty(), None, None)
+            except ValueError as exc:
+                if str(exc) in {"review_pending_task_proposals_before_completion",
+                                "wait_for_team_messages_to_be_applied_before_completion"}:
+                    if not budget_stop:
+                        return False
+                    # Members drain input without model discussion while closing.
+                    for _ in range(60):
+                        await asyncio.sleep(.5)
+                        try:
+                            await complete(_Empty(), None, None)
+                            break
+                        except ValueError as pending:
+                            if str(pending) not in {"review_pending_task_proposals_before_completion",
+                                                    "wait_for_team_messages_to_be_applied_before_completion"}:
+                                raise
+                    else:
+                        raise
+                else:
+                    raise
+            agent.state.middle_context["completion_signal"] = {
+                "tool": "ResearchComplete", "origin": "runtime_budget_close" if budget_stop else "runtime_delivery_complete"}
+            return True
 
         async def think(input, context, progress):
             return ToolResult(output=input.reflection)
@@ -1258,7 +1419,9 @@ class Supervisor:
                     "你是研究团队 Lead。先调用 TeamCreate 显式建队，再 SpawnTeammate 启动独立 Docker 成员。"
                     "团队默认执行方式为 " + cfg.team_execution_mode + "，启动成员可覆盖。"
                     'TaskCreate 创建时同时传 owner（派发的成员 ID，自主认领填空字符串 ""）与 blockedBy（已有 task_id 数组，无依赖填 []）。不要先创建再派发或补依赖，空闲成员可能立即领取。替换依赖时在同一次 TaskUpdate 中同时传 removeBlockedBy 和 addBlockedBy，避免中间解除阻塞。'
-                    "每项任务明确指定其事实范围对应的完整 requirement_ids（含哈希），不能省略或把所有需求无差别分给单主题成员。成员计划请求必须由你阅读 objective/steps/sources/budget/acceptance_criteria 后实质审核，"
+                    "每项任务明确指定其事实范围对应的完整 requirement_ids（含哈希）；普通研究任务最多三个且来自同一维度，可按 delegation_scopes 选择 ID 组。"
+                    "比较任务必须为每个对象安排相应研究，同一需求 ID 可由不同对象的任务共同承担。不要把所有工作排给同一个成员而闲置其他成员。"
+                    "成员计划请求必须由你阅读 objective/steps/sources/budget/acceptance_criteria 后实质审核，"
                     "通过 SendMessage 的 plan_approval_response 回复 owner，携带 task_id/request_id/version/approve/feedback；不得自动批准。"
                     "message 必须是 JSON 对象，绝不能把控制对象 JSON 序列化成字符串；字符串即使看起来像 JSON 也只是文本。计划响应不得添加 content 字段。"
                     "TaskList 只展示任务和计划摘要及补证提议；使用 TaskGet 读取完整研究工件、质量理由和计划历史。审批待处理计划优先于等待研究结果。"
@@ -1282,15 +1445,20 @@ class Supervisor:
         from open_deep_research.agentscope_runtime.efficiency import research_guidance
 
         prompt += research_guidance(self.config_provider(), supervisor=True)
+        prompt += ("\n交接及研究收尾质量评审暂时停用。accepted_with_caveats 且 evaluation_status=skipped "
+                   "仅表示成果已交付，不能宣称质量通过；覆盖台账缺项表示未评估，不能据此反复补研。"
+                   "优先完成尚未交付的任务；仅根据工具批次反馈中的实际缺口安排有限补研。"
+                   "所有任务结束、收集成果并完成团队收尾后调用 ResearchComplete，保留缺口和停止原因供报告使用。")
         if use_scopes:
             prompt += (
                 "\nConductResearch accepts scope_id, not a requirement_ids list. Select a scope from delegation_scopes; "
                 "the runtime binds its original requirements (at most three within one subject/dimension). "
                 "Write research_topic only for that scope. Multiple independent scopes may run concurrently. "
-                "For a supplement select the same scope: the runtime skips already covered or exhausted IDs."
+                "For a supplement select the same scope only when tool feedback identifies an actual gap; "
+                "the runtime skips delivered IDs without tool gaps and IDs with exhausted supplements."
             )
             if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
-                prompt += "\nAll delegation_scopes must be assigned and covered, including short scopes with only one requirement. Check remaining_scopes in every result; a broad task title does not automatically cover another scope."
+                prompt += "\nAssign and collect every delegation_scope, including short scopes with only one requirement. Check remaining_scopes for undelivered scopes; delivery does not certify factual coverage."
         if contract.get("schema_version", 2) >= 3:
             prompt += "\n" + CONTEXT_RULES
         model = self.models.agent_model("supervisor", "supervisor")
@@ -1300,6 +1468,9 @@ class Supervisor:
 
             team_middlewares.append(LeaderInbox(self.team_workers))
         native_context = NativeResearchContext(self.models, "supervisor", model, self.config_provider())
+        if modern_budget:
+            completion.before_reasoning = close_at_boundary
+            native_context.before_compression = close_at_boundary
         agent = Agent(
             name="supervisor",
             model=native_context.model,
@@ -1330,7 +1501,8 @@ class Supervisor:
                                 "coverage_contract": contract,
                                 **({"delegation_scopes": delegation_scopes} if delegation_scopes else {}),
                                 **({"task_requirement_choices": [
-                                    {"id": item.requirement_id, "text": item.text}
+                                    {"id": item.requirement_id, "text": item.text,
+                                     "subject": item.subject, "dimension_id": item.dimension_id}
                                     for item in coverage.requirements
                                     if item.requirement_id in available_ids
                                 ]} if teams_mode else {}),
@@ -1385,6 +1557,17 @@ class Supervisor:
                     )
             agent.state.middle_context["coverage_ledger"] = ledger
             agent.state.middle_context["handoff_assessments"] = assessments
+            skipped_stages = []
+            if any(item.assessment.get("handoff", {}).get("evaluation_status") == "skipped" for item in results.values()):
+                skipped_stages.append("handoff")
+            if self.completion_policy:
+                skipped_stages.append("supervisor_completion")
+            if skipped_stages:
+                agent.state.middle_context["quality_gate"] = {
+                    "status": "skipped", "skipped_stages": skipped_stages,
+                    "reason_codes": [stage + "_quality_gate_temporarily_disabled" for stage in skipped_stages],
+                    "reason": "交接及研究收尾质量门禁暂时停用；交付状态不代表质量评审通过。",
+                }
             if not results and not (bounded and agent.state.middle_context.get("business_completion", {}).get("action") == "complete_partial"):
                 raise ValueError("supervisor produced no research handoff")
             return [

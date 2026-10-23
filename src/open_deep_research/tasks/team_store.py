@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -54,6 +55,24 @@ class TeamStore:
         *, durable_recipients: bool = False, outbox: bool = False,
     ) -> Any:
         """Commit mutation and its transaction outcome atomically."""
+        for attempt in range(3):
+            try:
+                return await self._commit(
+                    event, mutate, durable_recipients=durable_recipients, outbox=outbox,
+                )
+            except asyncpg.DeadlockDetectedError:
+                # PostgreSQL has rolled this SQL-only transaction back. Retry
+                # the same operation, rechecking its lease and domain guards;
+                # never repeat external execution or ambiguous connection errors.
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.05 * (attempt + 1))
+
+    async def _commit(
+        self, event: TeamEvent,
+        mutate: Callable[[asyncpg.Connection], Awaitable[Any]],
+        *, durable_recipients: bool, outbox: bool,
+    ) -> Any:
         async with self.pool.acquire() as db, db.transaction():
             claimed = await db.fetchval(
                 """UPDATE research_coordination_transactions SET state='COMMITTED'

@@ -261,15 +261,17 @@ def test_completion_boundary_preserves_real_unresolved_conditions(patch):
     assert completion.evaluate(exhausted=True).action != CompletionDecision.COMPLETE
 
 
-def test_iteration_exhaustion_does_not_discard_verified_complete_coverage():
+def test_iteration_exhaustion_preserves_explicit_completion_requirement():
     from open_deep_research.agentscope_runtime.research_completion import BusinessCompletion
     from open_deep_research.completion import CompletionDecision, CompletionPolicyContext
     facts = lambda: CompletionPolicyContext(evidence_count=4, independent_source_count=2)
     legacy = BusinessCompletion(4, facts)
     current = BusinessCompletion(4, facts, accept_covered_on_exit=True)
     assert legacy.evaluate(exhausted=True).action == CompletionDecision.COMPLETE_PARTIAL
-    assert current.evaluate(exhausted=True).action == CompletionDecision.COMPLETE
-    assert current.result.reason == "coverage_complete_at_iteration_limit"
+    assert current.evaluate(exhausted=True).action == CompletionDecision.COMPLETE_PARTIAL
+    assert current.result.reason == "iteration_limit"
+    assert current.evaluate(explicit=True, exhausted=True).action == CompletionDecision.COMPLETE
+    assert current.result.reason == "explicit_completion"
 
 
 @pytest.mark.parametrize("supported,attempts", [(True, 2), (False, 1)])

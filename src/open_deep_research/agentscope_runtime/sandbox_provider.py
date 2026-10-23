@@ -95,12 +95,13 @@ class _GatewayModel(LiteLLMChatModel):
 class NativeGatewayProvider:
     """Keep per-run credentials and HTTP headers outside business checkpoints."""
 
-    def __init__(self, *, api_key, base_url=None, transport=None, anthropic_transport=None):
+    def __init__(self, *, api_key, base_url=None, transport=None, anthropic_transport=None, request_timeout=180):
         self.base_url = base_url or os.environ["LITELLM_BASE_URL"]
         self.key = SecretStr(api_key)
         self.headers = ContextVar("gateway_response_headers", default=None)
+        self.request_timeout = request_timeout
         self.client = httpx.AsyncClient(
-            transport=transport, event_hooks={"response": [self._headers]}, timeout=180
+            transport=transport, event_hooks={"response": [self._headers]}, timeout=request_timeout
         )
         self.models = {}
         self.anthropic_transport = anthropic_transport
@@ -259,7 +260,7 @@ class NativeGatewayProvider:
                 # the OpenAI/httpx transport. Both pools share the same run lifetime.
                 from anthropic import DefaultAsyncHttpxClient
                 search_client = DefaultAsyncHttpxClient(transport=self.anthropic_transport,
-                    event_hooks={"response": [self._headers]}, timeout=180)
+                    event_hooks={"response": [self._headers]}, timeout=self.request_timeout)
             model = ServerSearchModel(provider=spec.provider, model=request.model,
                 api_key=self.key.get_secret_value(), base_url=self.base_url,
                 http_client=search_client, max_tokens=request.max_output_tokens or 4096, proxy=True)

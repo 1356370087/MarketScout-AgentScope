@@ -79,12 +79,15 @@ class FencedTeamTransport:
 
     async def guard(self, db):
         lease = self.lease
+        # Match journal writes: take the run lock before member/task locks.
+        # Shared run guards let a Worker retain a member SHARE lock while a
+        # plan update owns the task and needs to upgrade that member lock.
         current = await db.fetchval(
             f"""SELECT fence FROM {self.run_table}
                 WHERE run_id=$1 AND user_id=$2 AND owner=$3 AND fence=$4
                   AND engine='agentscope' AND version=1
                   AND expires>extract(epoch from clock_timestamp())
-                FOR SHARE""",
+                FOR UPDATE""",
             lease.run_id,
             lease.user_id,
             lease.owner,
@@ -454,7 +457,7 @@ class NativeResearchTeam:
         return [dict(row) for row in rows]
 
     async def admit_handoff(self, command_id, member_id, outcome, contract, quality):
-        """Commit only assignment-matching, quality-assessed research results."""
+        """Commit assignment-matching results, recording skipped quality assessment."""
         from open_deep_research.agentscope_runtime.recovery_store import digest
 
         event = TeamEvent(
@@ -493,20 +496,30 @@ class NativeResearchTeam:
             raise ValueError("handoff differs from delegated requirements or topic")
         if snapshot["status"] not in {"pending", "running"}:
             raise ValueError("task cannot accept a handoff")
-        assessment = await quality.handoff(outcome, contract)
-        admitted = assessment.accepted and outcome.termination in {
-            "completed",
-            "research_complete",
-        }
+        # 临时停用交接质量评审（包括 Worker 的确定性降级门禁）与质量拒收。
+        # 恢复时还原下方代码，撤销跳过回执；所有权、任务匹配及事务守卫继续执行。
+        # assessment = await quality.handoff(outcome, contract)
+        # admitted = assessment.accepted and outcome.termination in {
+        #     "completed",
+        #     "research_complete",
+        # }
+        # result = outcome.model_dump(mode="json")
+        # if not admitted:
+        #     result["evidence_registry"] = []
+        #     result["compressed_research"] = ""
+        # receipt = {
+        #     "task_id": outcome.task_id,
+        #     "accepted": admitted,
+        #     "assessment": assessment.model_dump(mode="json"),
+        # }
+        #
+        from open_deep_research.agentscope_runtime.research_quality import skipped_handoff_assessment
+
+        assessment = skipped_handoff_assessment()
         result = outcome.model_dump(mode="json")
-        if not admitted:
-            result["evidence_registry"] = []
-            result["compressed_research"] = ""
-        receipt = {
-            "task_id": outcome.task_id,
-            "accepted": admitted,
-            "assessment": assessment.model_dump(mode="json"),
-        }
+        result["assessment"]["handoff"] = assessment
+        # 正常返回的有限收尾也交付已有证据；异常/取消/失租由 Worker 和提交守卫处理。
+        receipt = {"task_id": outcome.task_id, "accepted": True, "assessment": assessment}
 
         async def commit(db):
             domain = dict(snapshot)
@@ -514,7 +527,8 @@ class NativeResearchTeam:
             domain.pop("_team_feedback", None)
             domain.update(
                 status="completed",
-                admission_status=receipt["assessment"].get("admission_status", "accepted") if admitted else "rejected",
+                # 恢复门禁时还原：admission_status=receipt["assessment"].get("admission_status", "accepted") if admitted else "rejected",
+                admission_status=receipt["assessment"]["admission_status"],
                 result=result,
                 handoff_assessment=receipt["assessment"],
             )

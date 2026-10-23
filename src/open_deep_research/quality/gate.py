@@ -565,7 +565,7 @@ def _bounded_quality_payload(
     """Bound the complete JSON payload while preserving protocol identifiers."""
     bounded = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
     bounded["input_truncated"] = False
-    complete_fields = {"compressed_research", "coverage_contract", "owned_requirements",
+    complete_fields = {"compressed_research", "coverage_contract", "owned_requirements", "task_scope", "task_scope_hash",
                        "evidence_registry", "cumulative_evidence"}
 
     def encoded_length() -> int:
@@ -2065,6 +2065,14 @@ async def evaluate_tool_results(
         "deterministic_checks": checks,
         "source_scope_enforced": source_scope_enforced,
     }
+    task_scope = None
+    assessment_schema = ToolResultAssessment
+    if resolved_contract is not None and config.get("metadata", {}).get("run_config_schema_version", 18) >= 21:
+        from .task_scope import TaskEvaluationScope, assessment_schema as scoped_schema
+        task_scope = TaskEvaluationScope.build(resolved_contract, owned_requirement_ids)
+        assessment_schema = scoped_schema(task_scope)
+        payload["task_scope"] = task_scope.model_dump(mode="json")
+        payload["task_scope_hash"] = task_scope.fingerprint()
     if use_v4_contract and resolved_contract is not None:
         payload.update(
             {
@@ -2079,6 +2087,21 @@ async def evaluate_tool_results(
                 ),
             }
         )
+        if task_scope is not None:
+            payload["coverage_contract"] = task_scope.contract_view(resolved_contract)
+    def validate_tool_assessment(candidate):
+        parsed = assessment_schema.model_validate(candidate)
+        errors = _tool_protocol_errors(
+            parsed, checks=checks, policy=policy, owned_requirement_ids=owned_requirement_ids,
+            evidence_ids=tuple(str(r["evidence_id"]) for r in payload["cumulative_evidence"] if r.get("evidence_id")),
+            evidence_truncated=bool(payload["cumulative_evidence_stats"].get("truncated")),
+        )
+        if task_scope is not None:
+            from .task_scope import protocol_errors, derive_feedback
+            errors.extend(protocol_errors(parsed, task_scope, [r["evidence_id"] for r in payload.get("cumulative_evidence", [])]))
+            if not errors:
+                derive_feedback(parsed)
+        return errors
     evaluation_input_error = contract_error
     if evaluation_input_error is None:
         try:
@@ -2096,21 +2119,20 @@ async def evaluate_tool_results(
         if evaluation_input_error is not None:
             raise ValueError(evaluation_input_error)
         result = await (evaluator or _evaluate_json)(
-            ToolResultAssessment,
+            assessment_schema,
             TOOL_RESULT_EVALUATION_PROMPT + (PROCEDURAL_COVERAGE_RULES if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6" else ""),
             payload,
             config,
             span_name="researcher.evaluate_tool_results",
-            protocol_validator=lambda candidate: _tool_protocol_errors(
-                ToolResultAssessment.model_validate(candidate),
-                checks=checks,
-                policy=policy,
-                owned_requirement_ids=owned_requirement_ids if use_v4_contract else (),
-                evidence_ids=tuple(str(e.get("evidence_id")) for e in payload["cumulative_evidence"]),
-                evidence_truncated=bool(payload["cumulative_evidence_stats"]["truncated"]),
-            ),
+            protocol_validator=validate_tool_assessment,
         )
-        result = ToolResultAssessment.model_validate(result)
+        result = assessment_schema.model_validate(result)
+        if task_scope is not None:
+            from .task_scope import derive_feedback, QualityScopeViolation
+            errors = validate_tool_assessment(result)
+            if errors:
+                raise QualityScopeViolation(errors)
+            derive_feedback(result)
         if any(gap.kind == "input_projection" for gap in result.gaps):
             raise QualityInputBudgetExceeded("quality_input_projection_incomplete")
     except Exception as exc:  # noqa: BLE001 - configurable evaluator fail-open boundary
@@ -2118,6 +2140,9 @@ async def evaluate_tool_results(
         preserve_control_error(exc)
         if isinstance(exc, (NativeQualityRuntimeMissing, QualityInputBudgetExceeded)):
             raise
+        if task_scope is not None and isinstance(exc, (QualityProtocolError, ValidationError, json.JSONDecodeError)):
+            from .task_scope import QualityScopeViolation
+            raise QualityScopeViolation(_protocol_errors_from_exception(exc) or [type(exc).__name__]) from exc
         evaluator_failed = True
         protocol_errors = _protocol_errors_from_exception(exc)
         failure_diagnostics = {

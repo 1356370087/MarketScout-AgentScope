@@ -644,6 +644,7 @@ class RecoverySession:
                     command["action_id"], payload["action"], payload.get("feedback", ""),
                     **({"source_selection": payload["source_selection"]} if "source_selection" in payload else {}),
                     **({"expected_version": payload["expected_version"]} if "expected_version" in payload else {}),
+                    **({"extension_seconds": payload["extension_seconds"]} if "extension_seconds" in payload else {}),
                 )
             finally:
                 self.current_command = None

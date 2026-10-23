@@ -170,6 +170,68 @@ async def test_native_provider_does_not_retry_budget_rejection():
 
 
 @pytest.mark.asyncio
+async def test_provider_passes_logical_call_allowance_to_http_client():
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        assert req.extensions["timeout"]["read"] == 365
+        return httpx.Response(200, json={
+            "id":"response", "object":"chat.completion", "created":1, "model":"served",
+            "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"complete"}}],
+            "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3},
+        })
+
+    provider = NativeGatewayProvider(api_key="fixture",base_url="https://fixture.invalid/v1",
+        transport=httpx.MockTransport(handler),request_timeout=365)
+    try:
+        result = await provider.complete(request())
+        assert result.status == "completed" and len(calls) == 1
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,expected_timeout", [("bounded",365),("baseline",180)])
+async def test_gateway_constructs_provider_with_frozen_call_timeout(monkeypatch,mode,expected_timeout):
+    import base64
+    import time
+    from open_deep_research.sandbox import gateway as gateway_module
+    from open_deep_research.configuration import Configuration
+    from open_deep_research.sandbox.gateway import GatewayRunContext, GatewayRuntime
+    from open_deep_research.sandbox.wire import GatewayModelOutcomeV2
+
+    for key in ("RESEARCH_EFFICIENCY_MODE","MODEL_CALL_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(key,raising=False)
+    runtime = GatewayRuntime(Configuration(sandbox_root_signing_key=base64.b64encode(b"x"*32).decode()))
+    journal, calls = {}, []
+
+    async def post(path,body):
+        if path.endswith("/get"):
+            return {"found":bool(journal),"operation":journal.copy()}
+        if path.endswith("/transition"):
+            journal.update(status=body.status,outcome=body.outcome)
+        return {}
+
+    class Provider:
+        def __init__(self,*,api_key,request_timeout):
+            assert request_timeout == expected_timeout
+
+        async def complete(self,value):
+            calls.append(value.logical_operation_id)
+            return GatewayModelOutcomeV2(logical_operation_id=value.logical_operation_id,status="completed",
+                requested_model=value.model,message={"role":"assistant","content":"answer"},usage={"input_tokens":2,"output_tokens":1})
+
+    runtime.internal.post = post
+    monkeypatch.setattr(gateway_module,"NativeGatewayProvider",Provider)
+    context = GatewayRunContext({"configurable":{"research_efficiency_mode":mode,"model_call_timeout_seconds":360}},
+        1,time.time()+600,api_keys={"LITELLM_RUN_KEY":"fixture"})
+    first = await runtime.invoke_model_operation_v2(request(),context)
+    assert await runtime.invoke_model_operation_v2(request(),context) == first
+    assert calls == ["op"]
+
+
+@pytest.mark.asyncio
 async def test_gateway_catalog_uses_native_tools_without_langchain():
     import base64
     import sys

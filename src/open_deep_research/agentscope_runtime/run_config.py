@@ -119,7 +119,7 @@ class RunConfig:
         contract = snapshot["contract"]
         if (
             contract.get("metadata", {}).get("run_config_schema_version")
-            not in {13, 14, 15, 16, 19, RUN_CONFIG_SCHEMA_VERSION}
+            not in {13, 14, 15, 16, 19, 20, RUN_CONFIG_SCHEMA_VERSION}
         ):
             raise ValueError("unsupported native frozen contract version")
         if not contract["metadata"].get("run_config_fingerprint"):

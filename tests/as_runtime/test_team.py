@@ -376,23 +376,21 @@ async def test_foreign_leader_and_changed_template_rejected(env):
         await team.reconcile()
 
 
-@pytest.mark.parametrize("accepted", [True, False])
-async def test_handoff_requires_owned_requirements_and_admission(env, accepted):
-    from pydantic import BaseModel
+@pytest.mark.parametrize("verdict", ["rejected", "unavailable", "input_budget"])
+@pytest.mark.parametrize("termination", ["research_complete", "research_no_progress", "quality_input_incomplete"])
+async def test_handoff_requires_owned_assignment_but_skips_quality(env, verdict, termination):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff
+    from open_deep_research.quality.gate import QualityInputBudgetExceeded
 
-    class Assessment(BaseModel):
-        accepted: bool
-        reason: str = "quality result"
-
-    class Quality:
-        calls = 0
-
-        async def handoff(self, outcome, contract):
-            self.calls += 1
-            return Assessment(accepted=accepted)
-
+    if verdict == "rejected":
+        evaluator = AsyncMock(return_value=SimpleNamespace(accepted=False))
+    else:
+        error = RuntimeError("Judge unavailable") if verdict == "unavailable" else QualityInputBudgetExceeded("too large")
+        evaluator = AsyncMock(side_effect=error)
+    quality = SimpleNamespace(handoff=evaluator)
     build, _, _, _ = env
     team = await build()
     member = await team.add_member("add", "alice", "sources")
@@ -400,33 +398,32 @@ async def test_handoff_requires_owned_requirements_and_admission(env, accepted):
     await task(team, "two", ["one"])
     await claim(team, "one", member)
     handoff = ResearchHandoff(
-        task_id="one",
-        research_topic="question one",
-        requirement_ids=["foreign"],
-        compressed_research="finding",
-        evidence_registry=[{"id": "evidence"}],
+        task_id="one", research_topic="question one", requirement_ids=["foreign"],
+        compressed_research="finding", evidence_registry=[{"id": "evidence"}], termination=termination,
     )
-    quality = Quality()
+    with pytest.raises(PermissionError, match="owner mismatch"):
+        await team.admit_handoff("handoff", "foreign-member", handoff, None, quality)
     with pytest.raises(ValueError, match="delegated"):
         await team.admit_handoff("handoff", member, handoff, None, quality)
     handoff.requirement_ids = ["COV-1"]
     result = await team.admit_handoff("handoff", member, handoff, None, quality)
-    assert result["accepted"] is accepted
+    assert result["accepted"]
     assert await team.admit_handoff("handoff", member, handoff, None, quality) == result
-    assert quality.calls == 1
+    quality.handoff.assert_not_awaited()
     rows = await team.service.tasks(team.lease.run_id)
     outcome = next(row for row in rows if row["task_id"] == "one")
-    if accepted:
-        assert outcome["result"]["compressed_research"] == "finding"
-        await claim(team, "two", member)
-    else:
-        assert outcome["result"]["evidence_registry"] == []
-        with pytest.raises(ValueError, match="unavailable"):
-            await claim(team, "two", member)
+    assert outcome["result"]["compressed_research"] == "finding"
+    assert outcome["result"]["evidence_registry"] == [{"id": "evidence"}]
+    assert outcome["result"]["termination"] == termination
+    assert outcome["admission_status"] == "accepted_with_caveats"
+    assert outcome["handoff_assessment"]["evaluation_status"] == "skipped"
+    assert not {"relevance", "deterministic_checks", "requirement_coverage"} & outcome["handoff_assessment"].keys()
+    await claim(team, "two", member)
 
 
-async def test_cancel_during_assessment_rejects_late_handoff(env):
+async def test_cancel_before_handoff_commit_still_rejects_late_result(env, monkeypatch):
     from types import SimpleNamespace
+    from unittest.mock import AsyncMock
 
     from open_deep_research.agentscope_runtime.research_agents import ResearchHandoff
 
@@ -435,22 +432,20 @@ async def test_cancel_during_assessment_rejects_late_handoff(env):
     member = await team.add_member("add", "alice", "sources")
     await task(team, "one")
     await claim(team, "one", member)
+    original = team.transport.transact
 
-    class Quality:
-        async def handoff(self, outcome, contract):
+    async def cancel_then_commit(event, mutate):
+        if event.type == "task_handoff":
             await team.command("stop", "task_stop", {"task_id": "one"})
-            return SimpleNamespace(
-                accepted=True, model_dump=lambda **kwargs: {"accepted": True}
-            )
+        return await original(event, mutate)
 
-    handoff = ResearchHandoff(
-        task_id="one",
-        research_topic="question one",
-        requirement_ids=["COV-1"],
-        compressed_research="finding",
-    )
+    monkeypatch.setattr(team.transport, "transact", cancel_then_commit)
+    quality = SimpleNamespace(handoff=AsyncMock(side_effect=AssertionError("quality must stay skipped")))
+    handoff = ResearchHandoff(task_id="one", research_topic="question one", requirement_ids=["COV-1"],
+                             compressed_research="finding")
     with pytest.raises(ValueError, match="changed"):
-        await team.admit_handoff("handoff", member, handoff, None, Quality())
+        await team.admit_handoff("handoff", member, handoff, None, quality)
+    quality.handoff.assert_not_awaited()
     assert (await team.service.tasks(team.lease.run_id))[0]["status"] == "cancelled"
 
 

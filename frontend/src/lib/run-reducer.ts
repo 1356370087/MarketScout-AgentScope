@@ -1,5 +1,5 @@
 import { isSecurityApprovalResolved, resolvedSecurityApprovalIds, resolvedHumanActionIds } from "./security-approvals";
-import type { PublicEvent, ResearchEfficiency, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./contracts/research";
+import type { PendingHumanAction, PublicEvent, ResearchEfficiency, ResearchRunState, ResearchSource, ResearchTask, RunSnapshot, RunStatus, StageId } from "./contracts/research";
 import type { ReportReviewSummary } from "./contracts/publications";
 
 export const STAGES: StageId[] = ["preparing", "planning", "researching", "synthesizing", "writing", "finalizing"];
@@ -328,9 +328,18 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
     const incoming = normalizeReportReviewSummary(payload.report_review ?? payload.review);
     if (incoming) next.reportReview = mergeReportReviewSummary(state.reportReview, incoming);
   } else if (event.type === "approval.required") {
-    const kind = `${String(payload.approval_type)}_approval` as "plan_approval" | "outline_approval" | "fetch_budget_approval";
+    const kind = `${String(payload.approval_type)}_approval` as PendingHumanAction["type"];
     next.status = `awaiting_${String(payload.approval_type)}_approval` as RunStatus;
-    next.pendingHumanAction = { action_id: String(payload.action_id), type: kind, payload: { content_markdown: String(payload.content_markdown ?? ""), source_plan: payload.source_plan as never, version: payload.version as number | undefined, requirements: payload.requirements as never }, allowed_actions: payload.allowed_actions as never };
+    next.pendingHumanAction = { action_id: String(payload.action_id), type: kind, payload: {
+      content_markdown: String(payload.content_markdown ?? ""), source_plan: payload.source_plan as never,
+      version: payload.version as number | undefined, requirements: payload.requirements as never,
+      checkpoint: payload.checkpoint as string | undefined, report_step: payload.report_step as string | undefined,
+      remaining_seconds: payload.remaining_seconds as number | undefined,
+      estimated_report_seconds: payload.estimated_report_seconds as number | undefined,
+      suggested_extension_seconds: payload.suggested_extension_seconds as number | undefined,
+      extension_count: payload.extension_count as number | undefined, max_requests: payload.max_requests as number | undefined,
+      completed_steps: payload.completed_steps as string[] | undefined,
+    }, allowed_actions: payload.allowed_actions as never };
   } else if (event.type === "clarification.required") {
     next.status = "awaiting_clarification";
     next.pendingHumanAction = { action_id: String(payload.action_id), type: "clarification", payload: { question: String(payload.question ?? "") }, allowed_actions: payload.allowed_actions as never };

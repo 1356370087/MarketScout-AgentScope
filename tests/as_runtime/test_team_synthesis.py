@@ -61,8 +61,9 @@ async def test_supervisor_schedules_synthesis_after_both_facts_are_already_cover
             service=SimpleNamespace(tasks=AsyncMock(return_value=rows))))
 
     async def dispatch(assignment, contract, feedback):
+        from open_deep_research.agentscope_runtime.research_quality import skipped_handoff_assessment
         return ResearchHandoff(**assignment.model_dump(), compressed_research="The two accepted findings compared.",
-                               evidence_registry=[evidence()])
+                               evidence_registry=[evidence()], assessment={"handoff": skipped_handoff_assessment()})
 
     async def wait():
         async with asyncio.timeout(5):

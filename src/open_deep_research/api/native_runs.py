@@ -49,6 +49,7 @@ def browser_status(state):
                 "clarify_with_user": "awaiting_clarification",
                 "plan_approval": "awaiting_plan_approval",
                 "outline_approval": "awaiting_outline_approval",
+                "report_time_extension_approval": "awaiting_report_time_extension_approval",
             }[state.pending.stage]
         return "awaiting_fetch_budget_approval"
     return state.status
@@ -345,13 +346,15 @@ class NativeRuns:
             await recovery.close()
 
     async def decide(
-        self, run_id, owner, action_id, action, message="", command_id=None, *, source_selection=None, expected_version=None
+        self, run_id, owner, action_id, action, message="", command_id=None, *, source_selection=None, expected_version=None, extension_seconds=None
     ):
         payload = {"action": action, "feedback": message}
         if source_selection is not None:
             payload["source_selection"] = source_selection
         if expected_version is not None:
             payload["expected_version"] = expected_version
+        if extension_seconds is not None:
+            payload["extension_seconds"] = extension_seconds
         command_id = command_id or digest([action_id, payload])
         result = await self.store.submit_decision(
             run_id,

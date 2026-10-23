@@ -2,9 +2,29 @@
 
 import asyncio
 import json
+import re
 
 from open_deep_research.tasks.team_messages import ResearchPlan
 from open_deep_research.tasks.team_protocol import MemberIdentity
+
+
+def plan_source_checks(plan, contract, config):
+    """Use the same source boundary as research tools, including subdomains."""
+    from .search_providers import source_allowed
+
+    scoped = {**config, "metadata": {**config.get("metadata", {}), "coverage_contract": contract}}
+    urls = []
+    unresolved = []
+    for source in plan.get("sources", []):
+        matches = re.findall(r"https?://[^\s<>\]）)，,；;]+", source)
+        if not matches and re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?:/[^\s]*)?", source.strip()):
+            matches = ["https://" + source.strip()]
+        if not matches:
+            unresolved.append(source)
+        urls.extend(url.rstrip(".,。)") for url in matches)
+    return {"allowed": [u for u in dict.fromkeys(urls) if source_allowed(u, scoped)],
+            "denied": [u for u in dict.fromkeys(urls) if not source_allowed(u, scoped)],
+            "unresolved": unresolved}
 
 
 async def wait_for_plan(worker, researcher, snapshot):
@@ -14,6 +34,9 @@ async def wait_for_plan(worker, researcher, snapshot):
     )
     while True:
         await worker.consume_inputs()
+        reason = await worker.host.budget_reason()
+        if reason:
+            await worker.stop_for_budget(reason)
         async with team.transport.store.pool.acquire() as db, db.transaction():
             await worker.guard(db)
             row = await db.fetchrow(

@@ -20,6 +20,12 @@ services:
       PLATFORM_CONFIG_DIR: /data/platform-config
       PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      # 静态路由通过 os.environ/<变量名> 读取提供商配置；宿主 .env 不会自动注入此服务。
+      # 接口地址和密钥显式传给 Proxy，真实值仅保存在未跟踪的本地环境文件中。
+      ZHIPU_BASE_URL: ${ZHIPU_BASE_URL:-}
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       STORE_MODEL_IN_DB: "true"
       LITELLM_DATABASE_URL: ${LITELLM_DATABASE_URL:?请配置远程 LiteLLM PostgreSQL 连接}
       LITELLM_REDIS_HOST: litellm-redis

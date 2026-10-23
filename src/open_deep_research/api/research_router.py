@@ -115,6 +115,7 @@ def build_research_router(service):
                 request.message or "",
                 **({"source_selection": request.source_selection.model_dump(mode="json")} if request.source_selection else {}),
                 **({"expected_version": request.expected_version} if request.expected_version is not None else {}),
+                **({"extension_seconds": request.extension_seconds} if request.extension_seconds is not None else {}),
             )
 
     @router.get("/runs/{run_id}/review-drafts")

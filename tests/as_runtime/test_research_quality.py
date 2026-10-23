@@ -211,7 +211,7 @@ async def test_ledger_is_monotonic_and_rejected_handoff_cannot_write():
     )
 
 
-async def test_completion_no_evidence_stops_at_model_limit():
+async def test_completion_no_evidence_reaches_partial_delivery_at_model_limit():
     class Worker:
         async def run(self, assignment, contract, feedback):
             return ResearchHandoff(
@@ -233,13 +233,14 @@ async def test_completion_no_evidence_stops_at_model_limit():
         run_id="run",
         completion_policy=True,
     )
-    with pytest.raises(ValueError, match="research terminated"):
-        await supervisor.run("brief", contract())
+    findings, state = await supervisor.run("brief", contract())
+    assert findings[0]["evidence_registry"] == []
+    assert state["middle_context"]["business_completion"]["action"] == "complete_partial"
     assert len(models.created[0][2].calls) == 3
 
 
 @pytest.mark.parametrize("budget", [True, False])
-async def test_completion_partial_preserves_evidence_and_reports_gaps(budget):
+async def test_completion_partial_preserves_evidence_and_resource_stop(budget):
     remaining = True
 
     class Worker:
@@ -272,7 +273,8 @@ async def test_completion_partial_preserves_evidence_and_reports_gaps(budget):
     assert results[0]["evidence_registry"]
     completion = state["middle_context"]["business_completion"]
     assert completion["action"] == "complete_partial"
-    assert "independent_sources" in completion["gaps"]
+    assert completion["gaps"] == []
+    assert completion["reason"] == ("iteration_limit" if budget else "budget_exhausted")
     assert len(models.created[0][2].calls) == (2 if budget else 1)
 
 
@@ -320,7 +322,7 @@ async def test_structured_adapter_uses_real_policy_keyword_contract():
     assert result.research_brief == "fixture brief"
 
 
-async def test_full_gated_supervisor_admits_evidence_and_merges_coverage():
+async def test_tool_gated_research_reaches_unassessed_handoff_and_completion():
     from test_research_migration import research_tools
 
     from open_deep_research.agentscope_runtime.research_agents import Researcher
@@ -351,11 +353,9 @@ async def test_full_gated_supervisor_admits_evidence_and_merges_coverage():
     results, state = await Supervisor(
         models, config, worker, run_id="run", quality=quality, completion_policy=True
     ).run("brief", contract("市场规模"))
-    assert results[0]["assessment"]["handoff"]["accepted"]
-    assert all(
-        row["status"] == "supported"
-        for row in state["middle_context"]["coverage_ledger"].values()
-    )
+    assert results[0]["assessment"]["handoff"]["evaluation_status"] == "skipped"
+    assert results[0]["assessment"]["tool_batches"][0]["accepted"]
+    assert state["middle_context"]["coverage_ledger"] == {}
     assert state["middle_context"]["business_completion"]["action"] == "complete"
 
 

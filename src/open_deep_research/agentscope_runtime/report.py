@@ -16,7 +16,8 @@ def _partial_report_update(snapshot, state, config, reason):
 
     decision = {**snapshot.completion_outcome, "action": "complete_partial", "reason": reason,
                 "gaps": list(dict.fromkeys([*snapshot.completion_outcome.get("gaps", []),
-                    *(["report_review_not_completed"] if reason == "deadline_exceeded" else [])]))}
+                    *(["report_review_not_completed"] if reason in {"deadline_exceeded", "budget_exhausted",
+                       "report_time_extension_denied", "report_time_extension_limit"} else [])]))}
     snapshot.completion_outcome = decision
     state = {**state, "completion_outcome": decision, "completion_decision": decision}
     cfg = Configuration.from_runnable_config(config)
@@ -40,7 +41,9 @@ class NativeReportWriter:
 
     async def outline(self, snapshot, config):
         """Budget approval outlines using the same evidence authority as writing."""
-        token = native_report.set(_ReportRun(self.models, snapshot))
+        port = _ReportRun(self.models, snapshot)
+        port.metadata = config.get("metadata", {})
+        token = native_report.set(port)
         try:
             return await self._outline(snapshot, config)
         finally:
@@ -76,7 +79,9 @@ class NativeReportWriter:
     async def __call__(self, snapshot, config):
         from open_deep_research.report.orchestrator import build_report, _unwrap_update_value
 
+        skipped_quality = snapshot.agent_states.get("supervisor", {}).get("middle_context", {}).get("quality_gate", {})
         port = _ReportRun(self.models, snapshot)
+        port.metadata = config.get("metadata", {})
         token = native_report.set(port)
         try:
             state = {
@@ -100,36 +105,56 @@ class NativeReportWriter:
                 "completion_outcome": snapshot.completion_outcome,
                 "completion_decision": snapshot.completion_outcome,
                 "report_outline": snapshot.outline,
+                "quality_gate": skipped_quality,
             }
             bound_config = {
                 **config,
                 "metadata": {**config.get("metadata", {}), "run_id": snapshot.run_id},
             }
-            if snapshot.completion_outcome.get("action") == "complete_partial" and (
-                snapshot.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
-                or not state["evidence_registry"]
-            ):
+            # 研究停止是为了把剩余资源交给报告，不能把“预留”当成已耗尽。
+            # 有证据时继续写作、引用校验和审阅；实际预算拒绝仍走恢复报告。
+            if snapshot.completion_outcome.get("action") == "complete_partial" and not state["evidence_registry"]:
                 reason = snapshot.completion_outcome.get("reason", "insufficient_evidence")
                 update = _partial_report_update(snapshot, state, bound_config, reason)
             else:
-                from open_deep_research.budgets import DeadlineExceeded
+                from open_deep_research.budgets import BudgetExhausted, DeadlineExceeded
                 try:
                     update = await build_report(state, bound_config)
-                except DeadlineExceeded as exc:
+                except (BudgetExhausted, DeadlineExceeded) as exc:
                     # Unknown dispatched calls, fence loss and cancellation do
                     # not enter this path. Never label an unreviewed draft pass.
                     recovery = self.models.recovery
                     if recovery is not None:
-                        if recovery.problem is not None and not isinstance(recovery.problem, DeadlineExceeded):
-                            raise
+                        if recovery.problem is not None and not isinstance(recovery.problem, (BudgetExhausted, DeadlineExceeded)):
+                            raise recovery.problem
                         recovery.problem = None
-                    reason = "report_time_reserved" if str(exc) == "report_time_reserved" else "deadline_exceeded"
+                    reason = "budget_exhausted" if isinstance(exc, BudgetExhausted) else (
+                        str(exc) if str(exc) in {"report_time_extension_denied", "report_time_extension_limit"} else "deadline_exceeded")
                     update = _partial_report_update(snapshot, state, bound_config, reason)
             final_decision = _unwrap_update_value(update.get("completion_decision"), snapshot.completion_outcome)
+            if skipped_quality.get("skipped_stages"):
+                # 仅补充临时跳过记录；报告自身的降级/失败结论和审阅记录仍有独立效力。
+                report_gate = _unwrap_update_value(update.get("quality_gate"), {}) or {}
+                update["quality_gate"] = {
+                    **skipped_quality, **report_gate,
+                    "skipped_stages": list(dict.fromkeys([
+                        *skipped_quality["skipped_stages"], *report_gate.get("skipped_stages", []),
+                    ])),
+                    "reason_codes": list(dict.fromkeys([
+                        *skipped_quality.get("reason_codes", []), *report_gate.get("reason_codes", []),
+                    ])),
+                    "unassessed_requirement_ids": [
+                        row["requirement_id"] for row in snapshot.coverage_contract.get("requirements", [])
+                        if row.get("kind", "factual") == "factual"
+                        and row["requirement_id"] not in snapshot.coverage_ledger
+                    ],
+                }
             update["completion_status"] = "partial" if final_decision.get("action") == "complete_partial" else "success"
             update["stop_reason"] = final_decision.get("reason")
             update["uncovered_requirements"] = [row["requirement_id"] for row in snapshot.coverage_contract.get("requirements", [])
-                if row.get("kind", "factual") == "factual" and snapshot.coverage_ledger.get(row["requirement_id"], {}).get("status") != "supported"]
+                if row.get("kind", "factual") == "factual"
+                and (not skipped_quality.get("skipped_stages") or row["requirement_id"] in snapshot.coverage_ledger)
+                and snapshot.coverage_ledger.get(row["requirement_id"], {}).get("status") != "supported"]
             update["research_gaps"] = final_decision.get("gaps", [])
             snapshot.report_product = {
                 key: value
@@ -157,22 +182,58 @@ class NativeReportWriter:
 
 class _ReportRun:
     def __init__(self, models, snapshot):
+        import asyncio
+
         self.models, self.snapshot = models, snapshot
         self.counts = {}
+        self.progress_lock = asyncio.Lock()
+
+    async def report_checkpoint(self, name, cfg, *, completed=False, review_passed=False):
+        """Park between complete report phases, never inside parallel writing."""
+        from .execution_budget import before_report_call, enabled
+
+        config = {"configurable": cfg.model_dump(), "metadata": getattr(self, "metadata", {})}
+        if not enabled(config):
+            return
+        progress = self.snapshot.application.setdefault("execution_budget", {}).setdefault("report", {})
+        if name in progress.get("completed_checkpoints", []):
+            return
+        if completed:
+            progress.setdefault("completed_checkpoints", []).append(name)
+            if name == "draft":
+                progress["draft_checked"] = True
+            if review_passed:
+                progress["review_passed"] = True
+            if self.models.recovery:
+                await self.models.recovery.save(self.snapshot)
+            return
+        role = "report_review" if name.startswith("review:") else "report_revisor" if name.startswith("revision:") else "final_report"
+        await before_report_call(self.models, self.snapshot, config, role=role, span=name,
+                                 checkpoint=name, operation_key=None)
+
+    async def plan_section_writing(self, count, cfg):
+        from .execution_budget import enabled
+        if not enabled({"metadata": getattr(self, "metadata", {})}):
+            return
+        progress = self.snapshot.application.setdefault("execution_budget", {}).setdefault("report", {})
+        progress["expected_writing_calls"] = count
+        await self.report_checkpoint("draft", cfg)
 
     def active_span(self):
         return self
 
     async def check_recovery_budget(self, cfg):
-        """Leave enough time for fallback writing, grounding and its review."""
+        """Allow recovery to use the remaining time under per-call deadlines."""
         import time
         from open_deep_research.budgets import DeadlineExceeded
         recovery = self.models.recovery
         if recovery is None:
             return
         budget = await recovery.store.budget(recovery.lease.run_id, recovery.lease.user_id)
-        if budget.get("deadline") and budget["deadline"] - time.time() < 3 * cfg.model_call_timeout_seconds:
-            raise DeadlineExceeded("report_time_reserved")
+        # 单次调用的最大时限不是最小耗时。按三次最大时限拒绝恢复会让
+        # 30 分钟运行预留的 9 分钟永远不可用；实际调用仍受账本期限约束。
+        if budget.get("deadline") and time.time() >= budget["deadline"]:
+            raise DeadlineExceeded("report recovery refused after run deadline")
 
     def score(self, name, value, *args, **kwargs):
         self.snapshot.agent_states.setdefault("report_metrics", {})[name] = value
@@ -218,11 +279,19 @@ class _ReportRun:
         factory = self.models.factory
         descriptor = factory.descriptor(role)
         recovery = self.models.recovery
+        from .execution_budget import before_report_call, call_step, enabled, role_model
+
+        config = {"configurable": cfg.model_dump(), "metadata": getattr(self, "metadata", {})}
+        operation_key = f"{recovery.stage.get()}:{task_id}:model:{role}:0" if recovery else None
+        if span_name == "approval_outline":
+            await before_report_call(self.models, self.snapshot, config, role=role, span=span_name,
+                                     checkpoint=task_id, operation_key=operation_key)
         if recovery is not None:
             import time
             from open_deep_research.budgets import DeadlineExceeded
             budget = await recovery.store.budget(recovery.lease.run_id, recovery.lease.user_id)
-            if budget.get("deadline") and time.time() >= budget["deadline"]:
+            replay = await recovery.store.operation_record(recovery.lease, operation_key)
+            if not replay and budget.get("deadline") and time.time() >= budget["deadline"]:
                 raise DeadlineExceeded("report call refused after run deadline")
         candidates = (
             [self.models.model_for(role, task_id)] if self.models.model_for else None
@@ -318,13 +387,22 @@ class _ReportRun:
             if role == "report_review":
                 if hasattr(result, "_submitted_evidence_ids") and "report_evidence_ids" in response.metadata:
                     result._submitted_evidence_ids = set(response.metadata["report_evidence_ids"])
-            return result
-        content = "".join(
-            b.text for b in response.content if isinstance(b, TextBlock)
-        ).strip()
-        if not content:
-            raise ValueError("report writer returned empty text")
-        return ReportMessage(content, type="ai")
+            output = result
+        else:
+            content = "".join(b.text for b in response.content if isinstance(b, TextBlock)).strip()
+            if not content:
+                raise ValueError("report writer returned empty text")
+            output = ReportMessage(content, type="ai")
+        if enabled(config):
+            async with self.progress_lock:
+                progress = self.snapshot.application.setdefault("execution_budget", {}).setdefault("report", {})
+                progress.setdefault("completed_calls", {})[task_id] = {
+                    "span": span_name, "step": call_step(role, span_name),
+                    "role": role, "model": role_model(cfg, role),
+                }
+                if recovery:
+                    await recovery.save(self.snapshot)
+        return output
 
 
 async def enqueue_report_publication(

@@ -35,6 +35,7 @@ class HumanActionRequest(BaseModel):
     message: str | None = None
     source_selection: SourceSelection | None = None
     expected_version: int | None = Field(default=None, ge=1)
+    extension_seconds: int | None = Field(default=None, ge=300, le=1800, multiple_of=60)
 
 
 class SecurityApprovalDecisionRequest(BaseModel):

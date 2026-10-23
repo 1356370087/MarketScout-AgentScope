@@ -10,6 +10,7 @@ _STAGES = {
     "outline_approval": "synthesizing",
     "final_report_generation": "writing",
     "memory_extract_and_write": "finalizing",
+    "report_time_extension_approval": "writing",
 }
 _PUBLIC_STAGES = tuple(dict.fromkeys(_STAGES.values()))
 
@@ -139,7 +140,7 @@ def public_event(event):
                 "status": "pending",
                 "content_markdown": pending["question"],
                 **pending.get("payload", {}),
-                "allowed_actions": ["approve", "revise", "cancel"],
+                "allowed_actions": pending.get("payload", {}).get("allowed_actions", ["approve", "revise", "cancel"]),
             },
         )
     stage = payload.get("stage")

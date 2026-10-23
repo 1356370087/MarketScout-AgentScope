@@ -896,7 +896,7 @@ def test_v19_restore_keeps_old_review_contract():
     from open_deep_research.agentscope_runtime.run_config import RunConfig
     from open_deep_research.configuration import run_config_fingerprint
     run = RunConfig.compile()
-    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == 20
+    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == 21
     snapshot = run.snapshot()
     snapshot["contract"]["metadata"]["run_config_schema_version"] = 19
     snapshot["contract"]["metadata"]["run_config_fingerprint"] = run_config_fingerprint(snapshot["contract"])

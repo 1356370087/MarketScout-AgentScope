@@ -129,6 +129,22 @@ def bounded_specific_queries(
     )
 
 
+def deepseek_queries(query: str, request: SearchRequest) -> list[str]:
+    """Keep explicit official sites; otherwise search each source separately."""
+    suffix = [f"-site:{domain}" for domain in request.blocked_domains]
+    if request.published_after:
+        suffix.append(f"after:{request.published_after.date().isoformat()}")
+
+    if not query.strip():
+        return [query]
+    sites = re.findall(r"(?<![\w-])site:([\w.-]+)", query, flags=re.IGNORECASE)
+    if not request.allowed_domains or (sites and all(domain_matches(site.lower(), request.allowed_domains) for site in sites)):
+        return [" ".join([query, *suffix]).strip()]
+    # Appending a global OR-list to an already scoped query can broaden its
+    # meaning. Separate sites also avoid ambiguous provider operator precedence.
+    return [" ".join([query, f"site:{domain}", *suffix]).strip() for domain in request.allowed_domains]
+
+
 def domain_matches(host: str, domains: list[str] | tuple[str, ...]) -> bool:
     """Match a domain or its subdomains, never a suffix-lookalike host."""
     return any(
@@ -479,22 +495,13 @@ class SearchService:
         ], ""
 
     async def _deepseek(self, query: str, request: SearchRequest):
-        # DeepSeek accepts site/date operators in query, not Tavily-style fields.
-        parts = [query]
-        if request.allowed_domains:
-            parts.append(
-                " OR ".join(f"site:{domain}" for domain in request.allowed_domains)
-            )
-        parts.extend(f"-site:{domain}" for domain in request.blocked_domains)
-        if request.published_after:
-            parts.append(f"after:{request.published_after.date().isoformat()}")
-        effective_query = " ".join(parts).strip()
-        if not effective_query or len(effective_query) > 128:
+        # discover plans bounded physical queries including site/date operators.
+        if not query.strip() or len(query) > 128:
             raise SearchProviderError(
                 "deepseek_invalid_query", diagnostics={"provider_requests": 0}
             )
         payload = {
-            "query": effective_query,
+            "query": query,
             "count": min(10, request.candidate_limit),
             "need_content": self.legacy,
         }
@@ -616,16 +623,19 @@ class SearchService:
             "deepseek": self._deepseek,
         }
 
-        async def run(provider, index, query):
+        async def run(provider, index, query, provider_query=None):
             async with semaphore:
                 attempts = raw_count = parsed_count = 0
                 filter_reasons = {}
                 attempted_queries = []
                 in_flight = False
                 info = {}
-                effective_query = bing_query(query, request.allowed_domains) if modern and provider == "bing" else query
+                effective_query = provider_query if provider_query is not None else (
+                    bing_query(query, request.allowed_domains) if modern and provider == "bing" else query
+                )
                 await self._progress(
-                    "query_started", provider=provider, query=query, query_index=index
+                    "query_started", provider=provider, query=query, query_index=index,
+                    effective_query=effective_query,
                 )
                 try:
                     # Native model search performs service admission at its model port.
@@ -716,11 +726,23 @@ class SearchService:
                     await self._progress("provider_failed", **{key: value for key, value in outcome.items() if key != "search_phase"})
                     return provider, [], "", code, raw_count, attempts, outcome
 
-        tasks = [
-            asyncio.create_task(run(provider, index, query))
-            for provider in providers
-            for index, query in enumerate(request.queries)
-        ]
+        jobs = []
+        truncated = set()
+        for provider in providers:
+            groups = [
+                [(provider, index, query, physical) for physical in deepseek_queries(query, request)]
+                if provider == "deepseek" else [(provider, index, query, None)]
+                for index, query in enumerate(request.queries)
+            ]
+            # Round-robin physical batches keep each logical query represented
+            # under the existing bounded source-query expansion limit.
+            planned = [job for group in zip_longest(*groups) for job in group if job is not None]
+            if provider == "deepseek" and len(planned) > MAX_SPECIFIC_DOMAIN_QUERIES:
+                truncated.add(provider)
+                errors.append(f"deepseek_domain_query_limit_exceeded:{len(planned)}:{MAX_SPECIFIC_DOMAIN_QUERIES}")
+                planned = planned[:MAX_SPECIFIC_DOMAIN_QUERIES]
+            jobs.extend(planned)
+        tasks = [asyncio.create_task(run(*job)) for job in jobs]
         try:
             outcomes = await asyncio.gather(*tasks)
         except BaseException:
@@ -744,6 +766,12 @@ class SearchService:
                         cited_candidate_ids=[item.candidate_id for item in items],
                     )
                 )
+        if "deepseek" in by_provider:
+            # Keep later sites/queries represented before applying the shared
+            # candidate limit, rather than filling it with the first site's hits.
+            by_provider["deepseek"] = [item for group in zip_longest(
+                *(o[1] for o in outcomes if o[0] == "deepseek")
+            ) for item in group if item is not None]
         merged = [
             item
             for row in zip_longest(*(by_provider[p] for p in providers))
@@ -768,9 +796,9 @@ class SearchService:
                     else "all_filtered" if any(o[4] for o in outcomes if o[0] == p) else "empty",
                 search_phase=self.search_phase,
                 status="failed"
-                if len(failures[p]) == len(request.queries)
+                if failures[p] and len(failures[p]) == sum(o[0] == p for o in outcomes)
                 else "partial"
-                if failures[p]
+                if failures[p] or p in truncated
                 else "completed",
                 error_codes=list(dict.fromkeys(failures[p])),
             )

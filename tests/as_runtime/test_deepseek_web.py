@@ -6,6 +6,7 @@ Run the live test with DEEPSEEK_WEB_LIVE=1 and DEEPSEEK_API_KEY in the environme
 import asyncio
 import json
 import os
+import re
 from datetime import UTC, datetime
 
 import httpx
@@ -99,10 +100,14 @@ async def test_search_maps_results_and_enforces_domain_filters(legacy):
         assert request.method == "POST"
         assert request.headers["Authorization"] == "Bearer fixture-deepseek-key"
         assert json.loads(request.content) == {
-            "query": "API site:docs.example OR site:other.example -site:bad.docs.example after:2026-10-01",
+            "query": json.loads(request.content)["query"],
             "ori_question": "API contract",
             "count": 10,
             "need_content": legacy,
+        }
+        assert json.loads(request.content)["query"] in {
+            "API site:docs.example -site:bad.docs.example after:2026-10-01",
+            "API site:other.example -site:bad.docs.example after:2026-10-01",
         }
         return httpx.Response(200, json={"results": [
             {"url": "https://docs.example/api", "title": "Docs", "summary": "Long summary", "snippet": "Short", "content": "Page body"},
@@ -124,9 +129,9 @@ async def test_search_maps_results_and_enforces_domain_filters(legacy):
         assert batch.candidates[0].snippet == "Long summary"
         assert batch.candidates[1].snippet == "Short"
         assert batch.candidates[0].content_hint == ("Page body" if legacy else None)
-        assert batch.search_calls == 1
-        assert batch.provider_results[0].raw_result_count == 5
-        assert batch.provider_results[0].filtered_result_count == 3
+        assert batch.search_calls == 2
+        assert batch.provider_results[0].raw_result_count == 10
+        assert batch.provider_results[0].filtered_result_count == 6
         assert all(c.discoveries[0].provider == "deepseek" for c in batch.candidates)
     finally:
         await resources.aclose()
@@ -160,6 +165,157 @@ async def test_invalid_search_query_does_not_send_a_request(query):
     batch = await SearchService(config(), None, resources).discover(SearchRequest(objective="API", queries=[query]))
     assert batch.errors == ["deepseek:deepseek_invalid_query"]
     assert batch.search_calls == 0 and not resources.clients
+
+
+@pytest.mark.asyncio
+async def test_multi_vendor_search_splits_filters_and_keeps_provenance():
+    domains = ["elastic.co", "aws.amazon.com", "docs.aws.amazon.com", "learn.microsoft.com", "azure.microsoft.com"]
+    queries = ["RAG vector document permissions and pricing", "multi tenant hybrid search capacity"]
+    calls, progress = [], []
+
+    async def http(request):
+        payload = json.loads(request.content)
+        calls.append(payload["query"])
+        assert len(payload["query"]) <= 128
+        assert "-site:blocked.elastic.co after:2026-10-01" in payload["query"]
+        sites = re.findall(r"(?<!-)site:([\w.]+)", payload["query"])
+        return httpx.Response(200, json={"results": [
+            *[{"url": f"https://{site}/docs", "summary": "Official"} for site in sites],
+            {"url": "https://outside.example/docs"},
+            {"url": "https://blocked.elastic.co/docs"},
+        ]})
+
+    async def observe(event, **payload):
+        progress.append((event, payload))
+
+    resources = resources_for(http)
+    try:
+        cfg = config()
+        cfg["metadata"]["source_selection"] = {"mode": "specific", "sources": [
+            {"type": "domain", "domain": domain} for domain in domains]}
+        service = SearchService(cfg, None, resources, progress=observe)
+        batch = await service.discover(SearchRequest(objective="RAG", queries=queries,
+            allowed_domains=["unapproved.example"], blocked_domains=["blocked.elastic.co"],
+            published_after=datetime(2026, 10, 1, tzinfo=UTC)))
+        assert not batch.errors
+        assert {c.domain for c in batch.candidates} == set(domains)
+        assert batch.search_calls == len(calls) > len(queries)
+        assert batch.provider_results[0].query_count == 2
+        assert batch.provider_results[0].provider_requests == len(calls)
+        assert batch.provider_results[0].status == "completed"
+        for query in queries:
+            scoped = [call for call in calls if call.startswith(query + " ")]
+            assert {site for call in scoped for site in re.findall(r"(?<!-)site:([\w.]+)", call)} == set(domains)
+        assert {d.query for c in batch.candidates for d in c.discoveries} == set(queries)
+        completed = [payload for event, payload in progress if event == "query_completed"]
+        assert {p["effective_query"] for p in completed} == set(calls)
+        assert all(p["attempted_queries"] == [p["effective_query"]] for p in completed)
+        assert len([payload for event, payload in progress if event == "query_started"]) == len(calls)
+    finally:
+        await resources.aclose()
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_query_is_not_counted_as_a_physical_pipeline_search():
+    from open_deep_research.web.pipeline import WebResearchPipeline
+    from open_deep_research.web.models import SearchBatch
+
+    async def search(request):
+        return SearchBatch(errors=["deepseek:deepseek_invalid_query"], search_calls=0)
+
+    engine = WebResearchPipeline(search=search, settings=WebPipelineSettings())
+    result = await engine.run(SearchRequest(objective="RAG", queries=["x" * 129]))
+    assert result.errors == ["deepseek:deepseek_invalid_query"]
+    assert result.gap_analysis.budget.search_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_physical_query_progress_is_distinct_and_replay_idempotent(monkeypatch):
+    from unittest.mock import AsyncMock
+    from open_deep_research.agentscope_runtime import web_progress
+
+    publish = AsyncMock()
+    monkeypatch.setattr(web_progress, "publish_task_activity", publish)
+    progress = web_progress.WebProgress(config(), task_id="task", tool_call_id="tool", operation_id="operation")
+    common = {"provider":"deepseek", "query_index":0, "query":"RAG", "result_status":"usable"}
+    for effective in ("RAG site:elastic.co", "RAG site:learn.microsoft.com", "RAG site:elastic.co"):
+        await progress("query_completed", **common, effective_query=effective)
+    keys = [call.kwargs["dedupe_key"] for call in publish.await_args_list]
+    assert keys[0] != keys[1] and keys[0] == keys[2]
+
+
+@pytest.mark.asyncio
+async def test_explicit_vendor_queries_are_not_broadened_and_later_vendors_remain_visible():
+    queries = ["Elastic RRF site:elastic.co", "AWS FGAC site:docs.aws.amazon.com", "Azure ACL site:learn.microsoft.com"]
+    calls = []
+
+    async def http(request):
+        query = json.loads(request.content)["query"]
+        calls.append(query)
+        host = re.search(r"site:([\w.]+)",query)[1]
+        return httpx.Response(200,json={"results":[{"url":f"https://{host}/doc/{i}"} for i in range(10)]})
+
+    resources = resources_for(http)
+    try:
+        batch = await SearchService(config(),None,resources).discover(SearchRequest(objective="RAG",queries=queries,
+            candidate_limit=3,allowed_domains=["elastic.co","aws.amazon.com","docs.aws.amazon.com","learn.microsoft.com","azure.microsoft.com"]))
+        assert set(calls) == set(queries)
+        assert batch.search_calls == 3 and not batch.errors
+        assert [c.domain for c in batch.candidates] == ["elastic.co","docs.aws.amazon.com","learn.microsoft.com"]
+    finally:
+        await resources.aclose()
+
+
+@pytest.mark.asyncio
+async def test_split_search_retains_success_when_one_batch_fails():
+    calls = []
+
+    async def http(request):
+        query = json.loads(request.content)["query"]
+        calls.append(query)
+        if "site:learn.microsoft.com" in query:
+            return httpx.Response(429, json={})
+        return httpx.Response(200, json={"results": [{"url": "https://elastic.co/docs"}]})
+
+    resources = resources_for(http)
+    try:
+        batch = await SearchService(config(), None, resources).discover(SearchRequest(
+            objective="RAG", queries=["vector search document security and tenant isolation architecture"],
+            allowed_domains=["elastic.co", "learn.microsoft.com", "azure.microsoft.com", "docs.aws.amazon.com"]))
+        assert batch.errors == ["deepseek:rate_limited"]
+        assert [c.domain for c in batch.candidates] == ["elastic.co"]
+        assert batch.provider_results[0].status == "partial"
+        assert batch.search_calls == len(calls) > 1
+    finally:
+        await resources.aclose()
+
+
+@pytest.mark.asyncio
+async def test_split_search_bounds_physical_requests_and_checks_egress_each_time():
+    calls, approvals = [], []
+
+    async def authorize(url, capability, consume=False):
+        approvals.append((url, capability, consume))
+        return "allow"
+
+    async def http(request):
+        calls.append(json.loads(request.content)["query"])
+        return httpx.Response(200, json={"results": []})
+
+    resources = resources_for(http)
+    token = egress_authorizer.set(authorize)
+    try:
+        batch = await SearchService(config(), None, resources).discover(SearchRequest(
+            objective="RAG", queries=["hybrid vector security" + " architecture" * 5, "hybrid vector capacity" + " architecture" * 5],
+            allowed_domains=[f"vendor-{i:02}.example" for i in range(30)]))
+        assert batch.search_calls == len(calls) == len(approvals) == 24
+        assert batch.provider_results[0].status == "partial"
+        assert batch.errors == ["deepseek_domain_query_limit_exceeded:60:24"]
+        assert all(item == (PROVIDER_URLS["deepseek"], "search.provider", True) for item in approvals)
+        assert {query[:22] for query in calls} == {"hybrid vector security", "hybrid vector capacity"}
+    finally:
+        egress_authorizer.reset(token)
+        await resources.aclose()
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,17 @@ from open_deep_research.quality.policy import (
 )
 
 
+def skipped_handoff_assessment():
+    """临时交付回执：接纳成果不代表已经执行或通过质量评审。"""
+    return {
+        "accepted": True,
+        "admission_status": "accepted_with_caveats",
+        "evaluation_status": "skipped",
+        "reason": "任务交接质量门禁暂时停用，研究成果已交付，未执行交接质量评审。",
+        "caveats": ["交接质量未评估；保留工具反馈、原始停止原因和证据中的不确定性。"],
+    }
+
+
 class NativeResearchQuality:
     """Reuse hard admission and five-level policy; inject only the Judge call."""
 
@@ -64,6 +75,9 @@ class NativeResearchQuality:
     ):
         cfg = Configuration.from_runnable_config(config)
         from open_deep_research.quality.context import CONTEXT_RULES, SCOPE_CONTEXT_RULES, research_context_xml
+        if payload.get("task_scope"):
+            from open_deep_research.quality.task_scope import SCOPE_RULES
+            system_prompt += "\n" + SCOPE_RULES
         modern = config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
         messages = [SystemMsg("quality_rules", system_prompt + ("\n" + CONTEXT_RULES if modern else "")
                              + ("\n" + SCOPE_CONTEXT_RULES if payload.get("coverage_contract", {}).get("scope_context") else "")),
@@ -119,15 +133,24 @@ class NativeResearchQuality:
                 "deterministic_checks": checks, "evaluator_error": None,
                 "gaps": [{"requirement_id": rid, "kind": "factual", "reason": "no_eligible_evidence",
                           "checked_evidence_ids": [], "next_query": "读取已选资料并提取证据"} for rid in assignment.requirement_ids]}
-        result = await evaluate_tool_results(
-            assignment.research_topic,
-            rows,
-            config,
-            evidence_registry=source_scoped_evidence_records(evidence, contract),
-            coverage_contract=contract,
-            requirement_ids=assignment.requirement_ids,
-            evaluator=self.evaluate,
-        )
+        from open_deep_research.quality.task_scope import QualityScopeViolation
+        from open_deep_research.quality.gate import QualityInputBudgetExceeded
+        try:
+            result = await evaluate_tool_results(
+                assignment.research_topic, rows, config,
+                evidence_registry=source_scoped_evidence_records(evidence, contract),
+                coverage_contract=contract, requirement_ids=assignment.requirement_ids,
+                evaluator=self.evaluate,
+            )
+        except (QualityScopeViolation, QualityInputBudgetExceeded) as exc:
+            if config.get("metadata", {}).get("run_config_schema_version", 18) < 21:
+                raise
+            code = "quality_scope_violation" if isinstance(exc, QualityScopeViolation) else "quality_input_incomplete"
+            return {"decision": "retry", "accepted": False, "evaluation_status": "error",
+                    "evaluator_error": code, "protocol_errors": getattr(exc, "errors", [str(exc)]),
+                    "reason": "评估范围或输入无法确认，保留已有证据并停止本次纠偏；不追加外部研究。",
+                    "gaps": [], "requirement_checks": [], "missing_information": [],
+                    "suggested_queries": [], "unresolved_conflicts": []}
         cfg = Configuration.from_runnable_config(config)
         policy = get_run_quality_rigor_policy(
             cfg.quality_evaluation_rigor,

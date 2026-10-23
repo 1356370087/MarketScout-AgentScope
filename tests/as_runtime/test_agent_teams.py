@@ -362,6 +362,7 @@ async def test_plan_inheritance_rejection_and_explicit_approval(env):
         member_id=who.member_id,
         consume_inputs=AsyncMock(),
         guard=team.transport.guard,
+        host=SimpleNamespace(budget_reason=AsyncMock(return_value=None)),
     )
     approved = await wait_for_plan(worker, None, {})
     assert approved["version"] == 2
@@ -461,6 +462,8 @@ async def test_one_member_runs_two_tasks_and_closes(env, tmp_path):
                     break
                 await asyncio.sleep(0.05)
         assert len(marker.read_text().splitlines()) == 2
+        assert all(row["admission_status"] == "accepted_with_caveats" for row in rows)
+        assert all(row["handoff_assessment"]["evaluation_status"] == "skipped" for row in rows)
         async with pool.acquire() as db:
             assert (
                 await db.fetchval(

@@ -304,12 +304,18 @@ async def _repair_missing_report_citations(
     ctx: ReportContext,
 ) -> str:
     """Ask the writer for one bounded citation-only repair attempt."""
+    checked = check_citations(markdown, {source.url for source in ctx.sources},
+                              {str(record["evidence_id"]) for record in ctx.evidence_records if record.get("evidence_id")})
     messages = ctx.stage_messages(
         "Repair the complete Markdown draft. Cite each factual claim with an "
         "actually supporting source from the records. Remove or qualify unsupported "
         "claims; do not preserve an unsupported conclusion merely to add a citation. "
-        "Use inline [Title](URL) links and return only the complete repaired report.",
-        {"draft": markdown, "research_brief": ctx.state.get("research_brief", "")},
+        "Use inline [Title](URL) links and return only the complete repaired report. "
+        "Resolve every supplied citation_errors entry using the exact registered URL. "
+        "Remove unread starting URLs from Sources; they are not evidence and must not "
+        "be retained merely because the user supplied them. Do not invent replacements.",
+        {"draft": markdown, "research_brief": ctx.state.get("research_brief", ""),
+         "citation_errors": checked.errors, "has_body_citation": checked.has_body_citation},
         ctx.evidence_records,
     )
     repaired = await ctx.invoke_writer_with_output_recovery(
@@ -698,6 +704,9 @@ async def _build_report_legacy(state: dict, config: RunnableConfig) -> dict:
         cfg.quality_evaluation_enabled
         and isinstance(completion, Mapping)
         and completion.get("action") == "complete_partial"
+        # 预留预算只限制继续研究，不代表已有证据未通过报告质量检查。
+        # 使用正常写作与 Reviewer/Revisor，完成状态仍保留 partial 及停止原因。
+        and completion.get("reason") not in {"report_budget_reserved", "report_time_reserved"}
     ):
         return await _evidence_limited_report_update(
             state, config,
@@ -1261,6 +1270,14 @@ async def _publish_report_progress(
     )
 
 
+async def _time_checkpoint(name, cfg, *, completed=False, review_passed=False):
+    from .runtime import native_report
+
+    port = native_report.get()
+    if port is not None and hasattr(port, "report_checkpoint"):
+        await port.report_checkpoint(name, cfg, completed=completed, review_passed=review_passed)
+
+
 async def build_report(state: dict, config: RunnableConfig) -> dict:
     """Build a final report, optionally running the Reviewer -> Revisor loop.
 
@@ -1270,14 +1287,20 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
     history in the returned state update.
     """
     cfg = Configuration.from_runnable_config(config)
+    await _time_checkpoint("draft", cfg)
     if not bool(getattr(cfg, "report_review_enabled", False)):
-        return await _build_report_legacy(state, config)
+        result = await _build_report_legacy(state, config)
+        await _time_checkpoint("draft", cfg, completed=True)
+        return result
 
     draft = await build_report_draft(state, config)
+    await _time_checkpoint("draft", cfg, completed=True)
     await _publish_report_progress(
         config, "report.review.started", draft, attempt=1, revision_count=0
     )
+    await _time_checkpoint("review:1", cfg)
     review = await review_report(draft, state, config, attempt=1)
+    await _time_checkpoint("review:1", cfg, completed=True, review_passed=review.decision == "pass")
     history: list[dict[str, Any]] = [review.model_dump(mode="json")]
     revision_count = 0
     try:
@@ -1308,8 +1331,10 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             config, "report.revision.started", draft,
             attempt=revision_count + 1, revision_count=revision_count,
         )
+        await _time_checkpoint(f"revision:{revision_count + 1}", cfg)
         revised_markdown = await revise_report(draft, review, state, config)
         revision_count += 1
+        await _time_checkpoint(f"revision:{revision_count}", cfg, completed=True)
         draft = draft.model_copy(
             update={
                 "markdown": revised_markdown,
@@ -1328,6 +1353,7 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             config, "report.review.started", draft,
             attempt=revision_count + 1, revision_count=revision_count,
         )
+        await _time_checkpoint(f"review:{len(history) + 1}", cfg)
         review = await review_report(
             draft,
             ({**state, "report_review_history": history}
@@ -1336,6 +1362,7 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             config,
             attempt=revision_count + 1,
         )
+        await _time_checkpoint(f"review:{len(history) + 1}", cfg, completed=True, review_passed=review.decision == "pass")
         history.append(review.model_dump(mode="json"))
 
     # A fail-open unavailable Reviewer may be explicitly published as degraded;
@@ -1364,6 +1391,7 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         )
         from .runtime import native_report
         port = native_report.get()
+        await _time_checkpoint("recovery", cfg)
         if port is not None and hasattr(port, "check_recovery_budget"):
             await port.check_recovery_budget(cfg)
         draft = await recover_report_draft(
@@ -1372,17 +1400,20 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
             config,
             reason_codes=reason_codes,
         )
+        await _time_checkpoint("recovery", cfg, completed=True)
         recovered = True
         await _publish_report_progress(
             config, "report.review.started", draft, attempt=len(history) + 1,
             revision_count=revision_count,
         )
+        await _time_checkpoint(f"review:{len(history) + 1}", cfg)
         review = await review_report(
             draft,
             state,
             config,
             attempt=len(history) + 1,
         )
+        await _time_checkpoint(f"review:{len(history) + 1}", cfg, completed=True, review_passed=review.decision == "pass")
         history.append(review.model_dump(mode="json"))
 
     try:

@@ -391,11 +391,74 @@ class RecoveryStore:
         async with self.transaction(lease) as (conn, row):
             if body["config_fingerprint"] != row["snapshot"]["config_fingerprint"]:
                 raise RecoveryConflict("frozen configuration changed")
+            version = body.get("application", {}).get("configuration", {}).get("contract", {}).get("metadata", {}).get("run_config_schema_version", 18)
+            if (version >= 21 and body.get("revision_count") == row["snapshot"].get("revision_count")
+                    and "research_supervisor" in {body.get("inflight"), row["snapshot"].get("inflight")}):
+                # A stage exception must not overwrite already collected handoffs
+                # with the older stage-entry snapshot.
+                merged = {item["task_id"]: item for item in row["snapshot"].get("findings", [])}
+                merged.update({item["task_id"]: item for item in body.get("findings", [])})
+                body["findings"] = snapshot.findings = list(merged.values())
             if (
                 expected_revision is not None
                 and row["revision"] != expected_revision + 1
             ):
                 raise RecoveryConflict("checkpoint revision changed")
+            from .execution_budget import APPROVAL_STAGE, validate_extension
+
+            old_control = row["snapshot"].get("application", {}).get("execution_budget", {})
+            control = body.setdefault("application", {}).setdefault("execution_budget", {}) if (
+                old_control or body.get("application", {}).get("execution_budget")
+                or (body.get("pending") or {}).get("stage") == APPROVAL_STAGE
+            ) else None
+            if control is not None and old_control.get("research_closing_reason"):
+                control["research_closing_reason"] = old_control["research_closing_reason"]
+            pending = body.get("pending")
+            if pending and pending["stage"] == APPROVAL_STAGE:
+                if (row["snapshot"].get("pending") or {}).get("id") != pending["id"]:
+                    unknown = await conn.scalar(select(self.ops.c.key).where(
+                        self.ops.c.run_id == lease.run_id, self.ops.c.state != "committed",
+                        self.ops.c.kind.in_(["gateway:model", "gateway:tool", "tool"]) | self.ops.c.kind.like("model:%"),
+                    ).limit(1))
+                    if unknown:
+                        raise UnknownOperation(unknown)
+                    remaining = max(0, (row["deadline"] or await self._now(conn)) - await self._now(conn))
+                    pending["payload"]["remaining_seconds"] = remaining
+                    control["pause"] = {"action_id": pending["id"], "remaining_seconds": remaining,
+                                        "paused_at": await self._now(conn)}
+                else:
+                    control["pause"] = old_control["pause"]
+            old_pending = row["snapshot"].get("pending") or {}
+            if command_id and old_pending.get("stage") == APPROVAL_STAGE:
+                command = (await conn.execute(select(self.decisions).where(
+                    self.decisions.c.run_id == lease.run_id, self.decisions.c.command_id == command_id,
+                    self.decisions.c.state == "pending",
+                ))).mappings().one()
+                decision_payload = command["payload"]
+                granted = validate_extension(old_pending, decision_payload["action"],
+                    decision_payload.get("expected_version"), decision_payload.get("extension_seconds"))
+                pause = old_control["pause"]
+                if command["action_id"] != pause["action_id"]:
+                    raise RecoveryConflict("report time decision targets another pause")
+                now = await self._now(conn)
+                if decision_payload["action"] != "cancel":
+                    await conn.execute(update(self.runs).where(self._identity(lease)).values(
+                        deadline=now + pause["remaining_seconds"] + granted))
+                control = body.setdefault("application", {}).setdefault("execution_budget", {})
+                control.pop("pause", None)
+                control["extension_history"] = [*old_control.get("extension_history", []), {
+                    "action_id": command["action_id"], "action": decision_payload["action"],
+                    "extension_seconds": granted, "resolved_at": now,
+                    "checkpoint": old_pending["payload"]["checkpoint"],
+                }]
+                control["authorized_checkpoints"] = [*old_control.get("authorized_checkpoints", []),
+                    *([old_pending["payload"]["checkpoint"]] if decision_payload["action"] == "approve" else [])]
+                control["extension_denied"] = decision_payload["action"] == "deny"
+            # Clock changes, decision receipt and checkpoint commit atomically.
+            if control is not None:
+                snapshot.application["execution_budget"] = control
+                if snapshot.pending and pending:
+                    snapshot.pending.payload = pending["payload"]
             await conn.execute(
                 update(self.runs).where(self._identity(lease)).values(snapshot=body)
             )
@@ -568,6 +631,8 @@ class RecoveryStore:
                     raise RecoveryConflict("operation key reused with different input")
                 if op["state"] == "committed":
                     return {"replayed": True, "result": op["result"]}
+                if (row["snapshot"].get("pending") or {}).get("stage") == "report_time_extension_approval":
+                    raise RecoveryConflict("report_execution_paused_for_time_approval")
                 if (
                     row["deadline"] is not None
                     and await self._now(conn) >= row["deadline"]
@@ -591,6 +656,8 @@ class RecoveryStore:
                         .values(fence=lease.fence)
                     )
             else:
+                if (row["snapshot"].get("pending") or {}).get("stage") == "report_time_extension_approval":
+                    raise RecoveryConflict("report_execution_paused_for_time_approval")
                 if (
                     row["deadline"] is not None
                     and await self._now(conn) >= row["deadline"]
@@ -924,6 +991,8 @@ class RecoveryStore:
                 return same_action["state"]
             pending = row["snapshot"].get("pending")
             approvals = row["snapshot"].get("approvals", {})
+            from .execution_budget import APPROVAL_STAGE, validate_extension
+            time_decision = (pending or {}).get("stage") == APPROVAL_STAGE
             feedback = payload.get("action") == "feedback"
             if feedback:
                 if (
@@ -933,6 +1002,11 @@ class RecoveryStore:
                     raise RecoveryConflict("feedback targets a foreign task")
             elif action_id != (pending or {}).get("id") and action_id not in approvals:
                 raise RecoveryConflict("stale or foreign approval")
+            if time_decision:
+                validate_extension(pending, payload.get("action"), payload.get("expected_version"),
+                                   payload.get("extension_seconds"))
+            elif "extension_seconds" in payload:
+                raise ValueError("extension_seconds requires report time approval")
             if "expected_version" in payload and payload["expected_version"] != (pending or {}).get("payload", {}).get("version"):
                 raise RecoveryConflict("source_plan_version_changed")
             if "source_selection" in payload and (pending or {}).get("stage") != "plan_approval":
@@ -954,7 +1028,7 @@ class RecoveryStore:
                 "cancel",
                 "answer",
                 "feedback",
-            }:
+            } and not (time_decision and payload.get("action") == "deny"):
                 raise ValueError("invalid decision action")
             _no_credentials(payload)
             await conn.execute(
@@ -989,7 +1063,6 @@ class RecoveryStore:
             ]
 
     async def budget(self, run_id, user_id):
-        await self.load(run_id, user_id)
         async with self.engine.connect() as conn:
             row = (
                 (
@@ -999,13 +1072,90 @@ class RecoveryStore:
                             self.runs.c.used,
                             self.runs.c.reserved,
                             self.runs.c.deadline,
-                        ).where(self.runs.c.run_id == run_id)
+                        ).where(self.runs.c.run_id == run_id, self.runs.c.user_id == user_id)
                     )
                 )
                 .mappings()
-                .one()
+                .first()
             )
+        if row is None:
+            raise KeyError("run not found")
         return dict(row)
+
+    async def close_research(self, lease, reason):
+        """Latch a budget stop without changing the frozen configuration."""
+        async with self.transaction(lease) as (conn, row):
+            body = dict(row["snapshot"])
+            application = dict(body.get("application", {}))
+            control = dict(application.get("execution_budget", {}))
+            if control.get("research_closing_reason"):
+                return control["research_closing_reason"]
+            control["research_closing_reason"] = reason
+            control["closing_started_at"] = await self._now(conn)
+            application["execution_budget"] = control
+            body["application"] = application
+            await conn.execute(update(self.runs).where(self._identity(lease)).values(snapshot=body))
+            await self._event(conn, row, "research.budget_closing", {"reason": reason})
+            return reason
+
+    async def assert_call_outcomes(self, lease, *, ignore_key=None):
+        async with self.transaction(lease) as (conn, _row):
+            unresolved = await conn.scalar(select(self.ops.c.key).where(
+                self.ops.c.run_id == lease.run_id, self.ops.c.state != "committed",
+                self.ops.c.kind.in_(["gateway:model", "gateway:tool", "tool"]) | self.ops.c.kind.like("model:%"),
+                self.ops.c.key != ignore_key if ignore_key is not None else True,
+            ).limit(1))
+            if unresolved:
+                raise UnknownOperation(unresolved)
+
+    async def execution_timing(self, run_id, user_id, cfg, *, include_samples=True):
+        """Read only receipt metadata, not large model/agent payloads."""
+        from .execution_budget import role_model
+
+        async with self.engine.connect() as conn:
+            budget = (await conn.execute(select(
+                self.runs.c.limits, self.runs.c.used, self.runs.c.reserved, self.runs.c.deadline,
+                self.runs.c.snapshot["application"]["execution_budget"].label("control"),
+            ).where(self.runs.c.run_id == run_id, self.runs.c.user_id == user_id))).mappings().one()
+            now = await self._now(conn)
+            control = budget["control"] or {}
+            if not include_samples and control.get("research_closing_reason"):
+                return {"budget": {k: budget[k] for k in ("limits", "used", "reserved", "deadline")},
+                        "remaining_seconds": max(0, budget["deadline"] - now) if budget["deadline"] is not None else None,
+                        "samples": [], "closing_reason": control["research_closing_reason"], "inflight_seconds": 0}
+            rows = (await conn.execute(select(
+                self.ops.c.key, self.ops.c.kind, self.ops.c.state,
+                self.ops.c.result["codec"].as_string().label("codec"),
+            ).where(self.ops.c.run_id == run_id,
+                    (self.ops.c.kind.in_(["model:final_report", "model:report_revisor", "model:report_review"])
+                     | (self.ops.c.state != "committed")) if include_samples else self.ops.c.state != "committed",
+                    self.ops.c.kind.like("model:%") | self.ops.c.kind.in_(["gateway:model", "gateway:tool", "tool"]),
+                    ))).mappings().all()
+            events = (await conn.execute(select(self.outbox.c.payload).where(
+                self.outbox.c.run_id == run_id,
+                self.outbox.c.payload["operation_key"].as_string().in_([r["key"] for r in rows]),
+                self.outbox.c.payload["type"].as_string().in_(["research.operation_started", "research.operation_committed"]),
+            ).order_by(self.outbox.c.sequence))).scalars().all()
+        starts = {e["operation_key"]: e for e in events if e["type"] == "research.operation_started"}
+        ends = {e["operation_key"]: e["timestamp"] for e in events if e["type"] == "research.operation_committed"}
+        samples, inflight = [], 0.0
+        for row in rows:
+            start = starts.get(row["key"], {}).get("timestamp")
+            end = ends.get(row["key"])
+            if start is None:
+                continue
+            role = row["kind"].removeprefix("model:")
+            if row["state"] == "committed" and end is not None and row["codec"] == "agentscope-response-v1":
+                samples.append({"role": role, "model": role_model(cfg, role),
+                                "seconds": max(0, end - start), "finished_at": end})
+            elif row["state"] != "committed":
+                timeout = max(cfg.tool_call_timeout_seconds, cfg.research_tool_call_timeout_seconds) if "tool" in row["kind"] else cfg.model_call_timeout_seconds
+                inflight = max(inflight, max(0, timeout - (now - start)))
+        control = budget["control"] or {}
+        return {"budget": {k: budget[k] for k in ("limits", "used", "reserved", "deadline")},
+                "remaining_seconds": max(0, budget["deadline"] - now) if budget["deadline"] is not None else None,
+                "samples": sorted(samples, key=lambda s: s["finished_at"]),
+                "closing_reason": control.get("research_closing_reason"), "inflight_seconds": inflight}
 
     async def operation_record(self, lease, key):
         """Read a receipt for reconstruction; all subsequent mutations recheck fence."""

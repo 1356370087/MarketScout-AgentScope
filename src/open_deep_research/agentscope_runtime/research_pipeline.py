@@ -154,15 +154,33 @@ class ResearchPipeline:
         async with self._lock:
             await self._decide(decision_id, action, feedback, **options)
 
-    async def _decide(self, decision_id: str, action: str, feedback: str = "", *, source_selection=None, expected_version=None) -> None:
-        if action not in {"approve", "revise", "cancel", "answer"}:
+    async def _decide(self, decision_id: str, action: str, feedback: str = "", *, source_selection=None, expected_version=None, extension_seconds=None) -> None:
+        from .execution_budget import APPROVAL_STAGE, validate_extension
+        pending = self.state.pending
+        time_decision = pending is not None and pending.stage == APPROVAL_STAGE
+        if action not in {"approve", "revise", "cancel", "answer", "deny"}:
             raise ValueError("unsupported research decision")
         receipt = f"{action}:{feedback}" if source_selection is None and expected_version is None else json.dumps([action, feedback, source_selection, expected_version], sort_keys=True)
+        if extension_seconds is not None:
+            receipt = json.dumps([receipt, extension_seconds])
         if decision_id in self.state.decisions:
             if self.state.decisions[decision_id] != receipt:
                 raise ValueError("conflicting research decision")
             return
         pending = self.state.pending
+        if time_decision:
+            if pending.id != decision_id:
+                raise ValueError("stale research decision")
+            validate_extension(pending.model_dump(), action, expected_version, extension_seconds)
+            state = self.state.model_copy(deep=True)
+            state.decisions[decision_id] = receipt
+            state.pending = None
+            state.status = "cancelled" if action == "cancel" else "ready"
+            # Keep the stage/revision and all report operation keys unchanged.
+            await self._commit(state)
+            return
+        if action == "deny" or extension_seconds is not None:
+            raise ValueError("time decision requires a pending report time request")
         if decision_id in self.state.approvals:
             approval = self.state.approvals[decision_id]
             if action not in {"approve", "revise", "cancel"}:
@@ -399,6 +417,15 @@ class ResearchPipeline:
                     await self._commit(stopped)
                     raise
                 except Exception as exc:
+                    from .execution_budget import ReportTimeApprovalPending
+
+                    if isinstance(exc, ReportTimeApprovalPending):
+                        working.inflight, working.status = None, "waiting"
+                        working.pending = exc.pending
+                        await self._commit(working)
+                        yield self._pending_event()
+                        yield AssistantMsg("research", exc.pending.question)
+                        return
                     if self.recovery:
                         from open_deep_research.agentscope_runtime.recovery import (
                             ApprovalPending,

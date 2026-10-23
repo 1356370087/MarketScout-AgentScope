@@ -444,7 +444,7 @@ async def test_unknown_evidence_id_forces_deterministic_fallback(
         config={"configurable": {}, "metadata": {}},
     )
 
-    assert report.startswith("# 质量门禁未通过的证据恢复报告")
+    assert report.startswith("# 证据恢复报告")
     assert "EV-UNKNOWN" not in report
 
 
@@ -509,7 +509,7 @@ async def test_claim_without_evidence_forces_deterministic_fallback(
         config={"configurable": {}, "metadata": {}},
     )
 
-    assert report.startswith("# 质量门禁未通过的证据恢复报告")
+    assert report.startswith("# 证据恢复报告")
     assert "没有证据绑定的事实主张" not in report
 
 
@@ -606,6 +606,6 @@ async def test_rendered_report_url_is_rechecked_against_allowlist(
         config={"configurable": {}, "metadata": {}},
     )
 
-    assert report.startswith("# 质量门禁未通过的证据恢复报告")
+    assert report.startswith("# 证据恢复报告")
     assert "https://evil.example" not in report
     assert "(https://example.com/checkpoint)" in report

@@ -694,7 +694,7 @@ class WebResearchPipeline:
                     replacement_domain_counts[candidate.domain] += 1
         if pending and not fetchable:
             budget = BudgetSnapshot(
-                search_calls=batch.search_calls or len(request.queries),
+                search_calls=batch.search_calls,
                 candidates=len(candidates),
                 reserved_fetches=allowed_fetches,
                 max_fetches=self.settings.max_fetches,
@@ -1126,7 +1126,7 @@ class WebResearchPipeline:
                     "evidence_count": len(evidence),
                 })
         budget = BudgetSnapshot(
-            search_calls=batch.search_calls or len(request.queries),
+            search_calls=batch.search_calls,
             candidates=len(candidates),
             fetch_attempts=sum(
                 result.adapter != "run_cache" for result in fetch_results

@@ -15,6 +15,7 @@ from open_deep_research.agentscope_runtime.recovery_store import FenceLost
 from open_deep_research.agentscope_runtime.team_worker import (
     TeamWorkers,
     TaskStopped,
+    TaskBudgetStopped,
     WorkerBusy,
 )
 from open_deep_research.tasks.team_protocol import MemberIdentity
@@ -77,6 +78,8 @@ class TeamsWorkers(TeamWorkers):
             )
             if row["status"] == "completed":
                 return await self.artifact(assignment.task_id)
+            if row.get("budget_stop_reason"):
+                raise TaskBudgetStopped(row["budget_stop_reason"])
             if row["status"] in {"failed", "cancelled", "timed_out"}:
                 raise TaskStopped(row["status"])
             if row.get("_worker_error"):
@@ -272,6 +275,10 @@ class MemberLoop:
                     raise FenceLost("member heartbeat rejected")
 
     async def next_task(self):
+        reason = await self.host.budget_reason()
+        if reason:
+            await self.host.close_pending_for_budget(reason)
+            return None
         for attempt in range(5):
             tasks = await self.team.service.tasks(self.team.lease.run_id)
             active = next(
@@ -396,8 +403,9 @@ class MemberLoop:
                                 discuss,
                             )
 
-                            await discuss(self, event)
-                            continue
+                            if not await self.host.budget_reason():
+                                await discuss(self, event)
+                                continue
                         from open_deep_research.tasks.team_messages import message_text
 
                         async def apply(db, item):

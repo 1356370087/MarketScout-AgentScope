@@ -44,6 +44,10 @@ class TaskStopped(RuntimeError):
     """A persisted control command stopped the task."""
 
 
+class TaskBudgetStopped(TaskStopped):
+    """Known budget admission refusal, without a fabricated research result."""
+
+
 class _Say(BaseModel):
     to: str = "lead"
     content: str
@@ -139,12 +143,41 @@ class TeamWorkers:
     async def stop(self, task_id):
         await self.team.command("stop:" + task_id, "task_stop", {"task_id": task_id})
 
+    async def budget_reason(self):
+        from .execution_budget import enabled
+        from .efficiency import research_budget_reason
+
+        config = self.researcher.config_provider()
+        return await research_budget_reason(self, config) if enabled(config) else None
+
+    async def close_pending_for_budget(self, reason):
+        if not await self.team.members():
+            return {"cancelled_task_ids": [], "reason": reason}
+        return await self.team.command("budget-close-pending", "research_budget_close", {"reason": reason})
+
+    async def collect_completed(self, *, exclude=()):
+        rows = await self.team.service.tasks(self.team.lease.run_id)
+        return [await self.artifact(row["task_id"]) for row in rows
+                if row["status"] == "completed" and row["task_id"] not in exclude]
+
     async def consume_leader_inputs(self):
         for event in await self.team.pending("lead"):
 
             async def apply(db, item):
                 if item.type in {"message", "send_message"}:
                     from open_deep_research.tasks.team_messages import message_text
+                    message = message_text(item)
+                    from .execution_budget import enabled
+                    body = item.payload.get("message", {})
+                    if (enabled(self.researcher.config_provider()) and isinstance(body, dict)
+                            and body.get("type") == "plan_approval_request"):
+                        from .teams_planning import plan_source_checks
+                        raw = await db.fetchval("SELECT snapshot FROM research_team_tasks WHERE run_id=$1 AND task_id=$2",
+                                                self.team.lease.run_id, body["task_id"])
+                        contract = json.loads(raw)["coverage_contract"]
+                        checks = plan_source_checks(body["plan"], contract, self.researcher.config_provider())
+                        message += "\n运行时来源范围核对：" + json.dumps(checks, ensure_ascii=False)
+                        message += "。allowed 中的 URL 已符合授权范围，不得误判为越界；可用性与来源范围是两回事。denied 必须修订后才能批准。"
                     await db.execute(
                         """UPDATE research_team_members SET session=jsonb_set(session,'{_native_inbox}',
                            coalesce(session->'_native_inbox','[]'::jsonb) || $2::jsonb)
@@ -152,7 +185,7 @@ class TeamWorkers:
                         self.team.lease.run_id,
                         json.dumps(
                             [
-                                f"SendMessage {item.sender}: {message_text(item)}; request_id={item.payload.get('request_id', item.event_id)}; version={item.payload.get('version', '')}"
+                                f"SendMessage {item.sender}: {message}; request_id={item.payload.get('request_id', item.event_id)}; version={item.payload.get('version', '')}"
                             ]
                         ),
                     )
@@ -254,6 +287,8 @@ class TeamWorkers:
                 row = next(row for row in rows if row["task_id"] == assignment.task_id)
                 if row["status"] == "completed":
                     return await self.artifact(assignment.task_id)
+                if row.get("budget_stop_reason"):
+                    raise TaskBudgetStopped(row["budget_stop_reason"])
                 if row["status"] in {"cancelled", "failed", "timed_out"}:
                     raise TaskStopped(row["status"])
                 if row.get("_worker_error"):
@@ -612,6 +647,15 @@ class _Worker:
             self.failure = exc
             self.current.cancel()
 
+    async def stop_for_budget(self, reason):
+        watcher = getattr(self, "_watcher", None)
+        if watcher:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+        await self.team.command("budget-stop:" + self.task_id, "task_stop",
+                                {"task_id": self.task_id, "budget_reason": reason})
+        raise TaskBudgetStopped(reason)
+
     async def run(self):
         snapshot = await self.claim()
         if snapshot is None:
@@ -646,6 +690,7 @@ class _Worker:
         member_context = await self.team.member_context(self.member_id)
         snapshot["member_context"] = member_context
         watcher = asyncio.create_task(self.watch())
+        self._watcher = watcher
         try:
             with self.session.scope("team-worker", 0), self.session.task(self.task_id):
                 await self.consume_inputs()
@@ -663,8 +708,11 @@ class _Worker:
                     execution_feedback.insert(0, "团队成员职责与目标（仍须遵守本任务的需求和来源契约）：" +
                                               json.dumps(member_context, ensure_ascii=False))
                     if snapshot.get("blockedBy"):
-                        execution_feedback.append("本任务前置已完成并通过质量接纳。使用 TaskGet 读取以下任务的研究工件并汇总，"
+                        execution_feedback.append("本任务前置已完成并允许交付，质量评审状态以交接回执为准。使用 TaskGet 读取以下任务的研究工件并汇总，"
                                                   "仅在工件不能覆盖本任务时补充研究：" + json.dumps(snapshot["blockedBy"]))
+                    reason = await self.host.budget_reason()
+                    if reason:
+                        await self.stop_for_budget(reason)
                     if snapshot.get("execution_mode") == "plan_approval":
                         from open_deep_research.agentscope_runtime.teams_planning import wait_for_plan
                         approved_plan = await wait_for_plan(self, researcher, snapshot)
@@ -714,6 +762,8 @@ class _Worker:
         except asyncio.CancelledError:
             if self.failure:
                 raise self.failure
+            raise
+        except TaskBudgetStopped:
             raise
         except Exception as exc:
             async with self.team.transport.store.pool.acquire() as db, db.transaction():
