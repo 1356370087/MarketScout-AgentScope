@@ -409,6 +409,22 @@ async def test_known_transport_failure_refund_matches_the_sql_receipt(host, monk
     assert budget["used"]["fetch_calls"] == memory._run_attempts["web-upgrade-test"] == 0
 
 
+async def test_scope_rejection_refunds_fetch_but_keeps_tool_cost_and_unknown_reservations(host):
+    from types import SimpleNamespace
+    from open_deep_research.tools.governance import ToolError, ToolErrorType
+    gateway, ledger, _ = host
+    error = ToolError(error_type=ToolErrorType.validation_error, tool_name="fetch_url",
+        message="Outside the approved source plan", detail={"reason_code": "source_scope_denied"})
+    charge = gateway._governed_fetch_calls(SimpleNamespace(error=error, result=None))
+    await _tool_reserve(gateway, ledger, "scope-denied", tool_name="fetch_url", idempotent=True)
+    request = gateway.internal.signed(ToolBudgetSettleRequest, run_id="r", fence_token=ledger.recovery.lease.fence,
+        logical_operation_id="scope-denied", fetch_calls=charge, outcome={"status": "failed"})
+    await gateway.internal.post("/internal/sandbox/budgets/tool-settle", request)
+    budget = await ledger.recovery.store.budget("r", "u")
+    assert budget["used"] == {"tool_calls": 1, "fetch_calls": 0}
+    assert gateway._governed_fetch_calls(SimpleNamespace(error=None, result=None)) is None
+
+
 async def test_native_server_search_receipt_keeps_citations_and_usage_on_replay(host):
     from open_deep_research.agentscope_runtime.sandbox_provider import NativeGatewayProvider
     from open_deep_research.sandbox.wire import ServerSearchRequest

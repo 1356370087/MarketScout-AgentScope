@@ -2087,6 +2087,10 @@ class GatewayRuntime:
     @staticmethod
     def _governed_fetch_calls(governed) -> int | None:
         """结算 URL 获取链额度并扣除确定的传输失败退款；未知结果保留预留。"""
+        error = getattr(governed, "error", None)
+        if (getattr(error, "detail", None) or {}).get("reason_code") == "source_scope_denied":
+            # fetch_url rejects this scope before assembling or invoking a fetcher.
+            return 0
         result = getattr(governed, "result", None)
         metadata = getattr(result, "metadata", None)
         if isinstance(metadata, dict) and metadata.get("physical_fetches") is not None:

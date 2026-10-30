@@ -31,6 +31,14 @@ def _partial_report_update(snapshot, state, config, reason):
         "canonical_report": _canonical_report_payload(markdown, state, config, get_profile(cfg.report_type), [])}
 
 
+def task_evidence(findings):
+    """Retain task ownership for input selection without claiming factual coverage."""
+    return [{**record, "requirement_ids": list(dict.fromkeys([
+                *record.get("requirement_ids", []), *finding.get("requirement_ids", []),
+            ]))}
+            for finding in findings for record in finding.get("evidence_registry", [])]
+
+
 class NativeReportWriter:
     """Preserve domain report rules while native models own calls and retries."""
 
@@ -59,7 +67,7 @@ class NativeReportWriter:
             {
                 "research_brief": snapshot.research_brief,
                 "notes": [item.get("compressed_research", "") for item in snapshot.findings],
-                "evidence_registry": [record for item in snapshot.findings for record in item.get("evidence_registry", [])],
+                "evidence_registry": task_evidence(snapshot.findings),
                 "coverage_contract": snapshot.coverage_contract,
                 "coverage_ledger": snapshot.coverage_ledger,
             },
@@ -96,9 +104,7 @@ class NativeReportWriter:
                 "notes": [f.get("compressed_research", "") for f in snapshot.findings],
                 "completed_task_outputs": snapshot.findings,
                 "supervisor_messages": snapshot.agent_states.get("supervisor", {}).get("context", []),
-                "evidence_registry": [
-                    e for f in snapshot.findings for e in f.get("evidence_registry", [])
-                ],
+                "evidence_registry": task_evidence(snapshot.findings),
                 "coverage_contract": snapshot.coverage_contract,
                 "coverage_ledger": snapshot.coverage_ledger,
                 "research_risk_profile": snapshot.research_risk_profile,

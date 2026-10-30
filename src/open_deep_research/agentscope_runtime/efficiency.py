@@ -53,6 +53,9 @@ def research_guidance(config, *, supervisor=False):
         "收到 research_stopped 时调用 ResearchComplete，保留已准入证据，明确未完成要求。"
         "原始需求提供了具体网页 URL 时，优先直接读取与当前任务相关的入口，再在批准来源内补充检索；"
         "不要用猜测的文档路径代替用户给出的入口。未读取的入口不能列入报告引用来源。"
+        "开放研究也须从搜索结果或已读页面链接取得地址，遇到 404 不继续猜测旧目录或 .html 路径；"
+        "改用批准域名内的定向检索或读取已知目录页。先为各必答维度读取一份直接资料，再深读；"
+        "可用网页数、证据条数和文档已处理都不能替代具体默认值、前提及限制。"
     )
     from open_deep_research.configuration import QUALITY_POLICY_VERSION
     if config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
@@ -236,7 +239,7 @@ def progress_summary(state, contract=None):
             for key, value in state.get("requirements", {}).items()
         },
         "tasks": {
-            key: {k: value.get(k) for k in ("status", "admission_status")}
+            key: {k: value.get(k) for k in ("status", "admission_status", "evaluation_status")}
             for key, value in state.get("tasks", {}).items()
         },
     }

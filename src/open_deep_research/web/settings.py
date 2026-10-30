@@ -27,3 +27,4 @@ class WebPipelineSettings:
     finite_corpus: bool = False
     # Frozen quality policy selects this behavior; old runs retain v5 extraction.
     evidence_fidelity: bool = False
+    include_navigation: bool = False

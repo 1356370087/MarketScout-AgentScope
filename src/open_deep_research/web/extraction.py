@@ -66,7 +66,7 @@ def _metadata_from_html(soup: BeautifulSoup) -> dict[str, str | None]:
     }
 
 
-def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity: bool = False) -> ExtractedDocument:
+def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity: bool = False, include_navigation: bool = False) -> ExtractedDocument:
     """Extract main HTML content, metadata, and Markdown."""
     content_type = raw.result.content_type or "text/html"
     text = _decode_body(raw.body, None)
@@ -91,6 +91,8 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         "embed",
     ):
         for node in soup.select(selector):
+            if include_navigation and selector in {"nav", "footer", "aside"}:
+                continue
             if selector == "aside" and content_root is not None and content_root in node.parents:
                 continue
             node.decompose()
@@ -98,7 +100,7 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         "[class*='advert'],[class*='recommend'],[id*='advert'],[id*='recommend']"
     ):
         node.decompose()
-    main = (
+    main = (soup.body if include_navigation else None) or (
         (soup.select_one("#docContent, #main-content") if evidence_fidelity else None)
         or
         soup.find("article")
@@ -107,7 +109,7 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         or soup.body
         or soup
     )
-    if evidence_fidelity:
+    if evidence_fidelity and not include_navigation:
         for node in main.select(".navheader, .navfooter, .breadcrumb, .breadcrumbs, [aria-label='Breadcrumb']"):
             node.decompose()
     markdown = markdownify(str(main), heading_style="ATX").strip()
@@ -209,7 +211,7 @@ def extract_document(
         "application/xhtml+xml",
         "",
     }:
-        return extract_html(candidate, raw, evidence_fidelity=settings.evidence_fidelity)
+        return extract_html(candidate, raw, evidence_fidelity=settings.evidence_fidelity, include_navigation=settings.include_navigation)
     raise ValueError(f"unsupported_content_type:{content_type}")
 
 
@@ -223,6 +225,11 @@ def text_document(
     """Keep Markdown, code samples and browser snapshot text verbatim."""
     canonical = canonicalize_url(final_url or candidate.canonical_url)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    flags = []
+    if extractor in {"deepseek", "firecrawl", "tavily_extract"} and len(re.sub(r"\s+", "", text)) < 600:
+        flags.append("thin_content")
+        if re.search(r"(?im)^\s*#{0,6}\s*(?:Browse\b|浏览|目录)", text.replace("\\", "")):
+            flags.append("navigation_only")
     return ExtractedDocument(
         document_id=stable_id("doc", f"{canonical}:{digest}"),
         candidate_id=candidate.candidate_id,
@@ -234,6 +241,7 @@ def text_document(
         markdown=text,
         extractor=extractor,
         content_hash=digest,
+        quality_flags=flags,
     )
 
 
@@ -243,7 +251,8 @@ def needs_extraction_fallback(document: ExtractedDocument, *, evidence: bool) ->
     return (
         "dynamic_render_recommended" in flags
         or "needs_external_extraction" in flags
-        or (evidence and "thin_content" in flags)
+        or (evidence and "thin_content" in flags and (
+            document.extractor not in {"deepseek", "firecrawl", "tavily_extract"} or "navigation_only" in flags))
     )
 
 

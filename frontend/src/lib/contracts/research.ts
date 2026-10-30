@@ -238,7 +238,7 @@ export interface ResearchEfficiency {
   admitted_count: number;
   counters: Record<string, number>;
   requirements: Record<string, { text: string; status: string; supplement_rounds: number; stagnant_rounds: number; gaps: Array<{ kind?: string; reason: string }> }>;
-  tasks: Record<string, { status?: string; admission_status?: string }>;
+  tasks: Record<string, { status?: string; admission_status?: string; evaluation_status?: string }>;
 }
 
 import type { SourceSelection } from "./documents";

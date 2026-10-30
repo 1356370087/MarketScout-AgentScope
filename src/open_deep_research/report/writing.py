@@ -46,6 +46,8 @@ Never invent
 URLs or IDs. Return only the requested report or structured output. Write in
 the user's requested language. Introductions and conclusions must preserve
 citations and qualifications and must not introduce new facts.
+Do not invent or estimate the number of sources/pages per product. Source
+statistics belong to the runtime reference catalogue, not narrative findings.
 Source headings and their governing conditions restrict the statements below
 them. Do not generalize a named strategy, version or deployment to all cases.
 Each named parameter or probe in a requirement needs its own behavior and
@@ -292,6 +294,19 @@ def answer_evidence_order(records, requirements, bindings, *, answer_text=""):
                 seen.add(identity)
             if len(pages) == 2:
                 break
+    # Keep one explicit default/prerequisite/visibility qualification per page
+    # before background. Selection hints do not certify requirement coverage.
+    qualifications: dict[str, list] = defaultdict(list)
+    for record in records:
+        text = str(record.get("supporting_excerpt", "")).replace("\\", "")
+        signals = re.findall(r"\b(?:default\w*|synchron\w*|asynchron\w*|immediate\w*|until|requires?|must)\b|默认|同步|异步|立即|必须|前提", text, re.I)
+        if signals:
+            qualifications[str(record.get("source_url") or record.get("source_uri") or "")].append((len(set(s.casefold() for s in signals)), record))
+    for candidates in qualifications.values():
+        record = max(candidates, key=lambda row: row[0])[1]
+        if record.get("evidence_id") not in seen:
+            selected.append(record)
+            seen.add(record.get("evidence_id"))
     for record in order_evidence(records, bindings):
         if record.get("evidence_id") not in seen:
             selected.append(record)

@@ -21,4 +21,13 @@ describe("research progress admission", () => {
     render(<ResearchEfficiencyPanel partial reason="supplement_round_limit" />);
     expect(screen.getByText("资料不足，尚无已准入结论")).toBeInTheDocument();
   });
+
+  it("shows skipped handoffs as delivered without claiming review passed", () => {
+    render(<ResearchEfficiencyPanel progress={{
+      document_count: 1, processed_chunks: 1, total_chunks: 2,
+      candidate_count: 2, admitted_count: 2, counters: {}, requirements: {},
+      tasks: { skipped: { status: "completed", admission_status: "accepted_with_caveats", evaluation_status: "skipped" } },
+    }} />);
+    expect(screen.getByText("研究员执行结束 1 项 · 交接通过 0 项 · 已交付未评审 1 项")).toBeInTheDocument();
+  });
 });

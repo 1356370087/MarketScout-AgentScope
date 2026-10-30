@@ -276,7 +276,8 @@ def compile_source_scope(coverage_contract: object) -> SourceScope:
         else getattr(coverage_contract, "source_selection", None)
     )
     return SourceScope(
-        official_only=contract_requires_official_sources(coverage_contract),
+        official_only=contract_requires_official_sources(coverage_contract) or bool(
+            plan and plan.get("status") in {"confirmed", "automatic"} and plan.get("intent") == "official_only"),
         explicit_url_only=explicit_url_only,
         allowed_urls=(
             frozenset(allowed_urls) if explicit_url_only else frozenset()
@@ -370,6 +371,12 @@ def _matches_profile_repository(
     return False
 
 
+def source_plan_entry_urls(entry):
+    """Ownership-verified links retained by the source planner or user decision."""
+    return list(dict.fromkeys(url for url in [entry.get("website", ""), *entry.get("documentation_urls", []),
+        *(item.get("url", "") for item in entry.get("related_websites", []) if item.get("relationship_quote"))] if url))
+
+
 def classify_evidence_source(
     record: dict[str, Any],
     coverage_contract: object,
@@ -451,7 +458,7 @@ def classify_evidence_source(
         for entry in plan.get("entries", []):
             if entry.get("status") not in {"verified", "confirmed"}:
                 continue
-            for root in [entry.get("website", ""), *entry.get("documentation_urls", [])]:
+            for root in source_plan_entry_urls(entry):
                 base = urlsplit(root)
                 prefix = base.path.rstrip("/")
                 if host == (base.hostname or "").casefold() and (not prefix or path == prefix.casefold() or path.startswith(prefix.casefold() + "/")):

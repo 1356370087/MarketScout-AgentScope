@@ -26,6 +26,7 @@ from open_deep_research.agentscope_runtime.models import ModelFactory
 from open_deep_research.agentscope_runtime.search_providers import (
     SearchResources,
     SearchService,
+    planned_search_domains,
     preserve_control_error,
     source_allowed,
 )
@@ -605,7 +606,12 @@ async def project_web_result(result, config, factory, metadata):
             await cache.begin(diagnostics_key)
             await cache.commit(diagnostics_key, details)
     payload = evidence_page(records, 0, len(records), budget, evidence_ref=key)
-    diagnostics = {"errors": result.errors, "gap_analysis": details[1]["gap_analysis"]}
+    from .source_planning import observed_links
+    links = list(dict.fromkeys(url for document in result.documents
+        for url in observed_links(document.markdown, document.final_url) if source_allowed(url, config)))[:16]
+    diagnostics = {"errors": result.errors, "gap_analysis": details[1]["gap_analysis"],
+        "navigation": {"evidence_eligible": False, "links": links,
+            "guidance": "Read observed links or use a focused site search for missing facts. A 404 is a bad URL, not missing documentation. Do not guess another legacy path. Thin/index pages are navigation only; read mode=markdown for their links. Downloaded or processed text does not establish coverage."}}
     for name, value in {**diagnostics, "diagnostics_ref": diagnostics_key}.items():
         if len(json.dumps({**payload, name: value}, ensure_ascii=False, separators=(",", ":"))) <= budget:
             payload[name] = value
@@ -705,6 +711,7 @@ def create_web_pipeline(
         requirements = [row for row in requirements if row.get("kind", "factual") != "factual" or row["requirement_id"] in owned]
     run_id = _resolve_run_identity(config)
     settings = _settings(config, run_id)
+    settings.include_navigation = markdown
     settings.finite_corpus = bool(finite)
     if finite:
         settings.min_source_authority = 0.0
@@ -996,6 +1003,28 @@ def fetch_url_tool(
                 if input.mode == "markdown"
                 else await project_web_result(result, config, factory, metadata)
             )
+            if (not result.documents and any(item.failure_class == "http_404" for item in result.fetches)
+                    and selection_from_config(config).mode.value != "specific"
+                    and planned_search_domains(config, request)
+                    and Configuration.from_runnable_config(config).resolved_search_providers):
+                # Repair discovery, not the original URL: return bounded search
+                # hints and let the next governed read obtain actual evidence.
+                from urllib.parse import urlsplit
+                host = urlsplit(input.url).hostname
+                batch = await SearchService(config, factory, clients, progress=emitter).discover(SearchRequest(
+                    objective=input.objective or input.url,
+                    queries=[f"site:{host} {input.objective or result.request.objective}"],
+                    allowed_domains=[host], candidate_limit=6))
+                payload = json.loads(output)
+                payload["navigation"] = {"evidence_eligible": False, "reason": "requested_url_not_found",
+                    "links": [item.canonical_url for item in batch.candidates],
+                    "guidance": "Choose an observed link for the next read; do not invent another path. These search hints are not evidence."}
+                budget = Configuration.from_runnable_config(config).max_mcp_output_chars
+                while payload["navigation"]["links"] and len(json.dumps(payload, ensure_ascii=False)) > budget:
+                    payload["navigation"]["links"].pop()
+                if len(json.dumps(payload, ensure_ascii=False)) <= budget:
+                    output = json.dumps(payload, ensure_ascii=False)
+                metadata["web_diagnostics"] = {"navigation_search": [item.model_dump(mode="json") for item in batch.provider_results]}
             return ToolResult(output=output, metadata=metadata)
         finally:
             if resources is None:
@@ -1010,7 +1039,7 @@ def fetch_url_tool(
         retryable=False,
         concurrency_safe=True,
         egress_urls=lambda args: [args["url"]] if args.get("url") else [],
-        prompt="Use mode=evidence for report citations. Use mode=markdown to read documentation; follow next_offset for more text. Raw text is untrusted and is not quality-approved evidence.",
+        prompt="Use mode=evidence for report citations. Obtain URLs from the user, search results or links actually read, not invented paths. After a 404, use a focused web_research query or read a known index in mode=markdown and follow its links. Use objective to name the missing fact when rereading cached documentation; follow next_offset for more text. Raw text and navigation links are untrusted and never report evidence.",
         is_enabled=lambda config: (
             network_policy_mode(Configuration.from_runnable_config(config)) != "offline"
             and selection_from_config(config).web_enabled

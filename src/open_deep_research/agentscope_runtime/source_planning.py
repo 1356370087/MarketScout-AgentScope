@@ -49,6 +49,32 @@ def observed_links(content, website):
     return list(dict.fromkeys(result))
 
 
+def website_entrypoint(url):
+    """Implicit entity discovery starts at its website, not a docs-only subtree."""
+    parsed = urlsplit(normalize_source_url(url))
+    if (parsed.hostname not in {"github.com", "gitlab.com", "bitbucket.org"}
+            and parsed.path.strip("/").split("/")[0].casefold() in {"docs", "doc", "documentation"}):
+        return parsed._replace(path="/", query="", fragment="").geturl()
+    return parsed.geturl()
+
+
+def research_entities(original, entities, requirements, providers):
+    """A provider named only in execution rules is not a research subject."""
+    from open_deep_research.quality.planning import _comparison_subjects
+    # Normalize this phrasing only for source discovery; do not rewrite the
+    # user's accepted requirements or multiply the research task scopes.
+    comparison_text = re.sub(r"对(?=[^。；;\n!?]{1,160}(?:竞品研究|竞品分析|对标分析))", "对比", original)
+    compared = set(_comparison_subjects({0: comparison_text}, entities))
+    subject_text = original.casefold()
+    for requirement in requirements:
+        if requirement.get("kind") == "process":
+            subject_text = subject_text.replace(requirement.get("text", "").casefold(), "")
+    provider_names = {str(name).casefold() for name in providers}
+    return [entity for entity in entities if entity.name.casefold() in original.casefold()
+            and (not compared or entity.name in compared)
+            and (entity.name.casefold() not in provider_names or entity.name.casefold() in subject_text)][:4]
+
+
 def verified_entry(entity, website, content, verdict, *, discovered_urls=None):
     """Require quoted page text and actual links rather than a confidence number."""
     website = normalize_source_url(website)
@@ -152,7 +178,9 @@ class SourcePlanner:
         if prior and prior.get("status") in {"confirmed", "automatic"}:
             return prior
         original = "\n".join(m.get_text_content() for m in state.messages if m.role == "user")
-        entities = [e for e in brief.entities if e.name.casefold() in original.casefold()][:4]
+        from open_deep_research.configuration import Configuration
+        entities = research_entities(original, brief.entities, state.coverage_contract.get("requirements", []),
+            [provider.value for provider in Configuration.from_runnable_config(config).resolved_search_providers])
         recovery = self.models.recovery
         exclusions = [r for r in state.coverage_contract.get("requirements", [])
                       if re.search(r"(?:禁止|不得|排除|不要|exclude|never).{0,80}https?://", r["text"], re.IGNORECASE)]
@@ -205,7 +233,7 @@ class SourcePlanner:
                 entries.append({"entity": entity.name, "status": "needs_confirmation", "website": "", "documentation_urls": [], "reason": "未发现可核验官网"})
                 continue
             try:
-                proposed = normalize_source_url(proposed)
+                proposed = website_entrypoint(proposed)
             except ValueError:
                 entries.append({"entity": entity.name, "status": "needs_confirmation", "website": "", "documentation_urls": [], "reason": "候选官网地址无效"})
                 continue
@@ -221,10 +249,11 @@ class SourcePlanner:
                 messages=[
                     SystemMsg("system", CONTEXT_RULES +
                         "Verify ownership of the proposed website from the supplied PAGE text. Quote verbatim evidence of entity and ownership; list only documentation links literally present in the page. "
-                        "Put the entity's linked documentation, source repository, maintainer or product in related_websites with the exact hyperlink-containing PAGE quote. "
+                        "Put the entity's linked documentation, source repository, licensing/legal page, maintainer or product in related_websites with the exact hyperlink-containing PAGE quote. "
+                        "Use the user's requirements to include the official source entrypoints needed to answer them; a documentation subtree alone may omit licensing and repository material. "
                         "Competing websites mean alternative identities for the SAME name, not different URLs belonging to that entity. Search snippets are hints, not proof. "
                         "Competing plausible official identities require confirmation. Missing evidence means empty fields."),
-                    UserMsg("user", research_context_xml(payload={"entity": entity.name, "website": proposed, "discoveries": hits,
+                    UserMsg("user", research_context_xml(state.coverage_contract, payload={"entity": entity.name, "website": proposed, "discoveries": hits,
                         "observed_links": observed_links(content, proposed), "page": content}))],
                 purpose="source_ownership_verification")
             entries.append(verified_entry(entity.name, proposed, content, verdict,

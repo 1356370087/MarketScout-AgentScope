@@ -47,6 +47,14 @@ def test_parse_sources_empty_for_no_urls():
     assert parse_sources_from_text("just prose, no links here") == []
 
 
+def test_entity_source_counts_use_unique_references_without_changing_product_metrics():
+    from open_deep_research.report.references import normalize_source_counts
+    refs = [SourceRef(url="https://acme.example/a"), SourceRef(url="https://acme.example/b"), SourceRef(url="https://acme.example/a")]
+    text = "本报告依据 Acme 8个官方页面。Acme 版本 25.8，样本 8 行。"
+    corrected = normalize_source_counts(text, refs, {"entries": [{"entity": "Acme", "website": "https://acme.example"}]})
+    assert corrected == "本报告依据 Acme 2个官方页面。Acme 版本 25.8，样本 8 行。"
+
+
 def test_dedupe_sources_normalizes_mixed_input():
     mixed = [
         SourceRef(title="One", url="https://a.io"),

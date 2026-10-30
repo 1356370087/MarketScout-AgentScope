@@ -1057,7 +1057,8 @@ class Supervisor:
                         "admitted": {row["evidence_id"]: row for row in outcome.evidence_registry},
                         "assessments": {assignment.task_id: assessment},
                         "tasks": {assignment.task_id: {**state.get("tasks", {}).get(assignment.task_id, {}),
-                            "status": "completed", "admission_status": assessment.get("admission_status", "pending")}},
+                            "status": "completed", "admission_status": assessment.get("admission_status", "pending"),
+                            "evaluation_status": assessment.get("evaluation_status")}},
                     })
                 from open_deep_research.agentscope_runtime.public_findings import (
                     publish_handoff,

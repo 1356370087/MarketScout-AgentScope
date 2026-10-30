@@ -42,6 +42,7 @@ def build_engine_kwargs(settings: ASRuntimeSettings) -> dict[str, Any]:
     if settings.is_demo:
         return {}
     return {
+        "pool_pre_ping": True,
         "connect_args": {
             "server_settings": {"search_path": f"{settings.database_schema},public"},
         },

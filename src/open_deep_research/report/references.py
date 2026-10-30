@@ -170,6 +170,27 @@ def render_references(sources: Sequence, style: ReferenceStyle) -> str:
     )
 
 
+def normalize_source_counts(markdown: str, sources: Sequence, source_plan: dict) -> str:
+    """Replace entity-attributed page counts using the actual reference catalogue.
+
+    Only explicit source-count phrases are changed; product metrics, versions
+    and source URLs are not interpreted as counts. The caller preserves code.
+    """
+    from open_deep_research.evidence import source_plan_entry_urls
+    refs = dedupe_sources(sources)
+    for entry in source_plan.get("entries", []):
+        name = entry.get("entity")
+        if not name:
+            continue
+        roots = [urlparse(url) for url in source_plan_entry_urls(entry)]
+        count = sum(any(urlparse(ref.url).hostname == root.hostname and (
+            not root.path.rstrip("/") or urlparse(ref.url).path.rstrip("/") == root.path.rstrip("/")
+            or urlparse(ref.url).path.startswith(root.path.rstrip("/") + "/")) for root in roots) for ref in refs)
+        pattern = re.compile(r"(" + re.escape(name) + r"\s*)(\d+)(\s*(?:个|份|篇)\s*(?:不同的?|官方)?(?:页面|文档|来源))", re.I)
+        markdown = pattern.sub(lambda match: match[1] + str(count) + match[3], markdown)
+    return markdown
+
+
 def _to_bibtex(ref: SourceRef, idx: int) -> str:
     title = ref.title or "Untitled"
     return (

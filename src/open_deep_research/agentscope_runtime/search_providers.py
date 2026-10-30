@@ -153,6 +153,23 @@ def domain_matches(host: str, domains: list[str] | tuple[str, ...]) -> bool:
     )
 
 
+def planned_search_domains(config, request):
+    """Push confirmed ownership into discovery; path/deny checks still run afterwards."""
+    from open_deep_research.evidence import source_plan_entry_urls
+    plan = (config.get("metadata", {}).get("coverage_contract") or {}).get("source_plan") or {}
+    if plan.get("status") not in {"confirmed", "automatic"} or plan.get("intent") != "official_only":
+        return []
+    entries = [e for e in plan.get("entries", []) if e.get("status") in {"confirmed", "verified"}]
+    query = " ".join(request.queries).casefold()
+    # An explicitly named host or product can narrow a comparison task to one
+    # entity. Otherwise retain all confirmed entities rather than guessing.
+    named = [e for e in entries if (e.get("entity") and e["entity"].casefold() in query)
+             or any(label in query for label in (urlsplit(e.get("website", "")).hostname or "").split(".")
+                    if len(label) >= 4 and label not in {"docs", "www", "apache", "github"})]
+    return list(dict.fromkeys(host for e in (named or entries) for url in source_plan_entry_urls(e)
+                             if (host := urlsplit(url).hostname)))
+
+
 def source_allowed(
     url: str, config: dict, request: SearchRequest | None = None
 ) -> bool:
@@ -602,6 +619,10 @@ class SearchService:
             )
         errors = []
         modern = self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 18
+        if modern and selection.mode is not SourceMode.SPECIFIC and not request.allowed_domains:
+            domains = planned_search_domains(self.config, request)
+            if domains:
+                request = request.model_copy(update={"allowed_domains": domains})
         if selection.mode is SourceMode.SPECIFIC and selection.domains and modern:
             request = request.model_copy(update={"allowed_domains": list(selection.domains)})
         elif selection.mode is SourceMode.SPECIFIC and selection.domains:
@@ -624,6 +645,7 @@ class SearchService:
         }
 
         async def run(provider, index, query, provider_query=None):
+            nonlocal deepseek_retries
             async with semaphore:
                 attempts = raw_count = parsed_count = 0
                 filter_reasons = {}
@@ -681,15 +703,20 @@ class SearchService:
                         return items
                     items = project(rows)
                     raw_count = len(rows)
-                    if modern and provider == "bing" and rows and not items:
-                        retry_query = bing_query(query, request.allowed_domains, simplified=True)
+                    if modern and not items and ((provider == "bing" and rows) or (provider == "deepseek" and request.allowed_domains and deepseek_retries > 0)):
+                        retry_query = bing_query(query, request.allowed_domains, simplified=True) if provider == "bing" else " ".join([
+                            *re.sub(r"-?site:\S+|after:\S+", "", effective_query).split()[:6],
+                            *re.findall(r"-?site:\S+|after:\S+", effective_query),
+                        ])
                         if retry_query != effective_query:
+                            if provider == "deepseek":
+                                deepseek_retries -= 1
                             if egress_authorizer.get() is not None and await authorize_url(PROVIDER_URLS[provider], "search.provider", consume=True) != "allow":
                                 raise SearchProviderError("provider_egress_not_allowed")
                             attempts += 1
                             in_flight = True
                             attempted_queries.append(retry_query)
-                            rows, synthesis, *details = await self._bing(retry_query, request)
+                            rows, synthesis, *details = await strategies[provider](retry_query, request)
                             info = details[0] if details else {}
                             attempts += info.get("redirect_count", 0)
                             in_flight = False
@@ -742,6 +769,7 @@ class SearchService:
                 errors.append(f"deepseek_domain_query_limit_exceeded:{len(planned)}:{MAX_SPECIFIC_DOMAIN_QUERIES}")
                 planned = planned[:MAX_SPECIFIC_DOMAIN_QUERIES]
             jobs.extend(planned)
+        deepseek_retries = max(0, MAX_SPECIFIC_DOMAIN_QUERIES - sum(job[0] == "deepseek" for job in jobs))
         tasks = [asyncio.create_task(run(*job)) for job in jobs]
         try:
             outcomes = await asyncio.gather(*tasks)

@@ -46,6 +46,7 @@ from .profiles import (
     get_profile,
 )
 from .references import (
+    normalize_source_counts,
     numbered_source_urls,
     parse_sources_from_text,
     render_references,
@@ -764,6 +765,8 @@ async def _build_report_legacy(state: dict, config: RunnableConfig) -> dict:
         markdown = _remap_numbered_citations(markdown, result.sources)
         # Rewrite equivalent targets, then build the catalogue from the same ordering.
         markdown = _rewrite_links_to_allowlist(markdown, {s.url for s in result.sources})
+        markdown = _transform_markdown_prose(markdown, lambda text: normalize_source_counts(
+            text, result.sources, (state.get("coverage_contract") or {}).get("source_plan") or {}))
         markdown = replace_sources_section(markdown, render_references(result.sources, ref_style))
     markdown = _transform_markdown_prose(markdown, sanitize_report_markdown)
 
