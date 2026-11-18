@@ -29,6 +29,11 @@ def blocks(text: str) -> Iterator[tuple[int, int, str]]:
                 fence = marker[1][0]
             elif marker[1][0] == fence:
                 fence = None
+        if fence is None and line.startswith("#") and offset > start:
+            previous = text[start:offset].strip()
+            if previous and (_PRICE.search(line) or _PRICE.search(previous.splitlines()[0])):
+                yield start, offset, previous
+                start = offset
         if not line.strip() and fence is None:
             if text[start:offset].strip():
                 yield start, offset, text[start:offset].strip()
@@ -57,11 +62,32 @@ def is_code(text: str) -> bool:
     return bool(first and last and first[1][0] == last[1][0] and any(line.strip() for line in lines[1:-1]))
 
 
+_PRICE = re.compile(r"(?:\b(?:USD|EUR|CNY|GBP|JPY|CAD|AUD|RMB)\s*|[$€£¥￥])\d|\d[\d.,]*\s*(?:元|美元|欧元|英镑|USD|CNY)\b", re.I)
+_PERIOD = re.compile(r"(?:/\s*(?:mo(?:nth)?|yr|year|月|年)|\b(?:monthly|annual(?:ly)?|per (?:month|year))\b|[月年]付)", re.I)
+
+
+def _plan_section(value: str) -> bool:
+    lines = value.splitlines()
+    if len(lines) < 2 or not re.match(r"^#{1,6}\s+[*_]{0,2}\w", lines[0]):
+        return False
+    if not _PRICE.search(lines[0]) or not _PERIOD.search(lines[0]):
+        return False
+    if any(line.lstrip().startswith("#") for line in lines[1:]):
+        return False
+    body = re.sub(r"\[[^]]*]\([^)]*\)", "", "\n".join(lines[1:]))
+    return bool(re.search(r"\w.{5,}", body))
+
+
 def valid_passage(text: str) -> bool:
     """Validate a whole factual passage, not its lexical similarity to a claim."""
     value = text.strip()
     if not 20 <= len(value) <= MAX_PASSAGE_CHARS or inspect_untrusted_content(value):
         return False
+    headings = re.findall(r"^#{1,6} [^\n]+", value, re.M)
+    if len(headings) > 1 and any(_PRICE.search(heading) for heading in headings):
+        return False
+    if _plan_section(value):
+        return True
     # A governing heading is context, not a fact by itself. It may accompany
     # a complete sourced paragraph, table or code example.
     value = re.sub(r"^#{1,6}\s+[^\n]+\n?", "", value, flags=re.MULTILINE).strip()
@@ -78,7 +104,12 @@ def valid_passage(text: str) -> bool:
 def passages(text: str) -> list[str]:
     """Keep complete blocks; split long prose at sentence boundaries only."""
     result = []
-    for _, _, block in blocks(text):
+    source_blocks = list(blocks(text))
+    for index, (start_offset, _, block) in enumerate(source_blocks):
+        if block.startswith("#") and "\n" not in block and index + 1 < len(source_blocks):
+            section = text[start_offset:source_blocks[index + 1][1]].strip()
+            if _plan_section(section) and valid_passage(section):
+                result.append(section)
         if valid_passage(block):
             result.append(block)
             continue
@@ -125,7 +156,7 @@ def source_excerpt(text: str, quote: str, *, span: tuple[int, int] | None = None
         # opening condition. Do not detach it from a strategy/version heading.
         preceding = [heading for heading in headings if heading.start() < start
                      and not _CALLOUT_HEADING.fullmatch(heading[0])]
-        if preceding:
+        if preceding and not _plan_section(value):
             context = text[preceding[-1].start():end].strip()
             if valid_passage(context):
                 value = context

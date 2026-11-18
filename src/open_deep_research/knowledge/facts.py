@@ -256,7 +256,7 @@ async def publish_assertion(
         row = await connection.fetchrow(
             """UPDATE knowledge_fact_assertions
                   SET status='published', published_at=now(),
-                      reviewed_by=$2::uuid, updated_at=now(),
+                      reviewed_by=$2::uuid, updated_at=$2::text, update_time=now(),
                       supersedes_id=COALESCE($3::uuid, supersedes_id)
                 WHERE id=$1::uuid AND status IN ('draft','pending_review')
              RETURNING id, fact_key_id""",
@@ -273,6 +273,9 @@ async def publish_assertion(
             "fact_publish",
             assertion_id,
         )
+        from open_deep_research.intelligence.publications import record_asset_publication
+        await record_asset_publication(connection, assertion["knowledge_base_id"], "fact_published", assertion_id,
+            assertion_id, assertion["raw_statement"], actor_id, previous_id=supersedes_id)
     return {
         "id": str(row["id"]),
         "status": "published",
@@ -305,19 +308,23 @@ async def reject_assertion(
 async def withdraw_assertion(actor_id: str, assertion_id: str) -> dict[str, Any] | None:
     """Withdraw one published assertion (creates no new record — just flips status)."""
     actor_id = document_owner_id(actor_id)
-    await editorial.target(
+    assertion = await editorial.target(
         actor_id, "knowledge_fact_assertions", assertion_id, authz.CAP_REVIEW
     )
     pool = await get_document_pool()
-    async with pool.acquire() as connection:
+    async with pool.acquire() as connection, connection.transaction():
         row = await connection.fetchrow(
             """UPDATE knowledge_fact_assertions
-                  SET status='withdrawn', updated_at=now(), reviewed_by=$2::uuid
+                  SET status='withdrawn', updated_at=$2::text, update_time=now(), reviewed_by=$2::uuid
                 WHERE id=$1::uuid AND status='published'
              RETURNING id""",
             assertion_id,
             actor_id,
         )
+        if row:
+            from open_deep_research.intelligence.publications import record_asset_publication
+            await record_asset_publication(connection, assertion["knowledge_base_id"], "fact_withdrawn", assertion_id,
+                assertion_id, assertion["raw_statement"], actor_id)
     return {"id": str(row["id"]), "status": "withdrawn"} if row else None
 
 

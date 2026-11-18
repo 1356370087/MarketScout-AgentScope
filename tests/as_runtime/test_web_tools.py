@@ -347,7 +347,8 @@ async def test_fetch_url_rejects_out_of_boundary_url(monkeypatch, no_models):
         _ctx(cfg),
     )
     assert json.loads(inside.output)["request"]
-    with pytest.raises(ValueError, match="specific-source boundary"):
+    from open_deep_research.tools.governance import ToolOutcomeError
+    with pytest.raises(ToolOutcomeError, match="source_scope_denied"):
         await tool.call(
             tool.input_schema.model_validate(
                 {"url": "https://outside.example/x", "objective": "o"}
@@ -694,13 +695,71 @@ async def test_native_web_tools_pair_and_enabled_gates():
 
     cfg = _config()
     tools = native_web_tools(lambda: cfg, _StubFactory())
-    assert [tool.name for tool in tools] == ["web_research", "fetch_url"]
-    for tool in tools:
+    assert [tool.name for tool in tools] == ["web_research", "fetch_url", "source_discovery"]
+    for tool in tools[:2]:
         assert tool.origin.value == "search"
         assert tool.is_enabled(cfg) is True
+    assert tools[2].is_enabled(cfg) is False
+    cfg["metadata"]["task_id"] = "source-planning"
+    assert tools[2].is_enabled(cfg) is True
     legacy = _config(web_pipeline_mode="legacy")
     assert tools[0].is_enabled(legacy) is False
     # fetch_url 声明出网 URL。
     assert tools[1].egress_urls({"url": "https://egress.example/x"}) == [
         "https://egress.example/x"
     ]
+
+async def test_evidence_extraction_waits_within_the_model_deadline(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from open_deep_research.web.pipeline import chunk_document
+    from open_deep_research.web.settings import WebPipelineSettings
+
+    text = "The product supports document retrieval according to its official documentation."
+    document = _document("https://official.example/features", text)
+    chunks = chunk_document(document, WebPipelineSettings())
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def model_call(prompt, schema):
+        # The paid model has a longer, authoritative timeout than 60 seconds.
+        async with asyncio.timeout(120):
+            entered.set()
+            await release.wait()
+            return SimpleNamespace(content={"items": [{"chunk_id": chunks[0].chunk_id,
+                "claim": text, "supporting_excerpt": text, "confidence": .9}]})
+
+    extractor = NativeEvidenceExtractor(_StubFactory(), structured=model_call)
+    loop = asyncio.get_running_loop()
+    original_time = loop.time
+    elapsed = 0
+    with monkeypatch.context() as patch:
+        patch.setattr(loop, "time", lambda: original_time() + elapsed)
+        task = asyncio.create_task(extractor("Describe retrieval", {document.document_id: document}, chunks))
+        try:
+            await entered.wait()
+            elapsed = 61
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not task.done(), "The evidence layer must not cancel the model before its own deadline"
+            release.set()
+            records = await task
+            assert len(records) == 1 and records[0].supporting_excerpt == text
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_evidence_extraction_preserves_unknown_model_outcomes():
+    from open_deep_research.agentscope_runtime.gateway import GatewayCallError
+    from open_deep_research.agentscope_runtime.recovery_store import UnknownOperation
+    from open_deep_research.web.pipeline import chunk_document
+    from open_deep_research.web.settings import WebPipelineSettings
+
+    document = _document("https://official.example/features", "The product supports document retrieval.")
+    async def unknown(prompt, schema):
+        raise GatewayCallError("outcome_unknown", uncertain=True)
+    extractor = NativeEvidenceExtractor(_StubFactory(), structured=unknown)
+    with pytest.raises(UnknownOperation):
+        await extractor("Describe retrieval", {document.document_id: document}, chunk_document(document, WebPipelineSettings()))

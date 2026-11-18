@@ -46,6 +46,40 @@ def test_default_web_pipeline_enforces_traceable_evidence() -> None:
     assert Configuration().web_pipeline_mode == "enforced"
 
 
+def test_visible_subscription_plan_retains_official_monthly_and_annual_price_metadata() -> None:
+    from open_deep_research.web.extraction import extract_html
+    from open_deep_research.web.passages import passages
+
+    url = "https://vendor.example/pricing"
+
+    def offer(price, unit, *, name="Starter", target=url):
+        return {
+            "@type": "Offer", "name": name, "url": target, "price": price, "priceCurrency": "CNY",
+            "priceSpecification": {
+                "@type": "UnitPriceSpecification", "price": price, "priceCurrency": "CNY",
+                "unitCode": unit, "referenceQuantity": {"value": 1, "unitCode": unit},
+            },
+        }
+
+    payload = {"@context": "https://schema.org", "@type": "SoftwareApplication", "offers": [
+        offer("99", "MON"), offer("990", "ANN"), offer("700", "ANN", name="Unlisted"),
+        offer("500", "ANN", target="https://elsewhere.example/pricing"),
+        offer("300", "P1D"),
+    ]}
+    source = candidate(url)
+    raw = RawFetch(
+        result=FetchResult(candidate_id=source.candidate_id, requested_url=url, final_url=url,
+                           content_type="text/html", success=True),
+        body=(f'<script type="application/ld+json">{json.dumps(payload)}</script>'
+              '<main><h2>Starter</h2><h3>¥99/month</h3></main>').encode(),
+    )
+    result = extract_html(source, raw, evidence_fidelity=True)
+    offers = next(block for block in passages(result.markdown) if "| Plan | Price |" in block)
+    assert "| Starter | 99 | CNY | month (MON) |" in offers
+    assert "| Starter | 990 | CNY | year (ANN) |" in offers
+    assert "Unlisted" not in offers and "500" not in offers and "300" not in offers
+
+
 def candidate(url: str, rank: int = 1, snippet: str = "research evidence") -> CandidateSource:
     canonical = canonicalize_url(url)
     return CandidateSource(

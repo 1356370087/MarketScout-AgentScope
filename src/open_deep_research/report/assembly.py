@@ -126,6 +126,8 @@ class ReportContext:
         }
         if modern:
             payload["coverage_contract"] = self.state.get("coverage_contract", {})
+        if payload["_run_schema_version"] >= 29:
+            payload.update({key: self.state[key] for key in ("execution_receipts", "source_run_receipts") if self.state.get(key)})
         if records is None:
             records = (
                 (self.evidence_records if self.config.get("metadata", {}).get("run_config_schema_version", 18) >= 20
@@ -147,7 +149,8 @@ class ReportContext:
             payload["required_requirement_ids"] = [rid for rid, ids in payload["requirement_to_evidence"].items() if ids]
         return writing_messages(
             template, payload, records,
-            guidance=get_skill_report_context(self.configurable.skills),
+            guidance=get_skill_report_context(self.configurable.skills,
+                snapshot=self.config.get("metadata", {}).get("research_skill_snapshot")),
         )
 
     @classmethod

@@ -99,10 +99,10 @@ async def main():
             run_key = created.json()["key"]
             container = await asyncio.to_thread(
                 engine.containers.run,
-                "insight_forge-sandbox-gateway",
+                "marketscout-sandbox-gateway",
                 detach=True,
                 name=run_id,
-                network="insight_forge_default",
+                network="marketscout_default",
                 ports={"8081/tcp": ("127.0.0.1", None)},
                 environment={
                     "SANDBOX_ROOT_SIGNING_KEY": root,
@@ -118,7 +118,7 @@ async def main():
                 volumes={
                     str(Path("src").resolve()): {"bind": "/app/src", "mode": "ro"}
                 },
-                labels={"insightforge.acceptance": "T020-T022"},
+                labels={"marketscout.acceptance": "T020-T022"},
                 mem_limit="1g",
             )
             await asyncio.to_thread(container.reload)

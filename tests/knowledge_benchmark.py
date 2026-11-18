@@ -200,7 +200,7 @@ async def main() -> None:
     settings = get_document_settings()
     if not settings.configured:
         raise SystemExit(1)
-    owner = str(uuid.uuid5(uuid.NAMESPACE_URL, f"insightforge:bench:{OWNER_SENTINEL}"))
+    owner = str(uuid.uuid5(uuid.NAMESPACE_URL, f"marketscout:bench:{OWNER_SENTINEL}"))
     owner = document_owner_id(owner)
     pool = await get_document_pool()
     await seed(pool, owner, args.docs, args.segments_per_doc)

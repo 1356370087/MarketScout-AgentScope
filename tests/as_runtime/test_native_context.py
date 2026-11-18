@@ -233,8 +233,15 @@ async def test_cancellation_is_not_summary_failure():
 
 @pytest.mark.parametrize("window", ["model_attempt_committed", "operation_committed"])
 @pytest.mark.parametrize("invalid_summary", [False, True])
-async def test_resume_after_summary_commit_does_not_repeat_provider_call(store, tmp_path, window, invalid_summary):
+async def test_resume_after_summary_commit_does_not_repeat_provider_call(store, tmp_path, window, invalid_summary, monkeypatch):
+    from datetime import datetime, timedelta
     import jsonschema
+    offset = [0]
+    class ReplayClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return super().now(tz) + timedelta(seconds=offset[0])
+    monkeypatch.setattr("agentscope.agent._agent.datetime", ReplayClock)
     class Crash(BaseException):
         pass
 
@@ -253,6 +260,7 @@ async def test_resume_after_summary_commit_does_not_repeat_provider_call(store, 
         await agent.compress_context()
     assert agent.state == original
     await store.release(lease)
+    offset[0] = 20
     lease = await store.acquire(state.run_id, "owner")
     resumed_session = RecoverySession(store, lease, state)
     resumed = build(model, resumed_session, RunContextOffloader(tmp_path, resumed_session))
@@ -276,3 +284,20 @@ async def test_repeated_native_summaries_preserve_assignment_projection():
     assert "COV-01" in second_input and "https://example.org" in second_input
     assert "Task Overview" in str(first)
     assert agent.state.middle_context["research_context_authority"]["assignment"].startswith("COV-01")
+
+
+async def test_completed_skill_receipt_survives_sdk_compaction():
+    from open_deep_research.agentscope_runtime.efficiency import fingerprint
+    from open_deep_research.skills.runtime import run_skills
+    cfg = {"configurable": {"research_efficiency_mode": "bounded"}, "metadata": {"run_config_schema_version": 26}}
+    spec = run_skills(cfg)["comparative_research"]
+    method = {"instructions": spec["researcher_context"], "version": fingerprint(spec)}
+    model = SummaryModel()
+    agent = build(model, config=cfg)
+    agent.state.context = history(3000)
+    agent.state.middle_context["research_context_authority"] = {"loaded_skills": {"comparative_research": method}}
+    await agent.compress_context()
+    assert model.summary_calls
+    assert agent.state.middle_context["research_context_authority"]["loaded_skills"]["comparative_research"] == method
+    prompt = await agent._get_system_prompt()
+    assert method["version"] in prompt and method["instructions"] in prompt

@@ -1,4 +1,4 @@
-"""Trusted Docker controller; the only InsightForge process owning Docker Socket."""
+"""Trusted Docker controller; the only MarketScout process owning Docker Socket."""
 
 from __future__ import annotations
 
@@ -297,14 +297,14 @@ class DockerControllerRuntime:
     def _labels(self, request: ControllerRunRequest) -> dict[str, str]:
         payload = request.payload
         return {
-            "com.insightforge.sandbox.deployment_id": self.bundle.deployment_id,
-            "com.insightforge.sandbox.run_id": payload.run_id,
-            "com.insightforge.sandbox.task_id": payload.task_id,
-            "com.insightforge.sandbox.fence_token": str(payload.fence_token),
-            "com.insightforge.sandbox.profile_id": payload.profile_id,
-            "com.insightforge.sandbox.policy_digest": payload.policy_digest,
-            "com.insightforge.sandbox.resource_kind": "worker",
-            "com.insightforge.sandbox.created_at": str(time.time()),
+            "com.marketscout.sandbox.deployment_id": self.bundle.deployment_id,
+            "com.marketscout.sandbox.run_id": payload.run_id,
+            "com.marketscout.sandbox.task_id": payload.task_id,
+            "com.marketscout.sandbox.fence_token": str(payload.fence_token),
+            "com.marketscout.sandbox.profile_id": payload.profile_id,
+            "com.marketscout.sandbox.policy_digest": payload.policy_digest,
+            "com.marketscout.sandbox.resource_kind": "worker",
+            "com.marketscout.sandbox.created_at": str(time.time()),
         }
 
     def _authorize_service(
@@ -334,9 +334,9 @@ class DockerControllerRuntime:
     def _owns_resource_labels(self, labels: dict[str, str], kind: str) -> bool:
         """Recheck deployment ownership after Docker returns filtered resources."""
         return (
-            labels.get("com.insightforge.sandbox.deployment_id")
+            labels.get("com.marketscout.sandbox.deployment_id")
             == self.bundle.deployment_id
-            and labels.get("com.insightforge.sandbox.resource_kind") == kind
+            and labels.get("com.marketscout.sandbox.resource_kind") == kind
         )
 
     def _owned_worker(self, container_id: str) -> Any:
@@ -344,17 +344,17 @@ class DockerControllerRuntime:
         container.reload()
         labels = self._container_labels(container)
         if (
-            labels.get("com.insightforge.sandbox.deployment_id")
+            labels.get("com.marketscout.sandbox.deployment_id")
             != self.bundle.deployment_id
-            or labels.get("com.insightforge.sandbox.resource_kind") != "worker"
+            or labels.get("com.marketscout.sandbox.resource_kind") != "worker"
         ):
             raise ValueError("sandbox_container_not_owned")
         return container
 
     def _profile_for_container(self, container: Any) -> SandboxProfile:
         labels = self._container_labels(container)
-        profile_id = labels.get("com.insightforge.sandbox.profile_id", "")
-        expected = labels.get("com.insightforge.sandbox.policy_digest")
+        profile_id = labels.get("com.marketscout.sandbox.profile_id", "")
+        expected = labels.get("com.marketscout.sandbox.policy_digest")
         bundle = self._bundle_for_digest(expected) if expected else self.bundle
         profile = bundle.profiles.get(profile_id)
         if profile is None:
@@ -364,8 +364,8 @@ class DockerControllerRuntime:
     def _related_resources(self, labels: dict[str, str]) -> tuple[Any | None, Any | None]:
         network = None
         volume = None
-        network_name = labels.get("com.insightforge.sandbox.network_name")
-        volume_name = labels.get("com.insightforge.sandbox.input_volume_name")
+        network_name = labels.get("com.marketscout.sandbox.network_name")
+        volume_name = labels.get("com.marketscout.sandbox.input_volume_name")
         if network_name:
             with suppress(Exception):
                 network = self.client.networks.get(network_name)
@@ -427,10 +427,10 @@ class DockerControllerRuntime:
     def _existing_task_containers(self, request: ControllerRunRequest) -> list[Any]:
         payload = request.payload
         labels = [
-            f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-            "com.insightforge.sandbox.resource_kind=worker",
-            f"com.insightforge.sandbox.run_id={payload.run_id}",
-            f"com.insightforge.sandbox.task_id={payload.task_id}",
+            f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+            "com.marketscout.sandbox.resource_kind=worker",
+            f"com.marketscout.sandbox.run_id={payload.run_id}",
+            f"com.marketscout.sandbox.task_id={payload.task_id}",
         ]
         return list(
             self.client.containers.list(all=True, filters={"label": labels})
@@ -474,8 +474,8 @@ class DockerControllerRuntime:
         required = task_memory * maximum_tasks + service_reserve
         filters = {
             "label": [
-                f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                "com.insightforge.sandbox.resource_kind=worker",
+                f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                "com.marketscout.sandbox.resource_kind=worker",
             ],
             "status": ["created", "running", "restarting", "paused"],
         }
@@ -495,7 +495,7 @@ class DockerControllerRuntime:
         """Create one task idempotently and return before the Worker starts."""
         profile, _claims = self._authorize(request)
         labels = self._labels(request)
-        labels["com.insightforge.sandbox.deadline_at"] = str(
+        labels["com.marketscout.sandbox.deadline_at"] = str(
             time.time() + profile.resources.timeout_seconds
         )
         suffix = hashlib.sha256(
@@ -503,14 +503,14 @@ class DockerControllerRuntime:
         ).hexdigest()[:20]
         network_name = f"if-sbx-{suffix}"
         volume_name = f"if-sbx-input-{suffix}"
-        labels["com.insightforge.sandbox.network_name"] = network_name
-        labels["com.insightforge.sandbox.input_volume_name"] = volume_name
+        labels["com.marketscout.sandbox.network_name"] = network_name
+        labels["com.marketscout.sandbox.input_volume_name"] = volume_name
 
         for existing in self._existing_task_containers(request):
             existing.reload()
             existing_labels = self._container_labels(existing)
             existing_fence = int(
-                existing_labels.get("com.insightforge.sandbox.fence_token", "0")
+                existing_labels.get("com.marketscout.sandbox.fence_token", "0")
             )
             disposition = self._existing_container_disposition(
                 existing.status,
@@ -545,7 +545,7 @@ class DockerControllerRuntime:
         if orphan_network is not None:
             orphan_labels = dict(orphan_network.attrs.get("Labels") or {})
             if (
-                orphan_labels.get("com.insightforge.sandbox.deployment_id")
+                orphan_labels.get("com.marketscout.sandbox.deployment_id")
                 != self.bundle.deployment_id
             ):
                 raise RuntimeError("sandbox_network_name_collision")
@@ -562,7 +562,7 @@ class DockerControllerRuntime:
         if orphan_volume is not None:
             orphan_labels = dict(orphan_volume.attrs.get("Labels") or {})
             if (
-                orphan_labels.get("com.insightforge.sandbox.deployment_id")
+                orphan_labels.get("com.marketscout.sandbox.deployment_id")
                 != self.bundle.deployment_id
             ):
                 raise RuntimeError("sandbox_volume_name_collision")
@@ -578,11 +578,11 @@ class DockerControllerRuntime:
                 network_name,
                 internal=True,
                 check_duplicate=True,
-                labels={**labels, "com.insightforge.sandbox.resource_kind": "network"},
+                labels={**labels, "com.marketscout.sandbox.resource_kind": "network"},
             )
             input_volume = self.client.volumes.create(
                 name=volume_name,
-                labels={**labels, "com.insightforge.sandbox.resource_kind": "input"},
+                labels={**labels, "com.marketscout.sandbox.resource_kind": "input"},
             )
             from docker.types import Mount
 
@@ -599,7 +599,7 @@ class DockerControllerRuntime:
                         read_only=False,
                     )
                 ],
-                labels={**labels, "com.insightforge.sandbox.resource_kind": "seed"},
+                labels={**labels, "com.marketscout.sandbox.resource_kind": "seed"},
             )
             seed.start()
             seed.put_archive(
@@ -676,7 +676,7 @@ class DockerControllerRuntime:
                     "SANDBOX_TASK_TOKEN": request.task_token,
                     "SANDBOX_PROFILE_ID": request.payload.profile_id,
                     "SANDBOX_NETWORK_POLICY_MODE": profile.network.mode,
-                    "INSIGHTFORGE_TASK_WORKSPACE_ROOT": "/workspace/work",
+                    "MARKETSCOUT_TASK_WORKSPACE_ROOT": "/workspace/work",
                     "TMPDIR": "/workspace/tmp",
                     "TMP": "/workspace/tmp",
                     "TEMP": "/workspace/tmp",
@@ -785,7 +785,7 @@ class DockerControllerRuntime:
             except ValueError:
                 pass
         return float(
-            labels.get("com.insightforge.sandbox.deadline_at", "0") or 0
+            labels.get("com.marketscout.sandbox.deadline_at", "0") or 0
         )
 
     @staticmethod
@@ -919,7 +919,7 @@ class DockerControllerRuntime:
             except Exception as exc:  # noqa: BLE001 - produce a bounded terminal failure
                 labels = self._container_labels(container)
                 result = SandboxTaskResultV1(
-                    task_id=labels.get("com.insightforge.sandbox.task_id", "unknown"),
+                    task_id=labels.get("com.marketscout.sandbox.task_id", "unknown"),
                     status="failed",
                     error=(
                         "sandbox task timed out"
@@ -1030,8 +1030,8 @@ class DockerControllerRuntime:
         }
         filters = {
             "label": [
-                f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                "com.insightforge.sandbox.resource_kind=worker",
+                f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                "com.marketscout.sandbox.resource_kind=worker",
             ]
         }
         stopped: list[str] = []
@@ -1043,14 +1043,14 @@ class DockerControllerRuntime:
             if not self._owns_resource_labels(labels, "worker"):
                 continue
             identity = (
-                labels.get("com.insightforge.sandbox.run_id", ""),
-                labels.get("com.insightforge.sandbox.task_id", ""),
+                labels.get("com.marketscout.sandbox.run_id", ""),
+                labels.get("com.marketscout.sandbox.task_id", ""),
             )
             fence = int(
-                labels.get("com.insightforge.sandbox.fence_token", "0") or 0
+                labels.get("com.marketscout.sandbox.fence_token", "0") or 0
             )
             deadline = float(
-                labels.get("com.insightforge.sandbox.deadline_at", "0") or 0
+                labels.get("com.marketscout.sandbox.deadline_at", "0") or 0
             )
             if active.get(identity) != fence or (deadline and time.time() >= deadline):
                 profile = self._profile_for_container(container)
@@ -1062,8 +1062,8 @@ class DockerControllerRuntime:
         active_identities = set(active.items())
         seed_filters = {
             "label": [
-                f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                "com.insightforge.sandbox.resource_kind=seed",
+                f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                "com.marketscout.sandbox.resource_kind=seed",
             ]
         }
         for seed in self.client.containers.list(all=True, filters=seed_filters):
@@ -1072,10 +1072,10 @@ class DockerControllerRuntime:
                 continue
             identity = (
                 (
-                    labels.get("com.insightforge.sandbox.run_id", ""),
-                    labels.get("com.insightforge.sandbox.task_id", ""),
+                    labels.get("com.marketscout.sandbox.run_id", ""),
+                    labels.get("com.marketscout.sandbox.task_id", ""),
                 ),
-                int(labels.get("com.insightforge.sandbox.fence_token", "0") or 0),
+                int(labels.get("com.marketscout.sandbox.fence_token", "0") or 0),
             )
             if identity not in active_identities:
                 with suppress(Exception):
@@ -1083,8 +1083,8 @@ class DockerControllerRuntime:
         for network in self.client.networks.list(
             filters={
                 "label": [
-                    f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                    "com.insightforge.sandbox.resource_kind=network",
+                    f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                    "com.marketscout.sandbox.resource_kind=network",
                 ]
             }
         ):
@@ -1093,10 +1093,10 @@ class DockerControllerRuntime:
                 continue
             identity = (
                 (
-                    labels.get("com.insightforge.sandbox.run_id", ""),
-                    labels.get("com.insightforge.sandbox.task_id", ""),
+                    labels.get("com.marketscout.sandbox.run_id", ""),
+                    labels.get("com.marketscout.sandbox.task_id", ""),
                 ),
-                int(labels.get("com.insightforge.sandbox.fence_token", "0") or 0),
+                int(labels.get("com.marketscout.sandbox.fence_token", "0") or 0),
             )
             if identity not in active_identities:
                 for endpoint_id in list(
@@ -1109,8 +1109,8 @@ class DockerControllerRuntime:
         for volume in self.client.volumes.list(
             filters={
                 "label": [
-                    f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                    "com.insightforge.sandbox.resource_kind=input",
+                    f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                    "com.marketscout.sandbox.resource_kind=input",
                 ]
             }
         ):
@@ -1119,10 +1119,10 @@ class DockerControllerRuntime:
                 continue
             identity = (
                 (
-                    labels.get("com.insightforge.sandbox.run_id", ""),
-                    labels.get("com.insightforge.sandbox.task_id", ""),
+                    labels.get("com.marketscout.sandbox.run_id", ""),
+                    labels.get("com.marketscout.sandbox.task_id", ""),
                 ),
-                int(labels.get("com.insightforge.sandbox.fence_token", "0") or 0),
+                int(labels.get("com.marketscout.sandbox.fence_token", "0") or 0),
             )
             if identity not in active_identities:
                 with suppress(Exception):
@@ -1133,8 +1133,8 @@ class DockerControllerRuntime:
         """Stop expired deployment-owned Workers even when the API is unavailable."""
         filters = {
             "label": [
-                f"com.insightforge.sandbox.deployment_id={self.bundle.deployment_id}",
-                "com.insightforge.sandbox.resource_kind=worker",
+                f"com.marketscout.sandbox.deployment_id={self.bundle.deployment_id}",
+                "com.marketscout.sandbox.resource_kind=worker",
             ]
         }
         stopped: list[str] = []
@@ -1174,7 +1174,7 @@ class DockerControllerRuntime:
 
 def create_controller_app(runtime: DockerControllerRuntime) -> FastAPI:
     """Create the controller's internal-only ASGI application."""
-    app = FastAPI(title="InsightForge Sandbox Controller", docs_url=None, redoc_url=None)
+    app = FastAPI(title="MarketScout Sandbox Controller", docs_url=None, redoc_url=None)
 
     async def sweep_expired_workers() -> None:
         """Enforce task deadlines even while the API process is unavailable."""

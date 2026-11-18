@@ -60,7 +60,7 @@ class GatewayEmbeddingAccounting:
             if error.response.status_code == 429:
                 detail = error.response.json().get("detail", "")
                 if detail.startswith("budget_exhausted:"):
-                    raise BudgetExhausted(BudgetDimension(detail.split(":", 1)[1])) from None
+                    raise BudgetExhausted.from_wire(detail) from None
             raise
 
         async def commit(status, outcome):

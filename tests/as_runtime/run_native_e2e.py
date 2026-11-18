@@ -16,7 +16,7 @@ def main():
     ):
         if not env.get(name):
             raise SystemExit(f"请配置 {name}；部署说明见 deploy/native-e2e.md")
-    env.setdefault("COMPOSE_PROJECT_NAME", "insightforge-native-e2e")
+    env.setdefault("COMPOSE_PROJECT_NAME", "marketscout-native-e2e")
     env["E2E_NATIVE_FULL"] = "true"
     env["E2E_MANAGED_STACK"] = "true"
     env.setdefault("PLAYWRIGHT_BASE_URL", "http://127.0.0.1:8080")
@@ -48,9 +48,9 @@ def main():
         "ps",
         "-aq",
         "--filter",
-        "label=insightforge.role=native-team",
+        "label=marketscout.role=native-team",
         "--filter",
-        f"label=insightforge.project={env['COMPOSE_PROJECT_NAME']}",
+        f"label=marketscout.project={env['COMPOSE_PROJECT_NAME']}",
     ]
     previous_teams = set(
         run(team_filter, capture_output=True, text=True).stdout.split()

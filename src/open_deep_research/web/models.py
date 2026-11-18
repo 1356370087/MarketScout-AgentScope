@@ -99,7 +99,7 @@ class RankedCandidate(BaseModel):
     authority: float = Field(default=0.0, ge=0.0, le=1.0)
     authority_method: Literal["reranker", "heuristic"] = "heuristic"
     information_gain: float = Field(default=0.0, ge=0.0, le=1.0)
-    freshness: float = Field(default=0.5, ge=0.0, le=1.0)
+    freshness: float | None = Field(default=None, ge=0.0, le=1.0)
     provider_rank_score: float = Field(default=0.0, ge=0.0, le=1.0)
     final_score: float = Field(default=0.0, ge=0.0, le=1.0)
     selected: bool = False
@@ -143,6 +143,7 @@ class ExtractedDocument(BaseModel):
     page_count: int | None = None
     extractor: str
     extractor_version: str = "1"
+    alternate_urls: list[str] = Field(default_factory=list)
     content_hash: str
     quality_flags: list[str] = Field(default_factory=list)
 
@@ -198,6 +199,12 @@ class EvidenceRecord(BaseModel):
     # uploaded local document. Records persisted before this field keep their
     # legacy (label-less) shape and fall back to the old heuristics.
     source_type: Literal["web", "local_document"] = "web"
+    observation_snapshot_id: str | None = None
+    observed_at: datetime | None = None
+    published_at: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    temporal_status: Literal["unknown", "in_scope", "out_of_scope"] = "unknown"
     generation_id: str | None = None
     unit_id: str | None = None
     fact_assertion_id: str | None = None

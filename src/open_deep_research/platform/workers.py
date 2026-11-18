@@ -77,6 +77,12 @@ def publisher_ready():
 
 @asynccontextmanager
 async def job_context(component, identity, owner):
+    binding = None
+    if component == "document":
+        from open_deep_research.intelligence.service_accounting import document_budget_binding
+        binding = await document_budget_binding(identity)
+        if binding:
+            owner = binding["billing_owner_id"]
     if not runtime.enabled():
         yield
         return
@@ -94,6 +100,14 @@ async def job_context(component, identity, owner):
         row = await store.revision(revision, conn=conn)
     value = {"revision_id": revision, "document": execution_document(row["document"]), "policy_path": f"{revision}/sandbox-policy.json"}
     value["document"]["runtime"]["sandbox_enabled"] = False
-    secrets = await runtime.credential_values(value, owner, allowed_names={"LITELLM_SERVICE_KEY", "DOCUMENT_OCR_API_KEY", "DOCLING_SERVE_API_KEY"})
-    with runtime.scope(value, owner, secrets, source=key):
+    allowed_names = {"LITELLM_SERVICE_KEY", "DOCUMENT_OCR_API_KEY", "DOCLING_SERVE_API_KEY"}
+    if component == "intelligence":
+        allowed_names.add("FEISHU_APP_SECRET")
+    secrets = await runtime.credential_values(value, owner, allowed_names=allowed_names)
+    from .accounting import scoped_service_budget
+    port = None
+    if binding:
+        from open_deep_research.intelligence.service_accounting import DocumentBudgetPort
+        port = DocumentBudgetPort(binding)
+    with runtime.scope(value, owner, secrets, source=key), runtime.billing_as(owner), scoped_service_budget(port):
         yield

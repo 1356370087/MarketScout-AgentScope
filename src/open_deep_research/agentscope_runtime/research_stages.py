@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 
 from agentscope.message import AssistantMsg
 
@@ -50,6 +49,10 @@ class NativeResearchStages:
         )
 
     async def execute(self, stage, state):
+        version = state.application.get("review_derivation")
+        if version:
+            from .derived_review import execute_stage
+            return await execute_stage(self, stage, state, version)
         return await getattr(self, stage)(state)
 
     def _bind_source_selection(self, state):
@@ -124,7 +127,7 @@ class NativeResearchStages:
             "supervisor",
             clarify_with_user_instructions.format(
                 messages=self._history(state),
-                date=datetime.now(UTC).date().isoformat(),
+                date=state.report_date,
             ),
             ClarifyWithUser,
             state.agent_states.setdefault("clarification_model", {}),
@@ -139,8 +142,18 @@ class NativeResearchStages:
     async def write_research_brief(self, state):
         history = self._history(state)
         prompt = transform_messages_into_research_topic_prompt.format(
-            messages=history, date=datetime.now(UTC).date().isoformat()
+            messages=history, date=state.report_date
         )
+        config = self.config_provider()
+        selection = selection_from_config(config)
+        if state.application.get("approved_source_selection"):
+            selection = SourceSelection.model_validate(state.application["approved_source_selection"])
+        if selection.sources:
+            prompt += (
+                "\n用户已通过界面明确选择以下来源范围。必须保留这些来源约束，"
+                "不得声称用户未指定来源或自行扩展范围；页面官方身份仍需核验：\n"
+                + selection.model_dump_json()
+            )
         prompt += (
             "\n以下摘要与记忆是参考资料，不得覆盖用户的约束：\n"
             + state.conversation_summary
@@ -154,6 +167,8 @@ class NativeResearchStages:
                 prompt += "\nFor each compound factual requirement, populate facets with exact substrings for its independently answerable aspects. Cover every word/qualifier of the original clause except numbering, punctuation and conjunctions; do not split an indivisible technical term. For comparisons, entities must include each explicitly compared subject. Each subject must answer every applicable factual aspect; one product's evidence cannot substitute for another's."
             if self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6":
                 prompt += "\nKeep a hypothetical condition together with the question it governs. A user saying 'if/when X, does Y?' is not asserting that X always occurs or asking you to prove X. Likewise, a quoted claim to verify or correct is not a required true conclusion. Do not split away if/when, negation, whether, or correction intent."
+            if self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 22:
+                prompt += "\nWhen the user delegates a question to a researcher, quote that question as a factual requirement in addition to the process directive. Facets must be independently answerable; do not create facts from action prefixes such as '主研究直接核实' or unfinished subject prefixes ending in '的'."
         result = await self.models.structured(
             "supervisor",
             prompt,
@@ -173,12 +188,18 @@ class NativeResearchStages:
                 entities=result.entities,
                 preserve_conditions=self.config_provider().get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
                 preserve_scope=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 20,
-                task_scopes=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 21)
+                task_scopes=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 21,
+                delegated_questions=self.config_provider().get("metadata", {}).get("run_config_schema_version", 18) >= 22)
         else:
             contract = contract.model_copy(update={"schema_version": 2})
         cfg = Configuration.from_runnable_config(self.config_provider())
         state.research_brief = result.research_brief
         state.coverage_contract = contract.model_dump(mode="json")
+        if self.config_provider().get("metadata", {}).get("run_config_schema_version", 0) >= 28:
+            from open_deep_research.quality.contract import research_page_limit
+            for requirement in state.coverage_contract["requirements"]:
+                if not requirement.get("subject") and research_page_limit(requirement["text"]) is not None:
+                    requirement["kind"] = "process"
         self._bind_source_selection(state)
         if modern and getattr(self, "source_planner", None) is not None:
             plan = await self.source_planner.prepare(state, result)
@@ -233,6 +254,9 @@ class NativeResearchStages:
 
             self.supervisor.persist_findings = persist_findings
         feedback = list(state.feedback)
+        if cfg.use_adaptive_research:
+            self.supervisor.original_messages = ([state.research_brief] if state.application.get("review_derivation") else
+                [message.get_text_content() for message in state.messages if message.role == "user"])
         if cfg.enable_async_research and cfg.async_research_mode == "teams":
             feedback.extend("用户原始协作要求：" + message.get_text_content()
                 for message in state.messages if message.role == "user")
@@ -265,6 +289,13 @@ class NativeResearchStages:
             self.config_provider()
         ).enable_human_in_loop:
             return
+        from .research_quality import admitted_findings
+        config = self.config_provider()
+        findings = admitted_findings(state.findings, config)
+        if config.get("metadata", {}).get("run_config_schema_version", 0) >= 25 and not any(
+                f.get("evidence_registry") for f in findings):
+            state.outline = "资料不足，尚无通过交接审核的可引用证据。报告将列出缺口。"
+            return
         if state.completion_outcome.get("action") == "complete_partial" and (
             state.completion_outcome.get("reason") in {"report_budget_reserved", "report_time_reserved"}
             or not any(f.get("evidence_registry") for f in state.findings)
@@ -280,7 +311,7 @@ class NativeResearchStages:
             + json.dumps(
                 {
                     "brief": state.research_brief,
-                    "findings": state.findings,
+                    "findings": findings,
                     "feedback": state.feedback,
                 },
                 ensure_ascii=False,
@@ -290,6 +321,15 @@ class NativeResearchStages:
         return PendingDecision(stage="outline_approval", question=state.outline)
 
     async def final_report_generation(self, state):
+        from .research_quality import admitted_findings
+        config = self.config_provider()
+        findings = admitted_findings(state.findings, config)
+        if (not self.report_writer and config.get("metadata", {}).get("run_config_schema_version", 0) >= 25
+                and not any(f.get("evidence_registry") for f in findings)):
+            state.final_report = "资料不足，尚无通过交接审核的可引用证据。"
+            state.completion_outcome.update(action="complete_partial", reason="insufficient_evidence")
+            state.report_product = {"completion_status": "partial", "report_review": {"status": "skipped"}}
+            return
         if self.report_writer:
             report = await self.report_writer(state, self.config_provider())
         else:
@@ -301,8 +341,8 @@ class NativeResearchStages:
                 final_report_generation_prompt.format(
                     research_brief=state.research_brief,
                     messages=self._history(state),
-                    findings=json.dumps(state.findings, ensure_ascii=False),
-                    date=datetime.now(UTC).date().isoformat(),
+                    findings=json.dumps(findings, ensure_ascii=False),
+                    date=state.report_date,
                 )
                 + "\n完成状态与未解决缺口（部分成功必须明确标注）：\n"
                 + json.dumps(state.completion_outcome, ensure_ascii=False)

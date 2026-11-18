@@ -58,6 +58,29 @@ def website_entrypoint(url):
     return parsed.geturl()
 
 
+def unread_directory_links(page, gaps, progress, config):
+    """Rank links visible in a governed directory read against unresolved facts."""
+    from .search_providers import source_allowed
+    from open_deep_research.documents.contracts import source_url_identity
+    from open_deep_research.quality.planning import research_terms
+    query = research_terms(" ".join(str(gap.get(key) or "") for gap in gaps for key in ("reason", "next_query")))
+    visited = {source_url_identity(url) for read in progress.get("web_reads", {}).values()
+               for doc in read.get("reads", []) for url in (doc.get("url"), doc.get("requested_url")) if url}
+    visited.add(source_url_identity(page["url"]))
+    scores = {}
+    for label, target in re.findall(r"\[([^\]\n]+)\]\(([^\s)]+)\)", page["markdown"]):
+        try:
+            url = normalize_source_url(urljoin(page["url"], target.strip("<>")))
+        except ValueError:
+            continue
+        if source_url_identity(url) in visited or not source_allowed(url, config):
+            continue
+        score = len(query.intersection(research_terms(label + " " + urlsplit(url).path.replace("-", " "))))
+        if score:
+            scores[url] = max(scores.get(url, 0), score)
+    return sorted(scores, key=scores.__getitem__, reverse=True)[:4]
+
+
 def research_entities(original, entities, requirements, providers):
     """A provider named only in execution rules is not a research subject."""
     from open_deep_research.quality.planning import _comparison_subjects

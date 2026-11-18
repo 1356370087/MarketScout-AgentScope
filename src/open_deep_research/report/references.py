@@ -201,11 +201,52 @@ def _to_bibtex(ref: SourceRef, idx: int) -> str:
     )
 
 
-# Matches an existing "### Sources" section up to the next heading or end of text.
-_SOURCES_SECTION_RE = re.compile(
-    r"\n*^#{1,6}\s*(?:Sources|References|来源|参考资料)\s*\n.*?(?=^#{1,6}\s|\Z)",
-    re.IGNORECASE | re.MULTILINE | re.DOTALL,
-)
+_REFERENCE_TITLE = (r"(?:sources?|references?(?:\s+(?:and|&)\s+further\s+reading)?|"
+                    r"further\s+reading|来源|参考(?:资料|文献|来源)(?:与延伸阅读)?)")
+
+
+def is_sources_heading(value: str) -> bool:
+    title = re.sub(r"^(?:\d+(?:\.\d+)*|[一二三四五六七八九十百]+)\s*[.)、．:：-]?\s*", "", value.strip(), count=1)
+    return re.fullmatch(rf"{_REFERENCE_TITLE}(?:\s*(?:[（(]\s*{_REFERENCE_TITLE}\s*[)）]|[/／]\s*{_REFERENCE_TITLE}))?",
+                        title, re.I) is not None
+
+
+def source_sections(markdown: str) -> list[tuple[int, int]]:
+    """Find actual top-level Markdown headings, preserving fenced examples and other sections."""
+    from markdown_it import MarkdownIt
+    offsets = [0]
+    for line in markdown.splitlines(keepends=True):
+        offsets.append(offsets[-1] + len(line))
+    tokens = MarkdownIt("commonmark").parse(markdown)
+    headings = [(offsets[t.map[0]], is_sources_heading("".join(
+        child.content for child in (tokens[i+1].children or []) if child.type in {"text", "code_inline"})))
+        for i, t in enumerate(tokens) if t.type == "heading_open" and t.level == 0 and t.map]
+    return [(start, headings[i+1][0] if i+1 < len(headings) else len(markdown))
+            for i, (start, reference) in enumerate(headings) if reference]
+
+
+def without_source_sections(markdown: str) -> str:
+    parts, pos = [], 0
+    for start, end in source_sections(markdown):
+        parts.append(markdown[pos:start])
+        pos = end
+    return "".join([*parts, markdown[pos:]])
+
+
+def generated_catalogue_conflict(draft: str, writer_text: str) -> bool:
+    """Recognize the old assembler's extra catalogue, never resolve an ambiguous writer citation by guessing."""
+    sections = source_sections(draft)
+    if (len(sections) != 2 or len(source_sections(writer_text)) != 1
+            or sections[-1][1] != len(draft) or not draft[sections[-1][0]:].startswith("### Sources\n")):
+        return False
+    split = sections[-1][0]
+    try:
+        authored = numbered_source_urls(writer_text)
+        before = numbered_source_urls(draft[:split])
+        after = numbered_source_urls(draft[split:])
+    except ValueError:
+        return False
+    return bool(authored and authored == before and any(n in after and after[n] != url for n, url in before.items()))
 
 
 def replace_sources_section(markdown: str, references_block: str) -> str:
@@ -213,6 +254,6 @@ def replace_sources_section(markdown: str, references_block: str) -> str:
     if not references_block:
         return markdown
     block = f"\n\n### Sources\n{references_block}"
-    if _SOURCES_SECTION_RE.search(markdown):
-        return _SOURCES_SECTION_RE.sub(block, markdown).rstrip() + "\n"
+    if source_sections(markdown):
+        return without_source_sections(markdown).rstrip() + block + "\n"
     return markdown.rstrip() + "\n" + block

@@ -12,7 +12,7 @@
 
 ## 项目与代码导航
 
-InsightForge 是面向市场与竞争情报的多 Agent 深度研究平台，使用 AgentScope 原生 Agent、研究 Pipeline 和 SQL 恢复账本。Python 项目名为 `marketscout-agentscope`，导入命名空间为 `open_deep_research`。
+MarketScout 是面向市场与竞争情报的多 Agent 深度研究平台，使用 AgentScope 原生 Agent、研究 Pipeline 和 SQL 恢复账本。Python 项目名为 `marketscout-agentscope`，导入命名空间为 `open_deep_research`。
 
 后端使用 Python 3.14（见 `.python-version` 和 `pyproject.toml`）、AgentScope 与 FastAPI；前端使用 Next.js App Router、React 和 TypeScript，统一使用 `frontend/package.json` 指定的 pnpm 版本，不生成 npm/yarn 锁文件。
 
@@ -28,6 +28,7 @@ InsightForge 是面向市场与竞争情报的多 Agent 深度研究平台，使
 | `quality/`、`evidence.py` | 覆盖与来源契约、证据、确定性门禁和 Judge 策略 |
 | `documents/` | 文档上传、解析、版本、索引、检索与摄取 Worker |
 | `knowledge/` | 工作空间、知识库、合集、统一检索、事实/Wiki、后台维护与备份 |
+| `intelligence/` | 持续计划、观察快照、长期授权、跨 Run 事项、计划额度和飞书通知 |
 | `report/` | 报告编排、审阅、引用、CanonicalReport 与独立文件发布 Worker |
 | `tasks/` | 团队状态、成员、消息、租约与 RocketMQ 协调；不是旧文件任务池 |
 | `memory/`、`observability/`、`evaluation/` | 长期记忆、追踪/指标/用量、本地 Agent Evals |
@@ -68,6 +69,8 @@ pnpm dev
 
 前端默认端口为 3000，BFF 回源地址由 `RESEARCH_API_ORIGIN` 指定，默认 `http://127.0.0.1:2024`。浏览器通过 `/api/research`、`/api/auth`、`/api/iam` 访问后端，Access/Refresh Token 保存在 HttpOnly Cookie 中，由 BFF 注入认证头。`NEXT_PUBLIC_*` 在构建期进入客户端代码。
 
+持续情报可选功能的实现、部署和验收边界见 `docs/continuous-intelligence/`，默认关闭；启用后页面包括 `/intelligence` 及计划、事项详情。
+
 主要页面包括 `/research/new`、`/research/[runId]`、`/documents`、`/knowledge`、`/knowledge/ledger`、`/knowledge/health`、`/usage`、`/settings` 和 `/admin`。
 
 ### 运行模式与基础设施
@@ -83,7 +86,7 @@ pnpm dev
 | AgentScope 恢复账本 | `AS_DATABASE_URL` | `postgresql+asyncpg://postgres:<密码>@172.22.208.30:5432/market_scout`，框架表使用独立 schema `AS_DATABASE_SCHEMA=agentscope_runtime` |
 | LiteLLM 控制库 | `LITELLM_DATABASE_URL` | 仍连接 `172.22.208.30:5432`，必须使用独立的 LiteLLM 数据库名，不得与 `market_scout` 业务表混用 |
 
-密码包含特殊字符时必须进行 URL 编码。常规启动前至少提供 `IAM_DATABASE_URL`；启用文档/知识库、异步团队、Gateway 或 LiteLLM 时，再提供对应连接变量。数据库迁移统一执行 `uv run alembic upgrade head`，当前 schema 头为 `0021_audit_actor_columns`。测试使用 `AS_TEST_DATABASE_URL`、`IAM_TEST_DATABASE_URL` 或 `TEAM_TEST_DATABASE_URL` 指向独立验收库，不能指向 `market_scout`。
+密码包含特殊字符时必须进行 URL 编码。常规启动前至少提供 `IAM_DATABASE_URL`；启用文档/知识库、异步团队、Gateway 或 LiteLLM 时，再提供对应连接变量。数据库迁移统一执行 `uv run alembic upgrade head`，当前 schema 头为 `0023_continuous_intelligence`。测试使用 `AS_TEST_DATABASE_URL`、`IAM_TEST_DATABASE_URL` 或 `TEAM_TEST_DATABASE_URL` 指向独立验收库，不能指向 `market_scout`。
 
 `RESEARCH_ENGINE` 默认且仅接受 `native`。`AS_NATIVE_RESOURCES` 决定资源装配方式，和模型后端、认证旁路是不同设置：
 

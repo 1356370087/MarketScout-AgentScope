@@ -72,6 +72,13 @@ def research_guidance(config, *, supervisor=False):
             "用户指定产品版本时，优先使用该版本固定文档地址，不用 current/latest 别名替代；"
             "跨版本材料只能明确标注，不能静默用于证明指定版本行为。"
         )
+    if config.get("metadata", {}).get("run_config_schema_version", 0) >= 27:
+        rules += ("\n竞品研究应及早从厂商的文档目录定位功能或版本对照页和订阅计费说明。"
+                  "核实功能归属时优先读取产品文档；核实订阅对象时优先读取计费说明。"
+                  "登录、注册和试用按钮只说明入口，避免消耗有限页数反复核查账户控制台。")
+    if config.get("metadata", {}).get("run_config_schema_version", 0) >= 30:
+        rules += ("\n核价日期取自定价原文记录中 _source_read_receipt.read_at。该字段是本运行成功物理抓取的回执；"
+                  "同一文档的缓存回读保留原始时间，不产生新的核价日期。网页发布日期另行标注。")
     if corpus(config):
         rules += (
             "\n这是固定资料任务：优先一次 web_research(objective=原始事实问题) 批量读取所有所选 URL，"
@@ -93,6 +100,10 @@ def merge_progress(state, patch):
         "tasks",
         "requirements",
         "discoveries",
+        "loaded_skills",
+        "handoff_repairs",
+        "source_attempts",
+        "web_reads",
     ):
         for key, value in patch.get(name, {}).items():
             prior = state.setdefault(name, {}).get(key, {})
@@ -144,6 +155,8 @@ def merge_progress(state, patch):
                         | set(value.get("requirement_ids", []))
                     ),
                 }
+            if name == "loaded_skills" and prior.get("version") == value.get("version") and prior.get("first_call_id"):
+                value["first_call_id"] = prior["first_call_id"]
             if name == "discoveries":
                 value = {"providers": sorted(set(prior.get("providers", [])) | set(value.get("providers", [])))}
             if name == "requirements":
@@ -219,6 +232,8 @@ def progress_summary(state, contract=None):
     return {
         "document_count": len(documents),
         "source_versions": {doc["url"]: doc["content_hash"] for doc in documents},
+        "loaded_skills": list(state.get("loaded_skills", {}).values()),
+        "source_attempts": list(state.get("source_attempts", {}).values()),
         "processed_chunks": sum(len(d.get("processed_chunks", [])) for d in documents),
         "total_chunks": sum(d.get("total_chunks", 0) for d in documents),
         "candidate_count": len(state.get("candidates", {})),
@@ -386,6 +401,14 @@ async def research_budget_reason(models, config):
                 for role, entry in zip(roles, entries)
             )
         )
+    from open_deep_research.platform import quota, runtime as platform_runtime
+    if ("cost_micro_usd" in reserve and platform_runtime.enabled()
+            and config.get("metadata", {}).get("run_config_schema_version", 0) >= 25):
+        month = await quota.runway(platform_runtime.billing_owner() or recovery.lease.user_id)
+        if month["available"] is not None and month["available"] <= reserve["cost_micro_usd"]:
+            if dynamic_enabled(config):
+                return await recovery.store.close_research(recovery.lease, "report_budget_reserved")
+            return "report_budget_reserved"
     for dimension, remaining in reserve.items():
         limit = budget["limits"].get(dimension)
         used = budget["used"].get(dimension, 0) + budget["reserved"].get(dimension, 0)

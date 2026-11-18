@@ -6,6 +6,7 @@ from agentscope.model import StructuredResponse
 from open_deep_research.report.boundaries import (
     BoundaryAudit, BoundaryProtocolError, CASES, audit_boundaries, check_boundaries, evaluate_formula,
     needs_boundary_audit,
+    boundary_scope_requested,
 )
 
 
@@ -24,6 +25,18 @@ def test_aggregation_in_natural_language_cannot_skip_phase_verification(aggregat
 
 def test_phase_verification_is_not_triggered_by_lifecycle_prose_without_aggregation():
     assert not needs_boundary_audit("A persistent helper starts before the main workload and stops after it.")
+
+
+def test_competitor_workflow_stages_and_page_totals_are_not_resource_formulas():
+    draft = "Dify 支持阶段试运行和变量检查。两款产品合计最多读取 12 页。Sealos 按 CPU、内存及磁盘计费。"
+    assert not needs_boundary_audit(draft)
+    assert not boundary_scope_requested({"requirements": [{"kind": "factual", "text": "比较产品功能、部署方式与定价。"}]})
+    assert boundary_scope_requested({"requirements": [{"kind": "factual", "text": "解释 Pod 初始化期间的资源计算公式。"}]})
+
+
+def test_explicit_resource_scope_keeps_formula_only_answers_auditable():
+    scope = {"requirements": [{"kind": "factual", "text": "计算 Pod 初始化期间的资源请求。"}]}
+    assert needs_boundary_audit("max(helper + transient, helper + steady)", scope=scope)
 
 
 def test_phase_totals_reject_both_undercounting_and_premature_helper_allocation():
@@ -54,6 +67,7 @@ def test_source_supported_orderings_survive_normalization_and_revision_payload()
     from open_deep_research.report.models import ReportReview
 
     draft, state, raw = simple_review()
+    state["coverage_contract"]["requirements"][0]["text"] = "Explain the maximum resource requests during initialization."
     candidate = ReportReview.model_validate(raw)
     candidate._verified_boundary_cases = {"helper_first", "helper_after"}
     result = reviewer._normalize_candidate(candidate, draft=draft, state=state, config=config(),

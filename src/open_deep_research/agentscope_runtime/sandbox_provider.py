@@ -22,7 +22,7 @@ from open_deep_research.models.protocol_errors import ModelGatewayError
 from open_deep_research.observability.trace_context import current_traceparent
 from open_deep_research.sandbox.wire import GatewayModelOutcomeV2
 
-STRUCTURED_OUTPUT_TOOL_NAME = "__insightforge_structured_output"
+STRUCTURED_OUTPUT_TOOL_NAME = "__marketscout_structured_output"
 
 
 def wire_messages(rows):

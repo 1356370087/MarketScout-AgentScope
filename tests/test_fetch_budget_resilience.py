@@ -70,7 +70,7 @@ async def test_gateway_tool_execution_uses_request_run_and_task_metadata(
                 "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
                     "role": "assistant", "content": None, "tool_calls": [{
                         "id": "call", "type": "function", "function": {
-                            "name": "__insightforge_structured_output", "arguments": arguments,
+                            "name": "__marketscout_structured_output", "arguments": arguments,
                         },
                     }],
                 }}],

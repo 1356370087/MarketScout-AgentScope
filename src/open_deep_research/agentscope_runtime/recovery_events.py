@@ -53,6 +53,8 @@ def public_events(event):
             )
     for action_id, approval in sorted(payload.get("approvals", {}).items()):
         if approval["kind"] == "budget":
+            from .execution_budget import can_decline_report_budget
+            can_decline = can_decline_report_budget(approval, payload.get("completed", []))
             output.append(
                 (
                     "approval.required",
@@ -60,8 +62,13 @@ def public_events(event):
                     {
                         "action_id": action_id,
                         "approval_type": "budget",
+                        "dimension": approval["payload"]["dimension"],
+                        **{k: approval["payload"][k] for k in ("budget_scope", "required", "available") if k in approval["payload"]},
+                        "content_markdown": ("账户本月可用配额不足。管理员调整配额后，可重新检查并继续。"
+                            if approval["payload"].get("budget_scope") == "account_month" else
+                            "下一次操作所需的额度超过剩余预算，研究已暂停。请核对额度后继续。"),
                         "status": "pending",
-                        "allowed_actions": ["approve", "cancel"],
+                        "allowed_actions": ["approve", "deny", "cancel"] if can_decline else ["approve", "cancel"],
                     },
                 )
             )

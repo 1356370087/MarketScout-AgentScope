@@ -332,13 +332,18 @@ def _validate_component(value: str, kind: str) -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+    atomic_write_report_bytes(path, encoded)
+
+
+def atomic_write_report_bytes(path: Path, encoded: bytes) -> None:
+    """Make a complete report artifact visible to concurrent readers in one rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
     )

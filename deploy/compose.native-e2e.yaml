@@ -9,7 +9,7 @@ services:
       AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
       AS_ROCKETMQ_ENDPOINT: ${AS_ROCKETMQ_ENDPOINT:?填写远程RocketMQ的gRPC代理地址}
-      AS_ROCKETMQ_GROUP: ${AS_ROCKETMQ_GROUP:-insightforge-native-api}
+      AS_ROCKETMQ_GROUP: ${AS_ROCKETMQ_GROUP:-marketscout-native-api}
       SANDBOX_ENABLED: "true"
       ENABLE_ASYNC_RESEARCH: "true"
       ALLOW_CLARIFICATION: "false"

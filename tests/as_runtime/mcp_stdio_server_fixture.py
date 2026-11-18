@@ -1,13 +1,13 @@
-"""MCP stdio fixture server on the mcp 1.30 SDK (FastMCP)."""
+"""MCP stdio fixture server on the MCP 2.x SDK (MCPServer)."""
 
 import asyncio
 
 from pydantic import Field
 from typing_extensions import Annotated
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("test-stdio-server")
+mcp = MCPServer("test-stdio-server")
 
 
 @mcp.tool(description="Echo the text back.")

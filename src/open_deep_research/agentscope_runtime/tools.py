@@ -356,13 +356,18 @@ class GovernedToolkit(Toolkit):
             call_id=tool_call.id,
             operation_id=f"{self.run_id}:{self.task_id}:{tool_call.id}",
         )
-        token = self.identity.set(identity)
-        try:
-            async with aclosing(super().call_tool(tool_call, state)) as stream:
-                async for event in stream:
-                    yield event
-        finally:
-            self.identity.reset(token)
+        async with aclosing(super().call_tool(tool_call, state)) as stream:
+            while True:
+                # Bind while advancing the tool, not while yielding to the SDK.
+                # Cancellation can finalize a yielded generator in another task.
+                token = self.identity.set(identity)
+                try:
+                    event = await anext(stream)
+                except StopAsyncIteration:
+                    break
+                finally:
+                    self.identity.reset(token)
+                yield event
 
 
 class ToolGovernanceMiddleware(MiddlewareBase):

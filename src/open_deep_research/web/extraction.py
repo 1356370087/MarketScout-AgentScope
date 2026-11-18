@@ -43,19 +43,11 @@ def _metadata_from_html(soup: BeautifulSoup) -> dict[str, str | None]:
 
     author = meta("author", "article:author")
     published = meta("article:published_time", "datePublished", "date")
-    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        try:
-            payload = json.loads(tag.string or "null")
-        except TypeError, json.JSONDecodeError:
-            continue
-        nodes = payload if isinstance(payload, list) else [payload]
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            author_obj = node.get("author")
-            if not author and isinstance(author_obj, dict):
-                author = str(author_obj.get("name") or "") or None
-            published = published or node.get("datePublished")
+    for node in _json_ld_objects(soup):
+        author_obj = node.get("author")
+        if not author and isinstance(author_obj, dict):
+            author = str(author_obj.get("name") or "") or None
+        published = published or node.get("datePublished")
     html = soup.find("html")
     return {
         "title": meta("og:title", "twitter:title")
@@ -64,6 +56,62 @@ def _metadata_from_html(soup: BeautifulSoup) -> dict[str, str | None]:
         "published_at": str(published) if published else None,
         "language": str(html.get("lang")) if html and html.get("lang") else None,
     }
+
+
+def _json_ld_objects(soup: BeautifulSoup):
+    for tag in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        try:
+            payload = json.loads(tag.string or "null")
+        except TypeError, ValueError, RecursionError:
+            continue
+        for node in payload if isinstance(payload, list) else [payload]:
+            if isinstance(node, dict):
+                yield node
+
+
+def _subscription_offer_rows(soup: BeautifulSoup, visible_text: str, page_url: str):
+    """Project exact, same-page subscription fields without importing script prose."""
+    page = canonicalize_url(page_url)
+    periods = {"MON": "month (MON)", "ANN": "year (ANN)"}
+    rows = []
+    for node in _json_ld_objects(soup):
+        if node.get("@type") not in ("Product", "SoftwareApplication", "Service"):
+            continue
+        offers = node.get("offers")
+        if not isinstance(offers, list):
+            offers = [offers]
+        for offer in offers:
+            if not isinstance(offer, dict) or offer.get("@type") != "Offer":
+                continue
+            name = offer.get("name")
+            url = offer.get("url")
+            spec = offer.get("priceSpecification")
+            if (not isinstance(name, str) or not re.fullmatch(r"[\w .+()（）/-]{1,80}", name)
+                    or name not in visible_text or not isinstance(url, str)
+                    or not isinstance(spec, dict) or spec.get("@type") != "UnitPriceSpecification"):
+                continue
+            try:
+                if canonicalize_url(urljoin(page_url, url)) != page:
+                    continue
+            except ValueError:
+                continue
+            price = str(offer.get("price"))
+            currency = offer.get("priceCurrency")
+            unit = spec.get("unitCode")
+            quantity = spec.get("referenceQuantity")
+            if (not re.fullmatch(r"\d{1,12}(?:\.\d{1,6})?", price)
+                    or not isinstance(currency, str) or not re.fullmatch(r"[A-Z]{3}", currency)
+                    or not isinstance(unit, str) or unit not in periods
+                    or price != str(spec.get("price")) or currency != spec.get("priceCurrency")
+                    or (quantity is not None and (not isinstance(quantity, dict)
+                        or quantity.get("value") != 1 or quantity.get("unitCode") != unit))):
+                continue
+            row = f"| {name} | {price} | {currency} | {periods[unit]} |"
+            if row not in rows:
+                rows.append(row)
+                if len(rows) == 12:
+                    return rows
+    return rows
 
 
 def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity: bool = False, include_navigation: bool = False) -> ExtractedDocument:
@@ -78,6 +126,10 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         or soup.find("article") or soup.find("main") or soup.select_one('[role="main"]')
     ) if evidence_fidelity else None
     metadata = _metadata_from_html(soup)
+    offers = _subscription_offer_rows(
+        soup, (content_root or soup.body or soup).get_text(" ", strip=True),
+        raw.result.final_url or candidate.canonical_url,
+    ) if evidence_fidelity else []
     for selector in (
         "script",
         "style",
@@ -124,6 +176,12 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         flags.append("dynamic_render_recommended")
     elif visible_chars < 600:
         flags.append("thin_content")
+    if offers:
+        markdown += "\n\n## Published subscription offers (JSON-LD)\n\n" + "\n".join([
+            "| Plan | Price | Currency | Billing period |",
+            "| --- | --- | --- | --- |",
+            *offers,
+        ])
     canonical_tag = soup.find(
         "link", attrs={"rel": lambda value: bool(value and "canonical" in value)}
     )
@@ -150,8 +208,11 @@ def extract_html(candidate: CandidateSource, raw: RawFetch, *, evidence_fidelity
         language=metadata["language"],
         content_type=content_type,
         markdown=markdown,
+        alternate_urls=list(dict.fromkeys(urljoin(raw.result.final_url or candidate.canonical_url, link["href"])
+            for link in soup.select('link[rel~="alternate"][href]')
+            if str(link.get("type", "")).split(";")[0].lower() in {"text/markdown", "text/plain"}))[:16],
         extractor="beautifulsoup+markdownify",
-        extractor_version="2" if evidence_fidelity else "1",
+        extractor_version="3" if offers else "2" if evidence_fidelity else "1",
         content_hash=digest,
         quality_flags=flags,
     )

@@ -172,7 +172,7 @@ async def test_partial_reparse_keeps_the_index_profile_and_rejects_model_changes
         row = dict(await c.fetchrow("SELECT * FROM research_document_generations WHERE id=$1::uuid", draft))
     assert json.loads(row["index_profile"]) == DocumentSettings().index_profile
     assert await repository.get_chunk(corpus.member, corpus.document,
-        str(uuid.uuid5(uuid.NAMESPACE_URL, f"insightforge:segment:{draft}:0"))) is None
+        str(uuid.uuid5(uuid.NAMESPACE_URL, f"marketscout:segment:{draft}:0"))) is None
     monkeypatch.setenv("DOCUMENT_EMBEDDING_REVISION", "v2")
     with pytest.raises(repository.DocumentConflictError, match="index_profile_mismatch"):
         await reparse.execute_scoped_reparse({}, row, DocumentSettings())

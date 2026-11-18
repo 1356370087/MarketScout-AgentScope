@@ -51,6 +51,7 @@ from .references import (
     parse_sources_from_text,
     render_references,
     replace_sources_section,
+    without_source_sections,
 )
 from .renderers import render_artifacts
 from .runtime import AIMessage, RunnableConfig, get_trace_recorder
@@ -59,9 +60,6 @@ _FENCE_LINE_RE = re.compile(
     r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>[^\r\n]*)"
 )
 _URL_RE = re.compile(r"https?://[^\s)\]}>]+")
-_SOURCES_SECTION_RE = re.compile(
-    r"(?ims)^\s*#{1,6}\s*(?:sources|references|来源|参考资料)\s*$.*\Z"
-)
 _REPORT_MISSING_CITATIONS = "report_missing_verifiable_citations"
 _REPORT_DISALLOWED_CODE_URL = "report_disallowed_fenced_code_url"
 _REPORT_UNRESOLVED_CITATIONS = "report_unresolved_citations"
@@ -201,7 +199,7 @@ def _prose_without_sources(markdown: str) -> str:
         for is_code, region in _markdown_regions(markdown)
         if not is_code
     )
-    return _SOURCES_SECTION_RE.sub("", prose)
+    return without_source_sections(prose)
 
 
 def _normalized_urls(text: str) -> set[str]:
@@ -1116,6 +1114,24 @@ async def review_report(
     """
     from .reviewer import review_report as _review_report
 
+    if (config or {}).get("metadata", {}).get("run_config_schema_version", 0) >= 25:
+        from .format_checks import format_review
+        normalized = _coerce_report_draft(draft)
+        format_result = format_review(normalized.markdown, (state or {}).get("messages", []), attempt)
+        updates = (state or {}).get("verified_supplement", [])
+        if attempt == 1 and updates and Configuration.from_runnable_config(config).report_review_max_revisions > 0:
+            from .models import ReportReviewIssue
+            result = format_result or ReportReview(decision="revise", attempt=1,
+                status="completed", model="verified_supplement", draft_sha256=hashlib.sha256(normalized.markdown.encode()).hexdigest(),
+                summary="将已通过审核的补充证据写入对应的原稿段落，并复核修订后的全文。")
+            for item in updates:
+                result.issues.append(ReportReviewIssue(category="coverage", severity="high", blocking=True,
+                    requirement_id=item["requirement_id"], evidence_ids=item["evidence_ids"],
+                    location=item["subject"] or "正文", description=item["text"],
+                    revision_instruction="逐条核对所列新证据，更新该对象的事实、原文引用及过时的缺口说明，保留仍有依据的其他内容。"))
+            return result
+        if format_result is not None:
+            return format_result
     return await _review_report(draft, state, config, attempt=attempt)
 
 
@@ -1296,7 +1312,8 @@ async def build_report(state: dict, config: RunnableConfig) -> dict:
         await _time_checkpoint("draft", cfg, completed=True)
         return result
 
-    draft = await build_report_draft(state, config)
+    base = state.get("archived_review_draft")
+    draft = _coerce_report_draft(base) if base is not None else await build_report_draft(state, config)
     await _time_checkpoint("draft", cfg, completed=True)
     await _publish_report_progress(
         config, "report.review.started", draft, attempt=1, revision_count=0

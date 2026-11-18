@@ -30,7 +30,7 @@ export default function LoginPage() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "登录失败"); }
     finally { setBusy(false); }
   }
-  return <AuthShell eyebrow="继续你的研究" title="欢迎回来" copy="登录 InsightForge，连接问题、证据与洞察。" footer={<><span>尚未注册？</span><Link href="/register">申请研究席位</Link></>}>
+  return <AuthShell eyebrow="继续你的研究" title="欢迎回来" copy="登录 MarketScout，连接问题、证据与洞察。" footer={<><span>尚未注册？</span><Link href="/register">申请研究席位</Link></>}>
     <form action={submit} className="auth-form">
       {setup.data?.initialized === false && <p className="form-alert">首次使用此平台？<Link href="/setup">创建管理员并完成初始化</Link></p>}
       <div className="field"><label htmlFor="email">工作邮箱</label><input id="email" name="email" type="email" required autoComplete="email" /></div>

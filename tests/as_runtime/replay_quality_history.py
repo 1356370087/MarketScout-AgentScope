@@ -30,10 +30,10 @@ class LiveJudge:
             response = await self.client.chat.completions.create(
                 model="if-quality-v1", max_tokens=4096, messages=messages,
                 tools=[{"type": "function", "function": {
-                    "name": "__insightforge_structured_output", "description": "Return the required quality assessment",
+                    "name": "__marketscout_structured_output", "description": "Return the required quality assessment",
                     "parameters": schema.model_json_schema(),
                 }}],
-                tool_choice={"type": "function", "function": {"name": "__insightforge_structured_output"}},
+                tool_choice={"type": "function", "function": {"name": "__marketscout_structured_output"}},
             )
             try:
                 return schema.model_validate_json(response.choices[0].message.tool_calls[0].function.arguments)

@@ -162,13 +162,20 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-docs/
+docs/*
+!docs/continuous-intelligence/
 
 # 本地评估运行产物（生成目录，不入库）
 tests/local_eval_results/
 .runs/
+.documents/
 
 # 临时目录（测试运行时等）
 tmp/
 
 .venv-legacy/
+
+# Playwright 浏览器验收截图与临时工件
+output/playwright/
+
+.playwright-cli/

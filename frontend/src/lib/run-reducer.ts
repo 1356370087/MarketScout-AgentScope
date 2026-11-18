@@ -332,6 +332,10 @@ export function reducePublicEvent(state: ResearchRunState, event: PublicEvent): 
     next.status = `awaiting_${String(payload.approval_type)}_approval` as RunStatus;
     next.pendingHumanAction = { action_id: String(payload.action_id), type: kind, payload: {
       content_markdown: String(payload.content_markdown ?? ""), source_plan: payload.source_plan as never,
+      dimension: payload.dimension as PendingHumanAction["payload"]["dimension"],
+      budget_scope: payload.budget_scope as PendingHumanAction["payload"]["budget_scope"],
+      available: payload.available as number | undefined,
+      required: payload.required as number | undefined,
       version: payload.version as number | undefined, requirements: payload.requirements as never,
       checkpoint: payload.checkpoint as string | undefined, report_step: payload.report_step as string | undefined,
       remaining_seconds: payload.remaining_seconds as number | undefined,

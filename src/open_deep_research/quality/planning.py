@@ -18,7 +18,7 @@ from open_deep_research.quality.contract import (
 )
 
 
-def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False, preserve_scope=False, task_scopes=False):
+def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, entities=(), preserve_conditions=False, preserve_scope=False, task_scopes=False, delegated_questions=False):
     """Retain provenance and deterministic constraints without inventing facts."""
     original = {i: _message_content(m) for i, m in enumerate(messages)
                 if _message_role(m) in {"user", "human"}}
@@ -96,6 +96,8 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     parents = sorted(dict.fromkeys(parents))
     qualified = [(i, start, end) for i, content in original.items()
                  for start, end in _qualified_question_spans(content)] if preserve_conditions else []
+    if task_scopes and delegated_questions:
+        selected = [*selected, *_questions_in_delegation(selected)]
     if not any(row[4] == "factual" for row in selected):
         if not qualified:
             return fallback
@@ -242,9 +244,32 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
     return compiled
 
 
+def _questions_in_delegation(selected):
+    """Keep an explicitly delegated question beside its process wrapper."""
+    for i, a, b, text, kind in selected:
+        if kind != "process":
+            continue
+        for match in re.finditer(r"(?:将|把)\s*(?P<question>[^。；;\n]{1,240}?)\s*(?:委派|分配|交)给", text):
+            if re.search(r"(?:不要|不得|禁止|不能|不应|勿|别|不)(?:再)?\s*$", text[:match.start()]):
+                continue
+            question = match.group("question").strip()
+            if (re.search(r"如何|是否|能否|为何|什么|何时", question)
+                    and classify_requirement_kind(question) == "factual"):
+                start = a + match.start("question")
+                yield i, start, start + len(question), question, "factual"
+
+
 def _task_obligations(original, selected, entities):
     """Keep quoted premises and synthesis goals out of external fact checking."""
     subjects = _comparison_subjects(original, entities)
+    roster = None
+    if len(subjects) >= 2:
+        names = "|".join(re.escape(name) for name in sorted(subjects, key=len, reverse=True))
+        roster = re.compile(
+            rf"(?:请\s*)?(?:比较|对比|对照|compare\s+)\s*(?:{names})"
+            rf"(?:\s*(?:[、,，]|以及|与|和|\band\b|\bversus\b|\bvs\.?)\s*(?:{names}))+\s*[。.!！]?",
+            re.I,
+        )
     scenarios = [(i, m.start(), m.end()) for i, content in original.items()
                  for m in re.finditer(r"(?:^|\n)[ \t]*(?:(?:统一)?(?:业务)?场景|背景|scenario|context)\s*[：:][^\n]+",
                                       content, re.I)]
@@ -255,6 +280,13 @@ def _task_obligations(original, selected, entities):
             continue
         # A roster/selection goal does not require each worker to prove the
         # entire comparison. Concrete prices, differences and questions remain.
+        if roster and roster.fullmatch(text.strip()) and any(
+            owner == i and (stop <= a or start >= b) and other_kind == "factual"
+            and not roster.fullmatch(other.strip())
+            for owner, start, stop, other, other_kind in selected
+        ):
+            output.append((i, a, b, text, "deliverable"))
+            continue
         if (len(subjects) >= 2 and re.search(r"(?:竞品|竞争|选型).{0,8}(?:研究|分析)", text)
                 and sum(name in text for name in subjects) >= 2
                 and not re.search(r"[?？]|价格|成本|区别|差异|为何|如何|是否|能否|条件|限制", text)):
@@ -363,39 +395,35 @@ def unique_evidence(records):
     return list(merged.values())
 
 
-def prioritize_evidence(records, requirements, *, guidance=""):
-    """Order whole records by the questions being answered, before confidence.
-
-    Lexical matches guide selection only; they never certify a
-    claim. Keep different requirements represented when the input is bounded.
-    """
-    from collections import Counter
-    import math
-
+def research_terms(text):
+    """Match English terms and Chinese character pairs in research questions and source labels."""
     stop = {"the", "and", "for", "with", "from", "that", "this", "are", "how",
             "what", "does", "explain", "whether", "container", "official"}
+    result = set()
+    for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*|[\u4e00-\u9fff]+", text):
+        if word.isascii():
+            word = word.casefold()
+            if len(word) > 4 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+                word = word[:-1]
+            if word not in stop:
+                result.add(word)
+        else:
+            result.update(word[i:i+2] for i in range(len(word)-1))
+    return result
 
-    def terms(text):
-        result = set()
-        for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*|[\u4e00-\u9fff]+", text):
-            if word.isascii():
-                word = word.casefold()
-                if len(word) > 4 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
-                    word = word[:-1]
-                if word not in stop:
-                    result.add(word)
-            else:
-                result.update(word[i:i+2] for i in range(len(word)-1))
-        return result
 
+def prioritize_evidence(records, requirements, *, guidance=""):
+    """Order whole records by question relevance. Lexical matches never certify a claim."""
+    from collections import Counter
+    import math
     records = list(records)
     rows = [row.model_dump() if hasattr(row, "model_dump") else row for row in requirements]
-    queries = [terms(f"{row.get('subject') or ''} {row.get('text', '')}") for row in rows]
+    queries = [research_terms(f"{row.get('subject') or ''} {row.get('text', '')}") for row in rows]
     if guidance:
-        queries.append(terms(guidance))
+        queries.append(research_terms(guidance))
     if not records or not any(queries):
         return records
-    tokens = [terms(str(r.get("supporting_excerpt") or r.get("claim") or "")) for r in records]
+    tokens = [research_terms(str(r.get("supporting_excerpt") or r.get("claim") or "")) for r in records]
     frequency = Counter(t for values in tokens for t in values)
 
     def score(index, query):

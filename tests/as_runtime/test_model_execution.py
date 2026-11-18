@@ -255,7 +255,7 @@ async def test_structured_repair_rejects_duplicate_or_degenerate_arguments(inval
         body = json.loads(request.content)
         calls.append(body)
         message = {"role": "assistant", "tool_calls": [{"id": "c", "type": "function",
-            "function": {"name": "__insightforge_structured_output",
+            "function": {"name": "__marketscout_structured_output",
                          "arguments": invalid if len(calls) == 1 else '{"value":2}'}}]}
         extracted = _wire_structured_args(message)
         if len(calls) == 1:

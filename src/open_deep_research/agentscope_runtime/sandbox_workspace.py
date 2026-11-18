@@ -1,7 +1,7 @@
 """AgentScope 沙箱 Workspace 适配（T031）。
 
 把 AgentScope 的 ``WorkspaceBase``/``BackendBase``/``WorkspaceManagerBase``
-三层桥接到现有 InsightForge 沙箱控制器（V7 可信控制器持有 Docker
+三层桥接到现有 MarketScout 沙箱控制器（V7 可信控制器持有 Docker
 Socket），本模块自身不导入 docker、不执行宿主机命令：
 
 - ``ControllerWorkspaceManager``：per-agent 隔离分配 workspace id，统一

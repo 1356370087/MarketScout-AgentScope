@@ -179,7 +179,7 @@ def test_v16_fingerprint_and_behavior_survive_new_defaults(monkeypatch):
     monkeypatch.setenv("RESEARCH_EFFICIENCY_MODE", "bounded")
     restored = RunConfig.restore(
         {
-            "schema": "insightforge.run-config.v1",
+            "schema": "marketscout.run-config.v1",
             "engine": "agentscope",
             "contract": frozen,
         }

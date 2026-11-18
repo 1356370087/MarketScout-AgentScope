@@ -68,7 +68,7 @@ async def test_long_handoff_approved_report_and_download(tmp_path, monkeypatch, 
 
     async def review(messages, schema):
         check(messages)
-        return StructuredResponse(content={"decision": "pass", "dimensions": {
+        return StructuredResponse(content={"decision": "pass", "coverage": [], "issue_resolutions": [], "dimensions": {
             key: 1.0 for key in ("coverage", "citation_correctness", "contradictions",
                                 "unsupported_claims", "redundancy", "executive_readability")},
             "citation_audit": [{"claim": "Supported finding", "citation_target": url,
@@ -92,7 +92,7 @@ async def test_long_handoff_approved_report_and_download(tmp_path, monkeypatch, 
                 state.research_brief = "Research the finding"
 
             async def research_supervisor(self, state):
-                state.findings = [{"research_topic": "finding", "evidence_registry": records,
+                state.findings = [{"task_id": "main-research", "research_topic": "finding", "evidence_registry": records,
                                    "compressed_research": "UNBOUNDED_HANDOFF" * 30000}]
                 state.completion_outcome = {"action": "complete"}
 
@@ -121,6 +121,7 @@ async def test_long_handoff_approved_report_and_download(tmp_path, monkeypatch, 
                     "enable_memory": False, "enable_human_in_loop": True,
                     "web_pipeline_mode": "enforced", "quality_evaluation_enabled": True,
                     "report_review_enabled": True, "report_review_fail_open": False,
+                    "final_report_model_max_tokens": 1024, "report_review_model_max_tokens": 1024,
                     "model_context_window_overrides": {"openai:gpt-4.1": 24000}}})
             assert response.status_code == 200, response.text
             run_id = response.json()["run_id"]

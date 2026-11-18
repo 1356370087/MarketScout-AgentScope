@@ -63,7 +63,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     if (dirty && href?.startsWith("/") && href !== pathname) { event.preventDefault(); event.stopPropagation(); setPendingPath(href); }
   }}>
     <a className="skip-link" href="#platform-main">跳转到后台内容</a>
-    <aside className={`platform-sidebar ${menu ? "open" : ""}`}><Link className="platform-brand" href="/admin"><ShieldCheck size={25} /><span>InsightForge<small>平台管理</small></span></Link>
+    <aside className={`platform-sidebar ${menu ? "open" : ""}`}><Link className="platform-brand" href="/admin"><ShieldCheck size={25} /><span>MarketScout<small>平台管理</small></span></Link>
       <button type="button" className="platform-menu-close secondary" aria-label="关闭管理导航" onClick={() => setMenu(false)}><X size={16} /></button>
       <WorkspaceSwitch identity={identity.data} admin />
       <nav aria-label="管理后台">{permitted.map(({ href, label, icon: Icon }) => <Link key={href} href={href} onClick={() => setMenu(false)} aria-current={pathname === href || href !== "/admin" && pathname.startsWith(href + "/") ? "page" : undefined}><Icon size={17} />{label}</Link>)}</nav>

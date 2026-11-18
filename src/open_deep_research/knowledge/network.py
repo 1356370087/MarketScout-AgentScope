@@ -32,6 +32,9 @@ def sync_authorizer(roles):
 class PublicSyncTransport(httpx.AsyncBaseTransport):
     """Validate the DNS answers used for dialing and the connected peer."""
 
+    def __init__(self, *, max_bytes=None, text_max_bytes=None):
+        self.max_bytes, self.text_max_bytes = max_bytes, text_max_bytes
+
     async def handle_async_request(self, request):
         validate_http_url_syntax(str(request.url))
         async with aiohttp.ClientSession(
@@ -41,6 +44,10 @@ class PublicSyncTransport(httpx.AsyncBaseTransport):
             validate_response_peer(response)
             body = bytearray()
             maximum = get_document_settings().max_file_bytes
+            if self.max_bytes is not None:
+                maximum = min(maximum, self.max_bytes)
+            if self.text_max_bytes is not None and response.content_type != "application/pdf":
+                maximum = min(maximum, self.text_max_bytes)
             async for chunk in response.content.iter_chunked(65536):
                 body.extend(chunk)
                 if len(body) > maximum:

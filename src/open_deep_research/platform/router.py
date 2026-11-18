@@ -414,7 +414,12 @@ async def maintenance(body: MaintenanceRequest, request: Request, user=Depends(r
 async def usage(user=Depends(real_user)):
     require(user, "platform.usage.read")
     async with get_store().engine.connect() as conn:
-        rows = (await conn.execute(select(s.months).order_by(s.months.c.period.desc(), s.months.c.owner_id).limit(500))).mappings()
+        unknown = select(func.coalesce(func.sum(s.charges.c.reserved), 0)).where(
+            s.charges.c.owner_id == s.months.c.owner_id, s.charges.c.period == s.months.c.period,
+            s.charges.c.status == "unknown").scalar_subquery()
+        rows = (await conn.execute(select(s.months, unknown.label("unknown_reserved"),
+            (s.months.c.reserved - unknown).label("in_flight")).order_by(
+            s.months.c.period.desc(), s.months.c.owner_id).limit(500))).mappings()
         pending = await conn.scalar(select(func.count()).select_from(s.charges).where(s.charges.c.status == "unknown"))
         return {"items": [dict(row) for row in rows], "unknown_operations": pending, "currency": "USD", "unit": "micro_usd", "timezone": "Asia/Shanghai"}
 

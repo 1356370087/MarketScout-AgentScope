@@ -75,7 +75,7 @@ def settings() -> RunKeySettings:
     return RunKeySettings(
         base_url="http://litellm-proxy:4000/v1",
         master_key="master",
-        team_id="insightforge-runs",
+        team_id="marketscout-runs",
         encryption_key=b"k" * 32,
         default_budget_micro_usd=2_000_000,
         maximum_budget_micro_usd=5_000_000,
@@ -110,7 +110,7 @@ def test_generate_service_key_sends_budget_and_allowlist() -> None:
     async def run() -> str:
         try:
             return await client.generate_service_key(
-                alias="insightforge-service",
+                alias="marketscout-service",
                 models=["if-evaluation-v1", "if-evaluation-v1"],
                 max_budget_usd=20.0,
                 budget_duration="30d",
@@ -124,11 +124,11 @@ def test_generate_service_key_sends_budget_and_allowlist() -> None:
     assert captured["path"] == "/key/generate"
     assert captured["auth"] == "Bearer master"
     body = captured["body"]
-    assert body["key_alias"] == "insightforge-service"
+    assert body["key_alias"] == "marketscout-service"
     assert body["models"] == ["if-evaluation-v1"]
     assert body["max_budget"] == 20.0
     assert body["budget_duration"] == "30d"
-    assert body["team_id"] == "insightforge-runs"
+    assert body["team_id"] == "marketscout-runs"
     assert body["metadata"]["purpose"] == "service"
     assert "duration" not in body  # service keys never expire
 

@@ -6,6 +6,9 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { Check, CheckCheck, ChevronRight, ExternalLink, Globe2, LoaderCircle, MessageSquareText, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
+import { iamApi } from "@/lib/auth";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { StatusBadge } from "@/components/ui/workspace";
@@ -16,7 +19,7 @@ import { useResearchRunStore } from "@/stores/research-run-store";
 
 const names: Record<string, string> = {
   network: "网络访问", tool_effect: "工具操作", command: "命令执行", filesystem: "文件访问", mcp_oauth: "服务授权",
-  clarification: "补充信息", plan_approval: "研究计划", outline_approval: "报告大纲", fetch_budget_approval: "抓取预算", report_time_extension_approval: "报告执行时间",
+  clarification: "补充信息", plan_approval: "研究计划", outline_approval: "报告大纲", fetch_budget_approval: "抓取预算", budget_approval: "运行预算", report_time_extension_approval: "报告执行时间",
 };
 const modes = { manual: "逐项人工", auto: "自动分类", open: "全部放行" };
 const capabilities: Record<string, string> = { "tool.egress": "只读网页访问", "tool.network": "工具网络访问", "proxy.connect": "代理连接", "external.extract": "外部提取服务", "browser.navigate": "浏览器访问" };
@@ -131,34 +134,50 @@ export function SecurityApprovalCard({ runId, approval, disabled = false, onReso
   </article>;
 }
 
+function MonthlyQuotaLink() {
+  const identity = useQuery({ queryKey: ["identity"], queryFn: iamApi.me, staleTime: 30_000, retry: false });
+  const permissions = identity.data?.permissions ?? [];
+  return permissions.includes("platform.usage.read") && permissions.includes("platform.quotas.write")
+    ? <p><Link href="/admin/usage" target="_blank">管理账户月度配额</Link></p> : null;
+}
+
 export function HumanActionCard({ runId, action, disabled = false, onResolved }: { runId: string; action: PendingHumanAction; disabled?: boolean; onResolved?: () => void }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sourceEdit, setSourceEdit] = useState<string | null>(null);
   const clarification = action.type === "clarification";
-  const budget = action.type === "fetch_budget_approval";
+  const budget = action.type === "fetch_budget_approval" || action.type === "budget_approval";
+  const budgetDimension = action.payload.dimension ?? (action.type === "fetch_budget_approval" ? "fetch_calls" : undefined);
+  const monthlyBudget = budget && action.payload.budget_scope === "account_month";
+  const needsRunLimit = action.type === "budget_approval" && !monthlyBudget;
+  const moneyBudget = budgetDimension === "cost_micro_usd";
+  const budgetLabels = { cost_micro_usd: "模型费用（美元）", fetch_calls: "网页抓取次数", tool_calls: "工具调用次数", model_calls: "模型调用次数", input_tokens: "输入 Token 数", output_tokens: "输出 Token 数" };
+  const [budgetAmount, setBudgetAmount] = useState("");
+  const newBudgetLimit = Math.round(Number(budgetAmount) * (moneyBudget ? 1_000_000 : 1));
+  const validBudget = !!budgetDimension && budgetAmount.trim() !== "" && Number.isSafeInteger(newBudgetLimit) && newBudgetLimit > 0 && (moneyBudget || Number.isInteger(Number(budgetAmount)));
   const extension = action.type === "report_time_extension_approval";
   const suggestedMinutes = Math.min(30, Math.max(5, Math.ceil((action.payload.suggested_extension_seconds ?? 300) / 60)));
   const [extensionMinutes, setExtensionMinutes] = useState(suggestedMinutes);
   const validMinutes = Number.isInteger(extensionMinutes) && extensionMinutes >= 5 && extensionMinutes <= 30;
-  const allowed = action.allowed_actions ?? (clarification ? ["answer", "cancel"] : (budget || extension) ? ["approve", "deny", "cancel"] : ["approve", "revise", "cancel"]);
+  const allowed = action.allowed_actions ?? (action.type === "budget_approval" ? ["approve", "cancel"] : clarification ? ["answer", "cancel"] : (budget || extension) ? ["approve", "deny", "cancel"] : ["approve", "revise", "cancel"]);
   const content = action.payload.question ?? action.payload.content_markdown ?? action.payload.research_plan ?? action.payload.report_outline ?? "";
   async function submit(kind: string) {
     if (disabled || busy || inFlight.has(`${runId}:${action.action_id}`) || useResearchRunStore.getState().runId !== runId) return;
+    if (needsRunLimit && kind === "approve" && !validBudget) { setError("请填写明确的新总上限。"); return; }
     if (extension && kind === "approve" && !validMinutes) { setError("请选择 5–30 分钟的整数时长。"); return; }
     inFlight.add(`${runId}:${action.action_id}`);
     setBusy(true); setError("");
     try {
       const source_selection = sourceEdit === null ? undefined : { mode: "specific" as const, sources: sourceEdit.split(/[\s,，]+/).filter(Boolean).map(domain => ({ type: "domain" as const, domain })) };
-      await researchApi.humanAction(runId, action.action_id, kind, message, { source_selection, expected_version: action.payload.version, ...(extension && kind === "approve" ? { extension_seconds: extensionMinutes * 60 } : {}) });
+      await researchApi.humanAction(runId, action.action_id, kind, message, { source_selection, expected_version: action.payload.version, ...(extension && kind === "approve" ? { extension_seconds: extensionMinutes * 60 } : {}), ...(needsRunLimit && kind === "approve" && budgetDimension ? { limits: { [budgetDimension]: newBudgetLimit } } : {}) });
       resolvedHumanActionIds.add(`${runId}:${action.action_id}`);
       if (useResearchRunStore.getState().runId !== runId) return;
       if (useResearchRunStore.getState().pendingHumanAction?.action_id === action.action_id) useResearchRunStore.setState({ pendingHumanAction: undefined });
       onResolved?.();
     } catch (cause) { if (useResearchRunStore.getState().runId === runId) setError(errorMessage(cause)); } finally { inFlight.delete(`${runId}:${action.action_id}`); setBusy(false); }
   }
-  return <article className="approval-detail" aria-busy={busy}><div className="approval-detail-body"><span className="approval-kicker">{names[action.type]} · 等待你的决定</span><h3>{clarification ? "帮助我们明确研究方向" : extension ? "是否延长报告执行时间？" : budget ? "是否继续收集更多资料？" : `请审阅${names[action.type]}`}</h3><ApprovalMarkdown>{content}</ApprovalMarkdown>{action.type === "plan_approval" && <SourcePlanDetails action={action} edit={sourceEdit} onEdit={setSourceEdit} />}{(allowed.includes("answer") || allowed.includes("revise")) && <label className="approval-message">{clarification ? "补充信息" : "修改意见"}<textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder={clarification ? "补充你希望研究的范围和重点" : "说明需要调整的内容"} /></label>}{extension && <section className="approval-scope"><p>已暂停执行和计时。延期仅用于报告写作、引用检查及复核，不重启外部研究，也不增加费用或抓取额度。</p><p>剩余约 {Math.ceil((action.payload.remaining_seconds ?? 0) / 60)} 分钟，预计还需约 {Math.ceil((action.payload.estimated_report_seconds ?? 0) / 60)} 分钟；这是第 {(action.payload.extension_count ?? 0) + 1} 次请求，最多 {action.payload.max_requests ?? 2} 次。</p><label>延长分钟数<input type="number" min={5} max={30} step={1} value={Number.isNaN(extensionMinutes) ? "" : extensionMinutes} onChange={e => setExtensionMinutes(e.currentTarget.valueAsNumber)} disabled={disabled || busy} /></label>{extensionMinutes < suggestedMinutes && <p>低于建议的 {suggestedMinutes} 分钟，可能只能交付受限结果。</p>}</section>}{budget && <p className="approval-muted">不增加预算时，会使用现有资料生成部分报告。</p>}{error && <p className="approval-error" role="alert">{error}</p>}</div><footer className="approval-actions">{allowed.includes("cancel") && <button className="approval-reject" disabled={disabled || busy} onClick={() => submit("cancel")}>取消整项研究</button>}<div>{allowed.includes("deny") && <button className="secondary" disabled={disabled || busy} onClick={() => submit("deny")}>{extension ? "不延长，交付当前可用结果" : "不增加，生成部分报告"}</button>}{allowed.includes("revise") && <button className="secondary" disabled={disabled || busy || !message.trim()} onClick={() => submit("revise")}>提交修改</button>}{allowed.includes("approve") && <button className="primary" disabled={disabled || busy || (extension && !validMinutes)} onClick={() => submit("approve")}>{busy && <LoaderCircle size={15} className="approval-spin" />}{extension ? "延长并继续" : budget ? "增加预算并继续" : "批准并继续"}</button>}{allowed.includes("answer") && <button className="primary" disabled={disabled || busy || !message.trim()} onClick={() => submit("answer")}>回答并继续</button>}</div></footer></article>;
+  return <article className="approval-detail" aria-busy={busy}><div className="approval-detail-body"><span className="approval-kicker">{names[action.type]} · 等待你的决定</span><h3>{clarification ? "帮助我们明确研究方向" : extension ? "是否延长报告执行时间？" : monthlyBudget ? "账户月度配额不足" : budget ? "是否调整本次运行预算？" : `请审阅${names[action.type]}`}</h3><ApprovalMarkdown>{content}</ApprovalMarkdown>{action.type === "plan_approval" && <SourcePlanDetails action={action} edit={sourceEdit} onEdit={setSourceEdit} />}{(allowed.includes("answer") || allowed.includes("revise")) && <label className="approval-message">{clarification ? "补充信息" : "修改意见"}<textarea value={message} onChange={(e) => setMessage(e.target.value)} placeholder={clarification ? "补充你希望研究的范围和重点" : "说明需要调整的内容"} /></label>}{extension && <section className="approval-scope"><p>已暂停执行和计时。延期仅用于报告写作、引用检查及复核，不重启外部研究，也不增加费用或抓取额度。</p><p>剩余约 {Math.ceil((action.payload.remaining_seconds ?? 0) / 60)} 分钟，预计还需约 {Math.ceil((action.payload.estimated_report_seconds ?? 0) / 60)} 分钟；这是第 {(action.payload.extension_count ?? 0) + 1} 次请求，最多 {action.payload.max_requests ?? 2} 次。</p><label>延长分钟数<input type="number" min={5} max={30} step={1} value={Number.isNaN(extensionMinutes) ? "" : extensionMinutes} onChange={e => setExtensionMinutes(e.currentTarget.valueAsNumber)} disabled={disabled || busy} /></label>{extensionMinutes < suggestedMinutes && <p>低于建议的 {suggestedMinutes} 分钟，可能只能交付受限结果。</p>}</section>}{monthlyBudget && <MonthlyQuotaLink />}{budget && (!action.payload.budget_scope || action.payload.budget_scope === "unknown") && <p>这条历史回执未记录预算归属，请核实运行上限和账户配额。</p>}{budget && action.payload.required != null && action.payload.available != null && <p>本次需要 {moneyBudget ? (action.payload.required / 1_000_000).toFixed(6) + " 美元" : action.payload.required}，可用 {moneyBudget ? (action.payload.available / 1_000_000).toFixed(6) + " 美元" : action.payload.available}。</p>}{needsRunLimit && <section className="approval-scope"><p>触及限制：{budgetDimension ? budgetLabels[budgetDimension] : "预算维度待同步"}。这里填写本次运行的新总上限，不是追加额度。</p><label>新的运行总上限{moneyBudget ? "（美元）" : "（次数或 Token）"}<input type="number" min={moneyBudget ? 0.01 : 1} step={moneyBudget ? 0.01 : 1} value={budgetAmount} onChange={e => setBudgetAmount(e.currentTarget.value)} disabled={disabled || busy} /></label><p>账户月度配额和管理员限制仍然生效；账户额度不足时，须先由管理员调整。未提交审批时保持暂停。</p></section>}{error && <p className="approval-error" role="alert">{error}</p>}</div><footer className="approval-actions">{allowed.includes("cancel") && <button className="approval-reject" disabled={disabled || busy} onClick={() => submit("cancel")}>取消整项研究</button>}<div>{allowed.includes("deny") && <button className="secondary" disabled={disabled || busy} onClick={() => submit("deny")}>{extension ? "不延长，交付当前可用结果" : "不增加，生成部分报告"}</button>}{allowed.includes("revise") && <button className="secondary" disabled={disabled || busy || !message.trim()} onClick={() => submit("revise")}>提交修改</button>}{allowed.includes("approve") && <button className="primary" disabled={disabled || busy || (extension && !validMinutes) || (needsRunLimit && !validBudget)} onClick={() => submit("approve")}>{busy && <LoaderCircle size={15} className="approval-spin" />}{extension ? "延长并继续" : monthlyBudget ? "重新检查账户配额" : action.type === "fetch_budget_approval" ? "增加预算并继续" : budget ? "确认新上限并继续" : "批准并继续"}</button>}{allowed.includes("answer") && <button className="primary" disabled={disabled || busy || !message.trim()} onClick={() => submit("answer")}>回答并继续</button>}</div></footer></article>;
 }
 
 function TargetPermission({ runId, target, disabled, refresh }: { runId: string; target: EgressTarget; disabled: boolean; refresh: () => void }) {

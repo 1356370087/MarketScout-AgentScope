@@ -145,7 +145,7 @@ _PAYLOAD_KEYS: dict[str, set[str]] = {
         "draft_sha256", "sha256", "hash",
     },
     "approval.required": {
-        "action_id", "approval_type", "status", "plan_id", "revision",
+        "action_id", "approval_type", "status", "plan_id", "revision", "dimension", "budget_scope", "required", "available",
         "content_markdown", "allowed_actions",
         "source_plan", "version", "requirements",
         "checkpoint", "report_step", "remaining_seconds", "estimated_report_seconds",
@@ -853,6 +853,7 @@ def project_public_events(events: list[PublicEvent]) -> PublicRunProjection:
                     **{key: payload[key] for key in (
                         "checkpoint", "report_step", "remaining_seconds", "estimated_report_seconds",
                         "suggested_extension_seconds", "extension_count", "max_requests", "completed_steps",
+                        "dimension", "budget_scope", "required", "available",
                     ) if key in payload},
                 },
                 "allowed_actions": payload.get("allowed_actions", ["approve", "revise", "cancel"]),

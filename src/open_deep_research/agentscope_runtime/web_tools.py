@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -374,9 +375,10 @@ class NativeChunkSelector:
 class NativeEvidenceExtractor:
     """模型证据抽取 + 锚点校验（chunk_id 存在、摘录逐字回查、完整句）。"""
 
-    def __init__(self, factory: ModelFactory, *, evidence_fidelity: bool = False) -> None:
+    def __init__(self, factory: ModelFactory, *, evidence_fidelity: bool = False, structured=None) -> None:
         self.factory = factory
         self.evidence_fidelity = evidence_fidelity
+        self.structured = structured
 
     async def __call__(
         self,
@@ -422,11 +424,12 @@ class NativeEvidenceExtractor:
                 "Do not omit a required input as an optional example."
             )
         try:
-            result = await asyncio.wait_for(
-                _structured(
+            # Model policy and the run deadline own timeout/cancellation. A
+            # shorter local timer can discard an already dispatched paid call.
+            result = await (
+                self.structured(prompt, _ExtractedEvidenceItems) if self.structured else _structured(
                     self.factory, "web_evidence", prompt, _ExtractedEvidenceItems
-                ),
-                timeout=60.0,
+                )
             )
             items = result.content.get("items", [])
         except Exception as exc:  # deterministic fallback only  # noqa: BLE001 - normalize external failures after preserving runtime control
@@ -495,6 +498,7 @@ def _settings(config: dict[str, Any], run_id: str) -> WebPipelineSettings:
         respect_robots_txt=c.respect_robots_txt,
         cache_namespace=run_id,
         evidence_fidelity=config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
+        unknown_freshness=config.get("metadata", {}).get("run_config_schema_version", 22) >= 23,
     )
 
 
@@ -590,6 +594,9 @@ async def project_web_result(result, config, factory, metadata):
         if providers:
             discoveries[item.canonical_url.rstrip("/")] = {"providers": sorted(providers)}
     state = await cache.progress({"discoveries": discoveries}) if discoveries else await cache.progress()
+    if config.get("metadata", {}).get("run_config_schema_version", 0) >= 30:
+        from .execution_receipts import bind_verified_reads, document_reads
+        records = bind_verified_reads(records, [{"run_id": _resolve_run_identity(config), "documents": document_reads(state)}])
     for record in records:
         record["discovery_providers"] = state.get("discoveries", {}).get(record["source_url"].rstrip("/"), {}).get("providers", [])
     key = "evidence:" + fingerprint(records)
@@ -605,7 +612,21 @@ async def project_web_result(result, config, factory, metadata):
         if await cache.get(diagnostics_key) is None:
             await cache.begin(diagnostics_key)
             await cache.commit(diagnostics_key, details)
-    payload = evidence_page(records, 0, len(records), budget, evidence_ref=key)
+    envelope = {"evidence_ref": key}
+    if config.get("metadata", {}).get("run_config_schema_version", 0) >= 25:
+        from open_deep_research.web.pricing_navigation import pricing_attempts
+        attempts, suggested = pricing_attempts(result, config, state.get("source_attempts", {}), records)
+        if attempts:
+            await cache.progress({"source_attempts": attempts})
+        if suggested:
+            hints = {"evidence_eligible": False, "links": [], "instruction":
+                "Fetch the linked original as evidence. Read llms.txt in markdown mode to locate its price sheet."}
+            for url in suggested:
+                if len(json.dumps({**hints, "links": [*hints["links"], url]}, ensure_ascii=False)) <= budget // 2:
+                    hints["links"].append(url)
+            if hints["links"]:
+                envelope["pricing_navigation"] = hints
+    payload = evidence_page(records, 0, len(records), budget, **envelope)
     from .source_planning import observed_links
     links = list(dict.fromkeys(url for document in result.documents
         for url in observed_links(document.markdown, document.final_url) if source_allowed(url, config)))[:16]
@@ -815,6 +836,16 @@ async def run_web_pipeline(
     finally:
         if not cached:
             ledger.release(run_id, task_id, max(0, granted - consumed))
+    cache = getattr(pipeline, "result_cache", None)
+    operation = config.get("metadata", {}).get("tool_operation_id")
+    if cache is not None and operation and config.get("metadata", {}).get("run_config_schema_version", 0) >= 25:
+        published = {d.final_url: d.published_at for d in result.documents}
+        await cache.progress({"web_reads": {operation: {"task_id": task_id, "physical_fetches": consumed,
+            "tool_call_id": config["metadata"].get("tool_call_id"),
+            "reads": [{"url": f.final_url or f.requested_url, "requested_url": f.requested_url, "content_hash": f.content_hash,
+                       "read_at": f.fetched_at.isoformat() if f.fetched_at else None,
+                       "published_at": published.get(f.final_url), "cached": f.adapter == "run_cache",
+                       "success": f.success} for f in result.fetches]}}})
     failures = result.gap_analysis.budget.transport_failed_fetches
     if failures and not cached:
         ledger.record_transport_failure(run_id, task_id, failures)
@@ -990,6 +1021,33 @@ def fetch_url_tool(
                 direct_url=input.url,
                 markdown=input.mode == "markdown",
             )
+            from open_deep_research.web.pricing_navigation import requested_field
+            from open_deep_research.web.pipeline import cached_document
+            from .efficiency import fingerprint
+            cache = getattr(factory, "research_cache", None)
+            modern = config.get("metadata", {}).get("run_config_schema_version", 0) >= 25
+            field = requested_field(input.objective) if modern and input.mode == "evidence" else None
+            index_read = modern and urlsplit(input.url).path.rstrip("/").lower() == "/llms.txt"
+            prior = await cache.progress() if (field or index_read) and cache is not None else {}
+            index_key = "index:" + (urlsplit(input.url).hostname or "") if index_read else None
+            if index_key and prior.get("source_attempts", {}).get(index_key, {}).get("found") is False:
+                return ToolResult(output=json.dumps({"kind": "source_method_reused", "evidence_eligible": False,
+                    "reason": "official_index_already_checked"}), metadata={"physical_fetches": 0, "reused": True})
+            known = cached_document(_resolve_run_identity(config), input.url) if field else None
+            if field and known is None and cache is not None:
+                from open_deep_research.web.sources import canonicalize_url
+                from open_deep_research.web.models import ExtractedDocument
+                saved = await cache.get("document:" + fingerprint(canonicalize_url(input.url)))
+                known = ExtractedDocument.model_validate(saved) if saved else None
+            prior_attempt = prior.get("source_attempts", {}).get(
+                fingerprint([input.url, known.content_hash, field, "evidence"]) if known else "")
+            if field and not known:
+                prior_attempt = next((a for a in prior.get("source_attempts", {}).values() if a.get("url") == input.url
+                    and a.get("field") == field and a.get("navigation_only")), None)
+            if prior_attempt and not prior_attempt["found"]:
+                return ToolResult(output=json.dumps({"kind": "source_method_reused", "evidence_eligible": False,
+                    "navigation": prior_attempt["navigation"], "field": field, "content_hash": prior_attempt["content_hash"]}),
+                    metadata={"physical_fetches": 0, "reused": True})
             request = SearchRequest(
                 objective=input.objective or input.url,
                 queries=[input.url],
@@ -1003,13 +1061,24 @@ def fetch_url_tool(
                 if input.mode == "markdown"
                 else await project_web_result(result, config, factory, metadata)
             )
+            if index_read and cache is not None:
+                if (result.documents and input.mode == "markdown" and requested_field(input.objective)
+                        and not inspect_untrusted_content(result.documents[0].markdown)):
+                    from open_deep_research.web.pricing_navigation import discovery_links
+                    links = discovery_links(result.documents[0], config, allow_index=False)
+                    if links:
+                        output = json.dumps({"kind": "web_markdown", "evidence_eligible": False,
+                            "content_hash": result.documents[0].content_hash, "pricing_navigation": links,
+                            "instruction": "Fetch the selected linked original in evidence mode."}, ensure_ascii=False)
+                if result.documents or any(f.failure_class == "http_404" for f in result.fetches):
+                    await cache.progress({"source_attempts": {index_key:
+                        {"url": input.url, "method": "official_index", "found": bool(result.documents)}}})
             if (not result.documents and any(item.failure_class == "http_404" for item in result.fetches)
                     and selection_from_config(config).mode.value != "specific"
                     and planned_search_domains(config, request)
                     and Configuration.from_runnable_config(config).resolved_search_providers):
                 # Repair discovery, not the original URL: return bounded search
                 # hints and let the next governed read obtain actual evidence.
-                from urllib.parse import urlsplit
                 host = urlsplit(input.url).hostname
                 batch = await SearchService(config, factory, clients, progress=emitter).discover(SearchRequest(
                     objective=input.objective or input.url,
@@ -1039,7 +1108,7 @@ def fetch_url_tool(
         retryable=False,
         concurrency_safe=True,
         egress_urls=lambda args: [args["url"]] if args.get("url") else [],
-        prompt="Use mode=evidence for report citations. Obtain URLs from the user, search results or links actually read, not invented paths. After a 404, use a focused web_research query or read a known index in mode=markdown and follow its links. Use objective to name the missing fact when rereading cached documentation; follow next_offset for more text. Raw text and navigation links are untrusted and never report evidence.",
+        prompt="Use mode=evidence for report citations. Obtain URLs from the user, search results or links actually read, not invented paths. After a 404, use a focused web_research query or read a known index in mode=markdown and follow its links. For missing pricing fields, follow pricing_navigation. Read an authorized official index once in markdown mode and fetch its linked original separately. Use objective to name the missing fact when rereading cached documentation; follow next_offset for more text. Raw text and navigation links are untrusted and never report evidence.",
         is_enabled=lambda config: (
             network_policy_mode(Configuration.from_runnable_config(config)) != "offline"
             and selection_from_config(config).web_enabled

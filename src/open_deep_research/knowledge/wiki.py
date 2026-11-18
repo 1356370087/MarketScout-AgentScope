@@ -58,6 +58,7 @@ async def create_page(
     title: str,
     template: str = "company_profile",
     entity_name: str = "",
+    page_id: str | None = None,
 ) -> dict[str, Any]:
     """Create one wiki page from a template; initial revision is a draft."""
     actor_id = document_owner_id(actor_id)
@@ -78,17 +79,29 @@ async def create_page(
         )
     pool = await get_document_pool()
     async with pool.acquire() as connection, connection.transaction():
+        requested_id = page_id or str(uuid.uuid4())
         page_id = await connection.fetchval(
             """INSERT INTO knowledge_pages
-                 (knowledge_base_id, title, template, entity_name, current_revision_id, created_by)
-               VALUES ($1::uuid, $2, $3, $4, NULL, $5::uuid)
+                 (knowledge_base_id, title, template, entity_name, current_revision_id, created_by, id)
+               VALUES ($1::uuid, $2, $3, $4, NULL, $5::uuid, $6::uuid)
+               ON CONFLICT(id) DO NOTHING
              RETURNING id""",
             knowledge_base_id,
             title,
             template,
             entity_name,
             actor_id,
+            requested_id,
         )
+        if page_id is None:
+            existing = await connection.fetchrow("""SELECT p.id,p.current_revision_id,r.revision_number,r.status
+                FROM knowledge_pages p JOIN knowledge_page_revisions r ON r.id=p.current_revision_id
+                WHERE p.id=$1::uuid AND p.knowledge_base_id=$2::uuid AND p.created_by=$3::uuid""",
+                requested_id, knowledge_base_id, actor_id)
+            if existing is None:
+                raise WikiError("wiki_idempotency_scope_conflict")
+            return {"id": str(existing["id"]), "revision_id": str(existing["current_revision_id"]),
+                    "revision_number": existing["revision_number"], "status": existing["status"]}
         revision_id = await connection.fetchval(
             """INSERT INTO knowledge_page_revisions
                  (page_id, revision_number, blocks, status, base_revision, created_by)
@@ -267,6 +280,10 @@ async def publish_page(actor_id: str, page_id: str) -> dict[str, Any] | None:
         await editorial.audit(
             connection, actor_id, page["knowledge_base_id"], "wiki_publish", page_id
         )
+        from open_deep_research.intelligence.publications import record_asset_publication
+        await record_asset_publication(connection, page["knowledge_base_id"], "wiki_published", page_id,
+            published["id"], "\n\n".join(str(block.get("content", "")) for block in blocks), actor_id,
+            previous_id=page.get("published_revision_id"))
     return {"revision_number": int(published["revision_number"]), "status": "published"}
 
 
@@ -301,7 +318,7 @@ async def get_page(
         history = []
         if include_history:
             history_rows = await connection.fetch(
-                """SELECT id, revision_number, status, created_at, published_at
+                """SELECT id, revision_number, status, create_time AS created_at, published_at
                      FROM knowledge_page_revisions
                     WHERE page_id=$1::uuid AND ($2 OR status='published') ORDER BY revision_number DESC LIMIT 20""",
                 page_id,

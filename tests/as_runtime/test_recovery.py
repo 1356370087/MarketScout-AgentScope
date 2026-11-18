@@ -789,8 +789,9 @@ async def test_multiple_native_confirmations_are_consumed_durably(store):
     assert not await store.pending_decisions(lease)
 
 
+@pytest.mark.parametrize("strategy", ["delegated", "adaptive"])
 async def test_complete_pipeline_recovers_after_tool_commit_without_repeating_tool(
-    store, tmp_path
+    store, tmp_path, strategy
 ):
     from types import SimpleNamespace
 
@@ -814,7 +815,8 @@ async def test_complete_pipeline_recovers_after_tool_commit_without_repeating_to
     class ProcessCrash(BaseException):
         pass
 
-    config = cfg(max_researcher_iterations=4, quality_evaluation_min_sources=1)
+    config = cfg(max_researcher_iterations=4, quality_evaluation_min_sources=1,
+                 research_execution_strategy=strategy, report_review_enabled=False)
     run_config = RunConfig.compile(config)
     run_id = uuid4().hex
     await store.create_from_config(
@@ -845,7 +847,7 @@ async def test_complete_pipeline_recovers_after_tool_commit_without_repeating_to
                 "researcher": Model(
                     [
                         [tool_call("web_research", "search")],
-                        [tool_call("ResearchComplete", "worker-done")],
+                        [tool_call("ResearchComplete", "worker-done", summary="市场规模见登记证据 ev1。")],
                     ]
                 ),
             }

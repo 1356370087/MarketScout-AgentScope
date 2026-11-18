@@ -669,7 +669,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the worker CLI."""
-    parser = argparse.ArgumentParser(description="InsightForge report publisher")
+    parser = argparse.ArgumentParser(description="MarketScout report publisher")
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--healthcheck", action="store_true")
     args = parser.parse_args(argv)

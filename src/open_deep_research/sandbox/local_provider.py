@@ -23,7 +23,7 @@ def task_workspace(config: RuntimeConfig) -> Path:
     """Resolve the task-owned workspace without accepting a caller path root."""
     if config_getenv("SANDBOX_TASK_TOKEN"):
         return Path(
-            config_getenv("INSIGHTFORGE_TASK_WORKSPACE_ROOT", "/workspace/work")
+            config_getenv("MARKETSCOUT_TASK_WORKSPACE_ROOT", "/workspace/work")
         ).resolve()
     configurable = Configuration.from_runnable_config(config)
     metadata = config.get("metadata", {})

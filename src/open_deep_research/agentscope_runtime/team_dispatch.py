@@ -44,7 +44,7 @@ class DockerTeamLauncher:
             if self.closed:
                 raise RuntimeError("team launcher closed")
             name = (
-                "insightforge-team-"
+                "marketscout-team-"
                 + hashlib.sha256(
                     f"{lease.run_id}:{lease.fence}:{task_id}".encode()
                 ).hexdigest()[:24]
@@ -71,7 +71,7 @@ class DockerTeamLauncher:
                 "--name",
                 name,
                 "--label",
-                "insightforge.role=native-team",
+                "marketscout.role=native-team",
                 "--env-file",
                 self.env_file,
                 "--env",

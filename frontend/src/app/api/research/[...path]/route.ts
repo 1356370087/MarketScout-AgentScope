@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { authenticatedProxy } from "@/lib/server-auth";
 
-const allowed = /^(capabilities|models|documents(?:\/.*)?|knowledge-bases(?:\/.*)?|knowledge(?:\/.*)?|runs(?:\/.*)?|usage(?:\/.*)?|observability(?:\/.*)?)$/;
+const allowed = /^(capabilities|models|documents(?:\/.*)?|knowledge-bases(?:\/.*)?|knowledge(?:\/.*)?|workspaces(?:\/.*)?|intelligence(?:\/.*)?|integrations\/feishu(?:\/.*)?|runs(?:\/.*)?|usage(?:\/.*)?|observability(?:\/.*)?)$/;
 
 async function proxy(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;

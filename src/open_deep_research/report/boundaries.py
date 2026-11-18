@@ -94,11 +94,21 @@ def evaluate_formula(expression, demands):
 
 
 FORMULA_MARKER = re.compile(r"\b(?:max|min)\s*[（(]|最大值|最小值|最高值|最低值|较大者|较高者|较小者|较低者|峰值|求和|之和|合计|总和|\b(?:maximum|minimum|sum)\b|(?:higher|lower|larger|smaller|greater)\s+of", re.I)
+RESOURCE_MARKER = re.compile(r"资源|容器|内存|\b(?:resources?|requests?|limits?|cpu|memory|demands?|pod)\b", re.I)
+LIFECYCLE_MARKER = re.compile(r"初始化|持续运行|辅助组件|主组件|\b(?:init|initialization|persistent|transient|steady|helper|sidecar)\b", re.I)
 
 
-def needs_boundary_audit(markdown):
+def boundary_scope_requested(contract):
+    text = "\n".join(str(row.get("text", "")) for row in (contract or {}).get("requirements", [])
+                     if row.get("kind", "factual") == "factual")
+    return bool(RESOURCE_MARKER.search(text) and (
+        FORMULA_MARKER.search(text) or re.search(r"计算|公式|推导|calculate|compute|formula|derive|sizing", text, re.I)))
+
+
+def needs_boundary_audit(markdown, *, scope=None):
     return bool(FORMULA_MARKER.search(markdown)
-                and re.search(r"并发|同时|持续运行|阶段|concurr|simultaneous|persistent|phase", markdown, re.I))
+                and (boundary_scope_requested(scope) or (
+                    RESOURCE_MARKER.search(markdown) and LIFECYCLE_MARKER.search(markdown))))
 
 
 def phase_calculations(case_ids):
@@ -208,10 +218,13 @@ async def audit_boundaries(payload, config, cfg, invoke):
         "hypothetical ordering. Helper is persistent support, transient is finite INITIALIZATION "
         "work, and steady is the main workload that begins after initialization. Each listed phase "
         "contains its simultaneously active components. Do not compute resource formulas. "
-        "Mark an ordering inapplicable only for a real user/source exclusion. Required case IDs "
+        "Mark an ordering applicable only when the original task covers resource aggregation and the "
+        "submitted sources positively establish these components and their ordering. Missing scope or "
+        "support means inapplicable; generic deployment, version or pricing prose is not lifecycle proof. Required case IDs "
         "were already established from these sources and remain applicable across revisions. "
         "Return one check per case_id, with applicable, actual supporting evidence_ids and a concise explanation.",
         {**flags, "cases": [{"case_id": row["case_id"], "phases": row["phases"]} for row in CASES],
+         "coverage_contract": payload["coverage_contract"],
          "scope_context": payload["coverage_contract"].get("scope_context", []),
          "required_case_ids": payload.get("required_boundary_cases", [])},
         source_passage_view(payload["evidence_registry"]), SourceBoundaryAudit, "lead.report_boundary_review",

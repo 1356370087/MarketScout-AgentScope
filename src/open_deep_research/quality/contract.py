@@ -102,6 +102,7 @@ def research_delegation_scopes(contract):
 RequirementKind = Literal["factual", "process", "deliverable"]
 
 _SINGLE_RESEARCH_TASK_RE = re.compile(
+    r"^(?:请你|请)?\s*(?:只用|仅用|只使用|仅使用)\s*(?:一个|一项|1个|单一)主研究任务(?:[。.!！\s]|完成|进行|$)|"
     r"^(?:请你|请)?\s*(?:(?:采用|使用|只用|仅用|用|只创建|仅创建|只启动|仅启动)\s*"
     r"(?:一个|一项|1个|单一)(?:实质)?(?:子)?研究任务|单一研究任务)"
     r"(?:[。.!！\s]|完成|进行|$)|"
@@ -114,6 +115,8 @@ _SINGLE_RESEARCH_TASK_RE = re.compile(
 # subtask can never prove them with web evidence ("至少并行两个研究员",
 # "不需要澄清", citation-scope rules).
 _PROCESS_REQUIREMENT_RE = re.compile(
+    r"^(?:请\s*)?(?:最多|至多|至少|不超过)\s*(?:读取|访问|抓取)\s*"
+    r"[一二两三四五六七八九十百千万\d]+\s*(?:个|份|页)?\s*(?:相关|官方)?\s*(?:网页|页面|原文)?\s*[。.]?$|"
     r"^(?:请\s*)?(?:不要|不得|禁止|不)(?:把|将).{0,32}(?:当作|视为).{0,16}(?:性能)?基准\s*$|"
     r"^(?:请\s*)?(?:不要|不得|禁止|不)(?:推测|编造|杜撰)(?:任何)?(?:未公开的?)?(?:性能数字|性能数据|性能指标)\s*$|"
     r"^(?:请\s*)?(?:仅|只)(?:直接)?(?:读取|访问|使用)(?:所选|指定|该|此)\s*(?:URL|网址|网页|页面|来源)\s*$|"
@@ -215,6 +218,18 @@ _COMPARISON_AXIS_INTRO_RE = re.compile(
     r"(?:三地(?:的)?(?:以下维度)?[：:]?|以下维度[：:])"
 )
 _SUBITEM_MARKER_RE = re.compile(r"[\(（]\d{1,2}[\)）]\s*")
+
+
+def research_page_limit(text: str) -> int | None:
+    """Recognize an explicit limit on research reads, independently of product capabilities."""
+    value = text.strip().rstrip("。.!！").strip()
+    pattern = (r"(?:本次研究|本次任务|本轮研究|全程|网页)?\s*"
+               r"(?:(?:最多|至多)\s*(?:实际|直接)?(?:读取|抓取|访问|阅读)|"
+               r"(?:实际|直接)?(?:读取|抓取|访问|阅读)\s*(?:最多|至多|不超过))\s*"
+               r"(\d+)\s*(?:个|份)?\s*(?:相关|官方|不同|公开|原始)*\s*(?:网页|页面|页)")
+    match = re.fullmatch(pattern, value) or re.fullmatch(
+        r"(?:read|visit|fetch)\s+(?:at most|up to|no more than)\s+(\d+)\s+(?:relevant |official |different )*pages?", value, re.I)
+    return int(match[1]) if match else None
 
 
 def classify_requirement_kind(text: str, *, schema_version: int = 3) -> RequirementKind:

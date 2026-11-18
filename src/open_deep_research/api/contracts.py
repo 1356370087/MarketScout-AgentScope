@@ -1,9 +1,10 @@
 """Existing browser request contracts shared by both engine adapters."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from open_deep_research.budgets import BudgetDimension
 from open_deep_research.documents.contracts import SourceSelection
 from open_deep_research.report.models import PublisherTheme
 
@@ -21,6 +22,14 @@ class RunRequest(BaseModel):
     publication_theme: PublisherTheme | None = None
 
 
+class DraftReviewRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    base_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    max_cost_micro_usd: int = Field(gt=0, strict=True)
+    urls: list[str] = Field(default_factory=list, max_length=12)
+    requirement_ids: list[str] = Field(default_factory=list, max_length=60)
+
+
 class ResumeRunRequest(BaseModel):
     """Runtime overrides and credentials for explicitly resuming a run."""
 
@@ -36,6 +45,7 @@ class HumanActionRequest(BaseModel):
     source_selection: SourceSelection | None = None
     expected_version: int | None = Field(default=None, ge=1)
     extension_seconds: int | None = Field(default=None, ge=300, le=1800, multiple_of=60)
+    limits: dict[BudgetDimension, Annotated[int, Field(strict=True, gt=0)]] | None = None
 
 
 class SecurityApprovalDecisionRequest(BaseModel):

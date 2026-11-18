@@ -128,11 +128,11 @@ def test_prometheus_alert_rules_cover_spec_signals() -> None:
     alerts = {rule["alert"]: rule for rule in rules}
 
     assert set(alerts) == {
-        "InsightForgeHighRunFailureRate",
-        "InsightForgeTerminalRateLimits",
-        "InsightForgeObservabilityExportErrors",
-        "InsightForgeResearchQueueWaitHigh",
-        "InsightForgeRunsDirQuotaHigh",
+        "MarketScoutHighRunFailureRate",
+        "MarketScoutTerminalRateLimits",
+        "MarketScoutObservabilityExportErrors",
+        "MarketScoutResearchQueueWaitHigh",
+        "MarketScoutRunsDirQuotaHigh",
     }
     expressions = "\n".join(str(rule["expr"]) for rule in rules)
     for metric in (
@@ -143,17 +143,17 @@ def test_prometheus_alert_rules_cover_spec_signals() -> None:
         "open_deep_research_runs_dir_quota_ratio",
     ):
         assert metric in expressions
-    assert 'status="failed"' in alerts["InsightForgeHighRunFailureRate"]["expr"]
-    assert "> 0.20" in alerts["InsightForgeHighRunFailureRate"]["expr"]
-    assert "> 120" in alerts["InsightForgeResearchQueueWaitHigh"]["expr"]
-    assert "> 0.80" in alerts["InsightForgeRunsDirQuotaHigh"]["expr"]
+    assert 'status="failed"' in alerts["MarketScoutHighRunFailureRate"]["expr"]
+    assert "> 0.20" in alerts["MarketScoutHighRunFailureRate"]["expr"]
+    assert "> 120" in alerts["MarketScoutResearchQueueWaitHigh"]["expr"]
+    assert "> 0.80" in alerts["MarketScoutRunsDirQuotaHigh"]["expr"]
 
 
 def test_grafana_dashboard_is_importable_and_covers_spec_views() -> None:
     dashboard_path = REPO_ROOT / "deploy" / "grafana" / "dashboard.json"
     dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
 
-    assert dashboard["uid"] == "insightforge-operations"
+    assert dashboard["uid"] == "marketscout-operations"
     assert dashboard["schemaVersion"] >= 39
     panels = dashboard["panels"]
     assert len({panel["id"] for panel in panels}) == len(panels)

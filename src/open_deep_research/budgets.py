@@ -84,10 +84,27 @@ class RunBudgetSnapshot(BaseModel):
 class BudgetExhausted(RuntimeError):
     """Raised before an operation would exceed a configured limit."""
 
-    def __init__(self, dimension: BudgetDimension) -> None:
-        """Store the exhausted resource dimension."""
+    def __init__(self, dimension: BudgetDimension, *, scope="run", available=None, required=None) -> None:
         super().__init__(f"budget_exhausted:{dimension.value}")
-        self.dimension = dimension
+        self.dimension, self.scope = dimension, scope
+        self.available, self.required = available, required
+
+    def to_wire(self):
+        if self.dimension != BudgetDimension.COST_MICRO_USD or (self.available is None and self.required is None and self.scope == "run"):
+            return str(self)
+        fields = (self.scope, self.available, self.required)
+        return str(self) + ":" + ":".join("" if value is None else str(value) for value in fields)
+
+    @classmethod
+    def from_wire(cls, detail):
+        _, dimension, *fields = detail.split(":")
+        scope, available, required = fields if len(fields) == 3 else ("unknown", "", "")
+        return cls(BudgetDimension(dimension), scope=scope,
+                   available=int(available) if available else None, required=int(required) if required else None)
+
+    def as_payload(self):
+        return {"dimension": self.dimension.value, "budget_scope": self.scope,
+                "available": self.available, "required": self.required}
 
 
 class RunBudgetLedger:

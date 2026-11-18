@@ -34,6 +34,8 @@ def required_components(document, previous):
             required.update({"document-worker": "restart", "knowledge-worker": "restart"})
         if services.get("PUBLISHER_ENABLED") in (True, "true", "1"):
             required["publisher-worker"] = "restart"
+        if services.get("INTELLIGENCE_ENABLED") in (True, "true", "1"):
+            required["intelligence-worker"] = "restart"
     return required
 
 
@@ -217,7 +219,7 @@ async def apply_revision(store, row):
             elif component == "sandbox":
                 from open_deep_research.sandbox.schema import SandboxPolicyBundle, policy_digest
                 expected = policy_digest(SandboxPolicyBundle.model_validate(row["document"]["sandbox"]))
-                socket = os.environ.get("SANDBOX_CONTROLLER_SOCKET", "/run/insightforge/sandbox-controller.sock")
+                socket = os.environ.get("SANDBOX_CONTROLLER_SOCKET", "/run/marketscout/sandbox-controller.sock")
                 async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(uds=socket), base_url="http://controller", timeout=5) as client:
                     response = await client.get("/healthz")
                     response.raise_for_status()

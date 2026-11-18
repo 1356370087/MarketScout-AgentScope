@@ -14,6 +14,7 @@ from open_deep_research.agentscope_runtime.recovery_store import (
 )
 from open_deep_research.api.contracts import (
     HumanActionRequest,
+    DraftReviewRequest,
     ResumeRunRequest,
     RunRequest,
 )
@@ -116,6 +117,7 @@ def build_research_router(service):
                 **({"source_selection": request.source_selection.model_dump(mode="json")} if request.source_selection else {}),
                 **({"expected_version": request.expected_version} if request.expected_version is not None else {}),
                 **({"extension_seconds": request.extension_seconds} if request.extension_seconds is not None else {}),
+                **({"limits": request.limits} if request.limits is not None else {}),
             )
 
     @router.get("/runs/{run_id}/review-drafts")
@@ -128,17 +130,57 @@ def build_research_router(service):
 
     @router.get("/runs/{run_id}/review-drafts/{sha256}")
     async def review_draft(run_id: str, sha256: str, principal=read):
-        import hashlib
-        from open_deep_research.agentscope_runtime.storage import runtime_data_dir
+        from open_deep_research.agentscope_runtime.derived_review import read_draft
         with http_errors():
             state, _ = await service.store.load(run_id, principal.user_id)
             artifact = state.application.get("report_review_artifacts", {}).get(sha256)
             if artifact is None:
                 raise KeyError("draft not found")
-            markdown = (runtime_data_dir() / run_id / "report-reviews" / (sha256 + ".md")).read_text(encoding="utf8")
-            if hashlib.sha256(markdown.encode("utf8", errors="replace")).hexdigest() != sha256:
-                raise RecoveryConflict("report_draft_hash_changed")
+            markdown = read_draft(state, sha256)
             return {**artifact, "markdown": markdown, "scope": "review_draft"}
+
+    review_control = Depends(require_permissions(RESEARCH_RUN_CREATE.code, RESEARCH_RUN_CONTROL_OWN.code,
+                                                RESEARCH_RUN_READ_OWN.code))
+
+    @router.post("/runs/{run_id}/draft-reviews/preview")
+    async def preview_draft_review(run_id: str, request: DraftReviewRequest, principal=review_control):
+        with http_errors():
+            return await service.create_review(run_id, request, principal, None, preview=True)
+
+    @router.post("/runs/{run_id}/draft-reviews", status_code=202)
+    async def create_draft_review(run_id: str, request: DraftReviewRequest, principal=review_control,
+                                  idempotency_key: str | None = idempotency):
+        with http_errors():
+            child = await service.create_review(run_id, request, principal, idempotency_key)
+            return {"run_id": child, "parent_run_id": run_id}
+
+    @router.get("/runs/{run_id}/review-versions")
+    async def review_versions(run_id: str, principal=read):
+        from sqlalchemy import select
+        from open_deep_research.agentscope_runtime.execution_receipts import execution_receipts
+        with http_errors():
+            state, _ = await service.store.load(run_id, principal.user_id)
+            table = service.store.runs
+            async with service.store.engine.connect() as conn:
+                product = table.c.snapshot["report_product"]
+                children = (await conn.execute(select(table.c.run_id, table.c.snapshot["status"].as_string(),
+                    product["completion_status"].as_string(), product["report_review"]["decision"].as_string(),
+                    product["report_review"]["skipped"].as_boolean(), product["report_review"]["degraded"].as_boolean()).where(
+                    table.c.user_id == principal.user_id,
+                    table.c.snapshot["application"]["review_derivation"]["parent_run_id"].as_string() == run_id))).all()
+            return {"parent": state.application.get("review_derivation"),
+                    "can_create": principal.has(RESEARCH_RUN_CREATE.code) and principal.has(RESEARCH_RUN_CONTROL_OWN.code),
+                    "children": [{"run_id": child, "status": status, "completion_status": completion,
+                        "review_passed": completion == "success" and verdict == "pass" and not skipped and not degraded}
+                        for child, status, completion, verdict, skipped, degraded in children],
+                    "drafts": list(state.application.get("report_review_artifacts", {})),
+                    "draft_attempts": {sha: r.get("attempt") for sha, r in state.application.get("report_review_artifacts", {}).items()},
+                    "delivered_sha256": state.application.get("delivered_sha256"),
+                    "evidence_sha256": state.application.get("review_evidence_sha256"),
+                    "config_fingerprint": state.application.get("review_config_fingerprint"),
+                    "requirements": [{"id": r["requirement_id"], "text": r["text"], "subject": r.get("subject")} for r in
+                        state.coverage_contract.get("requirements", []) if r.get("kind", "factual") == "factual"],
+                    "execution": await execution_receipts(service.store, run_id, principal.user_id)}
 
     @router.post("/runs/{run_id}/cancel")
     async def cancel_run(run_id: str, principal=control):

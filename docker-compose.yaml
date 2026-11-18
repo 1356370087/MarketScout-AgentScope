@@ -22,6 +22,8 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       # 静态路由通过 os.environ/<变量名> 读取提供商配置；宿主 .env 不会自动注入此服务。
       # 接口地址和密钥显式传给 Proxy，真实值仅保存在未跟踪的本地环境文件中。
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ZHIPU_BASE_URL: ${ZHIPU_BASE_URL:-}
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
@@ -93,7 +95,7 @@ services:
       # 异步团队与 IAM 共用 PostgreSQL 实例；凭据仅注入 API，不进入 Researcher 容器。
       COORDINATION_DATABASE_URL: ${COORDINATION_DATABASE_URL:?请配置远程团队 PostgreSQL 连接}
       ROCKETMQ_ENDPOINT: ${ROCKETMQ_ENDPOINT:-}
-      ROCKETMQ_TOPIC_PREFIX: ${ROCKETMQ_TOPIC_PREFIX:-insightforge}
+      ROCKETMQ_TOPIC_PREFIX: ${ROCKETMQ_TOPIC_PREFIX:-marketscout}
       ROCKETMQ_TLS: ${ROCKETMQ_TLS:-false}
       ROCKETMQ_ACCESS_KEY: ${ROCKETMQ_ACCESS_KEY:-}
       ROCKETMQ_SECRET_KEY: ${ROCKETMQ_SECRET_KEY:-}
@@ -102,31 +104,31 @@ services:
       QUALITY_EVALUATION_ENABLED: ${QUALITY_EVALUATION_ENABLED:-true}
       SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
       SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
-      SANDBOX_CONTROLLER_SOCKET: /run/insightforge/sandbox-controller.sock
+      SANDBOX_CONTROLLER_SOCKET: /run/marketscout/sandbox-controller.sock
       SANDBOX_GATEWAY_URL: http://sandbox-gateway:8081
       SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
       MODEL_BACKEND: ${MODEL_BACKEND:-litellm}
       LITELLM_BASE_URL: http://litellm-proxy:4000/v1
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       LITELLM_SERVICE_KEY: ${LITELLM_SERVICE_KEY:-}
-      LITELLM_RUN_TEAM_ID: ${LITELLM_RUN_TEAM_ID:-insightforge-runs}
+      LITELLM_RUN_TEAM_ID: ${LITELLM_RUN_TEAM_ID:-marketscout-runs}
       LITELLM_RUN_KEY_ENCRYPTION_KEY: ${LITELLM_RUN_KEY_ENCRYPTION_KEY:-}
       LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD: ${LITELLM_RUN_BUDGET_DEFAULT_MICRO_USD:-}
       LITELLM_RUN_BUDGET_MAX_MICRO_USD: ${LITELLM_RUN_BUDGET_MAX_MICRO_USD:-}
       LITELLM_RUN_KEY_TTL_SECONDS: ${LITELLM_RUN_KEY_TTL_SECONDS:-86400}
       LITELLM_POLICY_REVISION: ${LITELLM_POLICY_REVISION:-v1}
       # 使用迁移专用变量，防止旧 `.env` 中的 Provider 模型值进入 LiteLLM Run允许列表。
-      SUPERVISOR_MODEL: ${LITELLM_SUPERVISOR_MODEL:-if-supervisor-v1}
-      RESEARCH_MODEL: ${LITELLM_RESEARCH_MODEL:-if-research-v1}
-      SUMMARIZATION_MODEL: ${LITELLM_SUMMARIZATION_MODEL:-if-summarization-v1}
-      MESSAGE_SUMMARY_MODEL: ${LITELLM_MESSAGE_SUMMARY_MODEL:-if-message-summary-v1}
-      WEB_RERANK_MODEL: ${LITELLM_WEB_RERANK_MODEL:-if-web-rerank-v1}
-      WEB_EVIDENCE_MODEL: ${LITELLM_WEB_EVIDENCE_MODEL:-if-web-evidence-v1}
-      COMPRESSION_MODEL: ${LITELLM_COMPRESSION_MODEL:-if-compression-v1}
-      FINAL_REPORT_MODEL: ${LITELLM_FINAL_REPORT_MODEL:-if-final-report-v1}
-      QUALITY_EVALUATION_MODEL: ${LITELLM_QUALITY_EVALUATION_MODEL:-if-quality-v1}
-      REPORT_REVIEW_MODEL: ${LITELLM_REPORT_REVIEW_MODEL:-if-report-review-v1}
-      EVALUATION_MODEL: ${LITELLM_EVALUATION_MODEL:-if-evaluation-v1}
+      SUPERVISOR_MODEL: ${LITELLM_SUPERVISOR_MODEL:-if-supervisor-v2}
+      RESEARCH_MODEL: ${LITELLM_RESEARCH_MODEL:-if-research-v2}
+      SUMMARIZATION_MODEL: ${LITELLM_SUMMARIZATION_MODEL:-if-summarization-v2}
+      MESSAGE_SUMMARY_MODEL: ${LITELLM_MESSAGE_SUMMARY_MODEL:-if-message-summary-v2}
+      WEB_RERANK_MODEL: ${LITELLM_WEB_RERANK_MODEL:-if-web-rerank-v2}
+      WEB_EVIDENCE_MODEL: ${LITELLM_WEB_EVIDENCE_MODEL:-if-web-evidence-v2}
+      COMPRESSION_MODEL: ${LITELLM_COMPRESSION_MODEL:-if-compression-v2}
+      FINAL_REPORT_MODEL: ${LITELLM_FINAL_REPORT_MODEL:-if-final-report-v2}
+      QUALITY_EVALUATION_MODEL: ${LITELLM_QUALITY_EVALUATION_MODEL:-if-quality-v2}
+      REPORT_REVIEW_MODEL: ${LITELLM_REPORT_REVIEW_MODEL:-if-report-review-v2}
+      EVALUATION_MODEL: ${LITELLM_EVALUATION_MODEL:-if-evaluation-v2}
       # 可观测性：指标默认开启（compose 内网抓取）；应用侧 OTel trace
       # 默认关闭，启用见 deploy/README.md（profile observability）。
       OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-true}
@@ -137,7 +139,7 @@ services:
       - platform-config:/data/platform-config
       - research-runs:/data/runs
       - document-data:/data/documents
-      - sandbox-control:/run/insightforge
+      - sandbox-control:/run/marketscout
     networks:
       - default
       - sandbox-control
@@ -212,6 +214,31 @@ services:
     depends_on:
       document-migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+
+  intelligence-worker:
+    profiles: ["intelligence"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PLATFORM_CONFIGURATION_MODE: ${PLATFORM_CONFIGURATION_MODE:-database}
+      PLATFORM_CONFIG_DIR: /data/platform-config
+      PLATFORM_SECRET_ENCRYPTION_KEY: ${PLATFORM_SECRET_ENCRYPTION_KEY:-}
+      IAM_DATABASE_URL: ${IAM_DATABASE_URL:?请配置远程 IAM PostgreSQL 连接}
+      LITELLM_BASE_URL: http://litellm-proxy:4000/v1
+      DOCUMENT_RESEARCH_ENABLED: "true"
+      DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
+      DOCUMENT_STORAGE_DIR: /data/documents
+    command: ["python", "-m", "open_deep_research.intelligence.worker"]
+    volumes:
+      - platform-config:/data/platform-config
+      - document-data:/data/documents
+    networks: [default]
+    depends_on:
+      document-migrate:
+        condition: service_completed_successfully
+    security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
   knowledge-backup:
@@ -312,7 +339,7 @@ services:
       ENABLE_ASYNC_RESEARCH: "true"
       SANDBOX_POLICY_PATH: /app/config/sandbox-policy.toml
       SANDBOX_EGRESS_ALLOW_DOMAINS: ${SANDBOX_EGRESS_ALLOW_DOMAINS:-}
-      SANDBOX_CONTROLLER_SOCKET: /run/insightforge/sandbox-controller.sock
+      SANDBOX_CONTROLLER_SOCKET: /run/marketscout/sandbox-controller.sock
       SANDBOX_GATEWAY_CONTAINER: ${COMPOSE_PROJECT_NAME:-marketscout}-sandbox-gateway
       SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
     network_mode: none
@@ -323,7 +350,7 @@ services:
     volumes:
       - platform-config:/data/platform-config:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      - sandbox-control:/run/insightforge
+      - sandbox-control:/run/marketscout
     read_only: true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev
@@ -409,7 +436,7 @@ services:
       - --storage.tsdb.retention.time=15d
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./deploy/prometheus/alerts.yml:/etc/prometheus/rules/insightforge-alerts.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/rules/marketscout-alerts.yml:ro
       - prometheus-data:/prometheus
     ports:
       - "${PROMETHEUS_HOST_PORT:-9090}:9090"
@@ -426,7 +453,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./deploy/grafana/dashboard.json:/var/lib/grafana/dashboards/insightforge.json:ro
+      - ./deploy/grafana/dashboard.json:/var/lib/grafana/dashboards/marketscout.json:ro
       - ./deploy/grafana/litellm-dashboard.json:/var/lib/grafana/dashboards/litellm.json:ro
       - ./deploy/grafana/native-dashboard.json:/var/lib/grafana/dashboards/native.json:ro
       - grafana-data:/var/lib/grafana

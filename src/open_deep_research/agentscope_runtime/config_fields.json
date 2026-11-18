@@ -524,6 +524,11 @@
     "target": "RunConfig.tools.role_blocked_origins",
     "handling": "业务保留并接入"
   },
+  "research_execution_strategy": {
+    "group": "research",
+    "target": "RunConfig.research.research_execution_strategy",
+    "handling": "业务保留并接入"
+  },
   "enable_async_research": {
     "group": "coordination",
     "target": "RunConfig.coordination.enable_async_research",

@@ -59,7 +59,10 @@ async def reconcile_spend(store, lease, logs):
         )
     for row in rows:
         bills = list(candidates.get(row["key"], {}).values())
-        if row["key"] in conflicts or len(bills) != 1 or row["state"] != "committed":
+        if row["key"] in conflicts or len(bills) != 1:
+            receipt = row["result"] or {}
+            if receipt.get("status") == "uncertain" or (receipt.get("outcome") or {}).get("status") == "uncertain":
+                await store._sync_monthly(lease, row["key"])
             result["unresolved"].append(row["key"])
             continue
         bill = bills[0]
@@ -92,6 +95,7 @@ async def reconcile_spend(store, lease, logs):
         except RecoveryConflict:
             result["unresolved"].append(row["key"])
             continue
+        await store._sync_monthly(lease, row["key"])
         result["corrected"].append(row["key"])
     return result
 
@@ -101,6 +105,9 @@ async def collect_spend(store, lease):
     from open_deep_research.models.credentials import RunKeySettings
     from open_deep_research.models.spend import LiteLLMSpendClient
 
+    from open_deep_research.platform import runtime, quota
+    if runtime.enabled():
+        await quota.reconcile_run_reservations(store, lease)
     client = LiteLLMSpendClient(RunKeySettings.from_env())
     try:
         return await reconcile_spend(
@@ -150,7 +157,7 @@ async def reconciliation_loop(service, interval=60):
                             .join(store.ops, store.runs.c.run_id == store.ops.c.run_id)
                             .where(
                                 store.ops.c.kind == "gateway:model",
-                                store.ops.c.state == "committed",
+                                store.ops.c.state.in_(["committed", "started", "quarantined"]),
                                 # 等待用户的运行随时可能恢复，后台补账不得占用
                                 # 它的执行租约，导致已入库审批返回 409。
                                 store.runs.c.snapshot["status"].as_string().in_(
@@ -167,6 +174,14 @@ async def reconciliation_loop(service, interval=60):
                 for r in rows
                 if not (r["result"] or {}).get("usage_correction")
             }
+            from open_deep_research.platform import quota, runtime
+            if runtime.enabled():
+                traced = await quota.pending_native_runs()
+                if traced:
+                    async with store.engine.connect() as conn:
+                        pending.update((await conn.execute(select(store.runs.c.run_id, store.runs.c.user_id).where(
+                            store.runs.c.run_id.in_(traced), store.runs.c.snapshot["status"].as_string().in_(
+                                ["completed", "failed", "cancelled"])))).all())
             for run_id, owner in pending:
                 try:
                     recovery = await RecoverySession.open(store, run_id, owner)

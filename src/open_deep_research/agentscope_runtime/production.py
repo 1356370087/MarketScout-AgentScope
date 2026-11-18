@@ -10,7 +10,7 @@ from open_deep_research.agentscope_runtime.research import build_research_pipeli
 from open_deep_research.configuration import Configuration
 from open_deep_research.tools.base import ToolExecutionZone
 from security.rbac.dependencies import apply_principal_to_config
-from security.rbac.permissions import RESEARCH_RUN_CREATE
+from security.rbac.permissions import RESEARCH_RUN_CONTROL_OWN, RESEARCH_RUN_CREATE
 
 
 async def authorize_run_owner(owner, application):
@@ -20,6 +20,9 @@ async def authorize_run_owner(owner, application):
     from security.rbac.principal import Principal, synthetic_dev_principal
     from security.rbac.settings import local_dev_bypass_enabled
 
+    if application.get("identity", {}).get("kind") == "intelligence":
+        from open_deep_research.intelligence.authorization import authorize_run
+        return await authorize_run(owner, application["identity"])
     if local_dev_bypass_enabled():
         principal = synthetic_dev_principal()
         return principal if principal.user_id == owner else None
@@ -94,6 +97,7 @@ class ProductionRunFactory:
             or principal.user_id != recovery.lease.user_id
             or not principal.is_active
             or not principal.has(RESEARCH_RUN_CREATE.code)
+            or (snapshot.application.get("review_derivation") and not principal.has(RESEARCH_RUN_CONTROL_OWN.code))
         ):
             raise PermissionError("run_owner_no_longer_authorized")
         config = apply_principal_to_config(
@@ -144,14 +148,14 @@ class ProductionRunFactory:
             recovery.model_accounting = (
                 "gateway" if ports.gateway_accounting else "local"
             )
-            if cfg.enable_async_research and self.runtime is None:
+            if cfg.use_durable_research_team and self.runtime is None:
                 raise ValueError(
                     "native team host requires ASRuntime; deploy the runtime "
                     "or disable enable_async_research"
                 )
             team = (
                 await self.runtime.bind_research_team(recovery)
-                if cfg.enable_async_research
+                if cfg.use_durable_research_team
                 else None
             )
             pipeline = build_research_pipeline(

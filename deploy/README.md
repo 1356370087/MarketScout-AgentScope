@@ -1,4 +1,4 @@
-# InsightForge monitoring examples
+# MarketScout monitoring examples
 
 平台管理后台、首次初始化、数据库配置发布和组件应用说明见 [平台管理与数据库配置](platform-management.md)。真实服务默认读取数据库生效版本；本页的业务环境变量示例可作为首次导入材料，发布后通过后台维护。
 
@@ -29,10 +29,10 @@ global:
   scrape_interval: 30s
 
 rule_files:
-  - /etc/prometheus/rules/insightforge-alerts.yml
+  - /etc/prometheus/rules/marketscout-alerts.yml
 
 scrape_configs:
-  - job_name: insightforge
+  - job_name: marketscout
     metrics_path: /metrics
     honor_labels: true
     static_configs:
@@ -152,7 +152,7 @@ docker compose --profile observability up -d
   cooldowns) using `deploy/prometheus/prometheus.yml`; alerts load from
   `deploy/prometheus/alerts.yml`.
 - Grafana (default `http://localhost:3001`, admin password from
-  `GRAFANA_ADMIN_PASSWORD`) auto-provisions the existing InsightForge
+  `GRAFANA_ADMIN_PASSWORD`) auto-provisions the existing MarketScout
   dashboard plus a LiteLLM gateway dashboard.
 - The OTel Collector forwards OTLP traces to Jaeger
   (`http://localhost:16686`).

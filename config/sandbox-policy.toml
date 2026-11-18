@@ -1,5 +1,5 @@
 version = 1
-deployment_id = "insightforge-local"
+deployment_id = "marketscout-local"
 default_profile = "research-gateway-only"
 role_priority = ["admin", "developer", "researcher", "viewer"]
 

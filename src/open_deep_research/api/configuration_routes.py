@@ -40,6 +40,7 @@ router = APIRouter(tags=["configuration"])
 
 
 FRONTEND_EDITABLE_CONFIG_KEYS = (
+    "research_execution_strategy",
     "report_time_reserve_ratio",
     "research_efficiency_mode", "max_supplement_rounds", "max_no_progress_rounds",
     "research_context_target_tokens", "handoff_context_target_tokens",

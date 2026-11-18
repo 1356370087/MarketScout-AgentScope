@@ -22,6 +22,42 @@ from open_deep_research.api.native_runs import NativeRuns
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("condition", ["safe", "unknown", "inflight", "ambiguous_writer", "reviewed"])
+async def test_report_catalogue_recovery_requires_committed_unambiguous_writer(tmp_path, condition):
+    import hashlib
+    from open_deep_research.agentscope_runtime.research_pipeline import ResearchSnapshot, STAGES
+    store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "catalogue.db").as_posix())
+    service = NativeRuns(store, None, None)
+    try:
+        await store.create_tables()
+        writer = "Body [1].\n\n### Sources（来源）\n- [1] A: https://a.example\n"
+        draft = writer + "\n### Sources\n[1] B: https://b.example\n[2] A: https://a.example"
+        sha = hashlib.sha256(draft.encode()).hexdigest()
+        state = ResearchSnapshot(run_id="case", config_fingerprint="fixed", status="failed", error="ValueError",
+            completed=list(STAGES[:7]), inflight="final_report_generation",
+            report_product={"final_report_draft": draft, "report_draft_sha256": sha},
+            application={"report_review_artifacts": {sha: {"review": None}}})
+        await store.create_run("owner", state)
+        lease = await store.acquire("case", "owner")
+        key = "final_report_generation:0:report:lead.final_report:0:model:final_report:0"
+        await store.begin_operation(lease, key, "model:final_report", {})
+        if condition == "ambiguous_writer":
+            writer += "[1] Conflicting: https://c.example\n"
+        await store.commit_operation(lease, key, {"codec": "agentscope-response-v1",
+            "response": {"content": [{"type": "text", "text": writer}]}})
+        if condition in {"unknown", "inflight", "reviewed"}:
+            kind = "model:report_review" if condition == "reviewed" else "gateway:model"
+            await store.begin_operation(lease, "other", kind, {})
+            if condition != "inflight":
+                await store.commit_operation(lease, "other", {"status": "uncertain" if condition == "unknown" else "completed"})
+        async with store.engine.connect() as conn:
+            row = (await conn.execute(select(store.runs).where(store.runs.c.run_id == "case"))).mappings().one()
+            assert await service._can_resume_catalogue(conn, row) is (condition == "safe")
+    finally:
+        await service.aclose()
+        await store.aclose()
+
+
 async def test_startup_recovers_shutdown_and_durable_decision_without_repeating_completed_stages(tmp_path):
     store = RecoveryStore("sqlite+aiosqlite:///" + (tmp_path / "runs.db").as_posix())
     await store.create_tables()

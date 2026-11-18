@@ -210,10 +210,10 @@ class SandboxChatModel(ChatModelBase):
                 raise DeadlineExceeded("run deadline exceeded before gateway dispatch")
             if outcome.status == "failed" and outcome.error_code == GATEWAY_TOKEN_LIMIT_MARKER:
                 raise GatewayCallError(GATEWAY_TOKEN_LIMIT_MARKER, status_code=400)
-            if (outcome.error_code or "").startswith("budget_exhausted:"):
-                from open_deep_research.budgets import BudgetDimension, BudgetExhausted
+            if outcome.status == "failed" and (outcome.error_code or "").startswith("budget_exhausted:"):
+                from open_deep_research.budgets import BudgetExhausted
 
-                raise BudgetExhausted(BudgetDimension(outcome.error_code.split(":", 1)[1]))
+                raise BudgetExhausted.from_wire(outcome.error_code)
             if outcome.status == "failed":
                 code = outcome.error_code or "gateway_model_failed"
                 status = {"invalid_request": 400, "authentication": 401,
@@ -372,7 +372,7 @@ class SandboxChatModel(ChatModelBase):
                         raise last_format_error from exc
                     json_repair = json_supported = False
                     messages.append(UserMsg("user",
-                        "JSON response mode is unavailable. Call __insightforge_structured_output "
+                        "JSON response mode is unavailable. Call __marketscout_structured_output "
                         "exactly once with all required properties and no duplicate keys."))
                     continue
                 raise
@@ -389,7 +389,7 @@ class SandboxChatModel(ChatModelBase):
                 elif calls:
                     matches = [
                         c for c in calls
-                        if c["function"]["name"] == "__insightforge_structured_output"
+                        if c["function"]["name"] == "__marketscout_structured_output"
                     ]
                     if len(calls) != 1 or len(matches) != 1:
                         raise GatewayCallError("structured_output_missing")
@@ -414,7 +414,7 @@ class SandboxChatModel(ChatModelBase):
                     "user",
                     "The previous response did not satisfy the required schema. "
                     + ("Return one JSON object as response content and include " if json_repair else
-                       "Call __insightforge_structured_output exactly once and include ")
+                       "Call __marketscout_structured_output exactly once and include ")
                     +
                     "every required property with the declared types. Emit each property "
                     "only once, use concise field values, and close every object and array. Required: "

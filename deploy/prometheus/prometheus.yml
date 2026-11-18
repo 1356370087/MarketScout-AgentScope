@@ -1,4 +1,4 @@
-# InsightForge Prometheus 抓取配置（compose profile "observability"）
+# MarketScout Prometheus 抓取配置（compose profile "observability"）
 #
 # 同时抓取应用指标（api:2024，前缀 open_deep_research_*）与 LiteLLM
 # Proxy 指标（litellm-proxy:4000，部署健康/回退/冷却/延迟）。
@@ -9,10 +9,10 @@ global:
   evaluation_interval: 30s
 
 rule_files:
-  - /etc/prometheus/rules/insightforge-alerts.yml
+  - /etc/prometheus/rules/marketscout-alerts.yml
 
 scrape_configs:
-  - job_name: insightforge
+  - job_name: marketscout
     metrics_path: /metrics
     honor_labels: true
     static_configs:

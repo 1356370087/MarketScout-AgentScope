@@ -24,10 +24,11 @@ import {
 import type { PublicationFormat, PublicationJob, PublicationTheme } from "@/lib/types";
 
 const formats: Array<{
-  format: Exclude<PublicationFormat, "markdown">;
+  format: PublicationFormat;
   label: string;
   icon: typeof FileText;
 }> = [
+  { format: "markdown", label: "Markdown 原文", icon: FileText },
   { format: "pdf", label: "PDF", icon: FileText },
   { format: "docx", label: "Word", icon: FileText },
   { format: "pptx", label: "PowerPoint", icon: Presentation },
@@ -110,7 +111,7 @@ function ReportPublicationsView({
   };
 
   const create = useMutation({
-    mutationFn: (format: Exclude<PublicationFormat, "markdown">) =>
+    mutationFn: (format: PublicationFormat) =>
       researchApi.createPublication(
         runId,
         format,

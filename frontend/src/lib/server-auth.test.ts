@@ -3,6 +3,61 @@ import { NextRequest } from "next/server";
 
 vi.mock("server-only", () => ({}));
 
+describe("concurrent session rotation", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_LOCAL_DEV_AUTH_BYPASS", "false");
+  });
+
+  it.each([false, true])("preserves cookies during refresh contention (access present: %s)", async (access) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    if (access) fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 409 }));
+    const { authenticatedProxy } = await import("./server-auth");
+    const request = new NextRequest("http://localhost:3000/api/research/runs", {
+      headers: { Cookie: `${access ? "odr.access=expired; " : ""}odr.refresh=rotation-in-progress` },
+    });
+    const response = await authenticatedProxy(request, "/runs");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ detail: "refresh_in_progress" });
+    expect(response.headers.get("Retry-After")).toBe("1");
+    expect(response.headers.has("Set-Cookie")).toBe(false);
+  });
+
+  it("does not let a late old-cookie response clear a successfully rotated session", async () => {
+    const pair = { access_token: "new-access", refresh_token: "new-refresh", expires_in: 900, refresh_expires_in: 3600 };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(Response.json(pair))
+      .mockResolvedValueOnce(Response.json({ ok: true }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 409 }));
+    const { authenticatedProxy, REFRESH_COOKIE } = await import("./server-auth");
+    const makeRequest = () => new NextRequest("http://localhost:3000/api/research/runs", {
+      headers: { Cookie: "odr.access=expired; odr.refresh=old-refresh" },
+    });
+    const first = await authenticatedProxy(makeRequest(), "/runs");
+    const late = await authenticatedProxy(makeRequest(), "/runs");
+    expect(first.cookies.get(REFRESH_COOKIE)?.value).toBe("new-refresh");
+    expect(late.status).toBe(503);
+    expect(late.headers.has("Set-Cookie")).toBe(false);
+  });
+
+  it.each([409, 401])("keeps the refresh route's contention and rejection distinct (%s)", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(null, { status }));
+    const { POST } = await import("../app/api/auth/[action]/route");
+    const request = new NextRequest("http://localhost:3000/api/auth/refresh", {
+      method: "POST",
+      headers: { Cookie: "odr.refresh=route-refresh; odr.csrf=csrf-token-123456",
+        "X-CSRF-Token": "csrf-token-123456", Origin: "http://localhost:3000" },
+    });
+    const response = await POST(request, { params: Promise.resolve({ action: "refresh" }) });
+    expect(response.status).toBe(status);
+    expect(response.headers.has("Set-Cookie")).toBe(status === 401);
+  });
+});
+
 describe("sameOriginValid", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

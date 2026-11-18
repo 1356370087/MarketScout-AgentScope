@@ -24,10 +24,10 @@
       "filename": "acceptance-source.md",
       "locator": {
         "source": "section:1",
-        "heading": "InsightForge 隔离知识验收资料"
+        "heading": "MarketScout 隔离知识验收资料"
       },
-      "heading": "InsightForge 隔离知识验收资料",
-      "text": "InsightForge 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
+      "heading": "MarketScout 隔离知识验收资料",
+      "text": "MarketScout 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
       "score": 0.016129032258064516,
       "source_type": "local_document",
       "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f"
@@ -56,7 +56,7 @@
         "source": "title:1"
       },
       "heading": null,
-      "text": "InsightForge 隔离知识验收资料",
+      "text": "MarketScout 隔离知识验收资料",
       "score": 0.015625,
       "source_type": "local_document",
       "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=5ac4af37-b94b-5099-b869-39d243a8eb94"
@@ -91,13 +91,13 @@
     },
     {
       "evidence_id": "ev-local-ad366c9ade8acbc22b9c",
-      "claim": "InsightForge 隔离知识验收资料",
-      "supporting_excerpt": "InsightForge 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
+      "claim": "MarketScout 隔离知识验收资料",
+      "supporting_excerpt": "MarketScout 隔离知识验收资料\n本资料为自动化验收夹具，不用于真实业务结论。",
       "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
       "chunk_id": "ce341c50-b874-556b-b76a-c784d7a4d08f",
       "locator": {
         "source": "section:1",
-        "heading": "InsightForge 隔离知识验收资料"
+        "heading": "MarketScout 隔离知识验收资料"
       },
       "source_url": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f",
       "source_uri": "/documents/91b62071-b3ac-4048-ae9c-fb98c15af93e?chunk=ce341c50-b874-556b-b76a-c784d7a4d08f",
@@ -127,8 +127,8 @@
     },
     {
       "evidence_id": "ev-local-fd37b6cc6ae64946f52e",
-      "claim": "InsightForge 隔离知识验收资料",
-      "supporting_excerpt": "InsightForge 隔离知识验收资料",
+      "claim": "MarketScout 隔离知识验收资料",
+      "supporting_excerpt": "MarketScout 隔离知识验收资料",
       "document_id": "91b62071-b3ac-4048-ae9c-fb98c15af93e",
       "chunk_id": "5ac4af37-b94b-5099-b869-39d243a8eb94",
       "locator": {

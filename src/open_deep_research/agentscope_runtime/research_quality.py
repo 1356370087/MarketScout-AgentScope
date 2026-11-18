@@ -27,6 +27,49 @@ def skipped_handoff_assessment():
     }
 
 
+def quality_enforced(config):
+    """v23 restores admission; historical runs keep their delivery semantics."""
+    return config.get("metadata", {}).get("run_config_schema_version", 22) >= 23
+
+
+async def assess_handoff(quality, outcome, contract, config):
+    """One admission policy for direct, adaptive and durable team delivery.
+
+    Keep raw evidence on the handoff. Consumers use its admission result to
+    select report inputs; a rejected summary never destroys source artifacts.
+    """
+    if not quality_enforced(config):
+        return skipped_handoff_assessment()
+    from open_deep_research.quality.gate import deterministic_handoff_checks
+    cfg = Configuration.from_runnable_config(config)
+    if not cfg.quality_evaluation_enabled:
+        checks = deterministic_handoff_checks(outcome.model_dump(mode="json"),
+            min_sources=cfg.quality_evaluation_min_sources, coverage_contract=contract)
+        return {"accepted": checks["passed"],
+            "admission_status": "accepted_with_caveats" if checks["passed"] else "rejected",
+            "evaluation_status": "skipped", "deterministic_checks": checks,
+            "reason": "用户关闭语义质量评估；确定性准入仍生效。", "caveats": ["semantic_quality_disabled"]}
+    if quality is None:
+        raise RuntimeError("native_handoff_quality_required")
+    if outcome.termination in {"report_budget_reserved", "report_time_reserved", "task_time_reserved"}:
+        return {"accepted": False, "admission_status": "rejected", "evaluation_status": "unavailable",
+                "reason": outcome.termination, "missing_information": list(outcome.requirement_ids)}
+    result = await quality.handoff(outcome, contract)
+    value = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
+    value["evaluation_status"] = "error" if value.get("evaluator_error") else "evaluated"
+    value["admission_status"] = value.get("admission_status") or ("accepted" if value.get("accepted") else "rejected")
+    if value.get("evaluator_error") and not cfg.quality_evaluation_fail_open:
+        value.update(accepted=False, admission_status="rejected")
+    return value
+
+
+def admitted_findings(findings, config):
+    """Select only admitted handoffs for evidence-based report composition."""
+    if not quality_enforced(config):
+        return findings
+    return [row for row in findings if row.get("assessment", {}).get("handoff", {}).get("accepted") is True]
+
+
 class NativeResearchQuality:
     """Reuse hard admission and five-level policy; inject only the Judge call."""
 
@@ -40,6 +83,22 @@ class NativeResearchQuality:
         from open_deep_research.agentscope_runtime.efficiency import enabled
         from open_deep_research.agentscope_runtime.runtime_limits import structured_attempt_budget
 
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        if cache is not None and config.get("metadata", {}).get("run_config_schema_version", 0) >= 30:
+            from .execution_receipts import submitted_read_receipts
+            submitted = payload.get("cumulative_evidence") or payload.get("evidence_registry") or []
+            reads = submitted_read_receipts(submitted, await cache.progress()) if submitted else []
+            if reads:
+                payload = {**payload, "source_read_receipts": reads}
+                limit = Configuration.from_runnable_config(config).quality_evaluation_max_input_chars
+                if len(json.dumps(payload, ensure_ascii=False, default=str)) > limit:
+                    from open_deep_research.quality.gate import _bounded_quality_payload
+                    payload = _bounded_quality_payload(payload, max_chars=limit)
+                system_prompt += ("\nThe runtime supplies source_read_receipts from the SQL fetch ledger for these submitted "
+                    "source versions. A successful read_at proves when that source was checked. It is separate from "
+                    "published_at. Read times can satisfy verification-date requirements; price and feature claims "
+                    "still require the cited original excerpts.")
+
         async def compute():
             budget = structured_attempt_budget.set([Configuration.from_runnable_config(config).max_structured_output_retries]) if enabled(config) else None
             try:
@@ -50,13 +109,15 @@ class NativeResearchQuality:
                 if budget is not None:
                     structured_attempt_budget.reset(budget)
 
-        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
         if enabled(config) and cache is not None:
             semantic = {k: v for k, v in payload.items() if k != "tool_results"}
             if "deterministic_checks" in semantic:
                 semantic["deterministic_checks"] = {k: v for k, v in semantic["deterministic_checks"].items()
                                                     if k not in {"evidence_result_count", "error_count", "batch_failures"}}
             value = await cache.compute("assessment", {"version": 1, "kind": span_name,
+                **({"policy_version": config.get("metadata", {}).get("quality_policy_version"),
+                    "run_schema": config.get("metadata", {}).get("run_config_schema_version")}
+                   if quality_enforced(config) else {}),
                 "model": Configuration.from_runnable_config(config).quality_evaluation_model,
                 "schema": schema.model_json_schema(), "rules": system_prompt, "payload": semantic}, compute)
         else:
@@ -133,6 +194,25 @@ class NativeResearchQuality:
                 "deterministic_checks": checks, "evaluator_error": None,
                 "gaps": [{"requirement_id": rid, "kind": "factual", "reason": "no_eligible_evidence",
                           "checked_evidence_ids": [], "next_query": "读取已选资料并提取证据"} for rid in assignment.requirement_ids]}
+        if config.get("metadata", {}).get("run_config_schema_version", 18) >= 22:
+            from open_deep_research.evidence import required_source_count
+            from open_deep_research.quality.gate import deterministic_tool_checks, count_traceable_sources
+            cfg = Configuration.from_runnable_config(config)
+            scoped_evidence = source_scoped_evidence_records(evidence, contract)
+            checks = deterministic_tool_checks(rows, min_sources=cfg.quality_evaluation_min_sources,
+                evidence_registry=scoped_evidence, coverage_contract=contract)
+            checks["source_count"] = count_traceable_sources(scoped_evidence)
+            required = required_source_count(cfg.quality_evaluation_min_sources, contract,
+                                             leaf=assignment.task_id != "main-research")
+            if checks["source_count"] < required:
+                checks["required_source_count"] = required
+                checks["passed"] = False
+                checks["failures"] = list(dict.fromkeys([*checks["failures"], "insufficient_traceable_sources"]))
+                reason = f"当前只有 {checks['source_count']} 个可追溯来源，本任务至少需要 {required} 个。继续在已授权范围内补充相关来源；数量达标后再评估事实覆盖。"
+                return {"decision": "retry", "accepted": False, "evaluation_source": "deterministic",
+                    "reason": reason, "deterministic_checks": checks, "evaluator_error": None,
+                    "missing_information": [reason], "suggested_queries": ["针对当前问题补充不同的已授权来源"],
+                    "gaps": [], "requirement_checks": []}
         from open_deep_research.quality.task_scope import QualityScopeViolation
         from open_deep_research.quality.gate import QualityInputBudgetExceeded
         try:
@@ -186,6 +266,9 @@ class NativeResearchQuality:
             evaluator=self.evaluate,
         )
         config = self.config_provider()
+        if (outcome.task_id == "main-research"
+                and config.get("metadata", {}).get("run_config_schema_version", 0) >= 25):
+            return await self._repair_main_handoff(outcome, contract, result, config)
         supported = {row.requirement_id for row in result.requirement_coverage if row.status == "supported"}
         # If every owned fact is already supported, a misleading compression
         # should be repaired from the same evidence, not sent back to Web search.
@@ -207,3 +290,55 @@ class NativeResearchQuality:
                 coverage_contract=contract, requirement_ids=outcome.requirement_ids, evaluator=self.evaluate)
             outcome.assessment["summary_repair"]["accepted"] = result.accepted
         return result
+
+    async def _repair_main_handoff(self, outcome, contract, initial, config):
+        """Rebuild one rejected summary from its own checked excerpts, then re-admit."""
+        from .efficiency import research_budget_reason
+
+        if (initial.accepted or initial.evaluator_error or not initial.unsupported_claims
+                or not initial.deterministic_checks.get("passed")
+                or outcome.termination not in {"research_complete", "iteration_limit"}
+                or "summary_repair" in outcome.assessment
+                or any(gap.kind not in {"factual", "advisory"} for gap in initial.gaps)
+                or any(code.split(":", 1)[0] not in {"unsupported_claims", "required_information_missing",
+                       "unresolved_requirement_gap", "required_coverage_missing"} for code in initial.hard_rejection_reasons)):
+            return initial
+        records = {row["evidence_id"]: row for row in source_scoped_evidence_records(outcome.evidence_registry, contract)}
+        supported, gaps = [], []
+        for requirement in initial.requirement_coverage:
+            if requirement.status != "supported":
+                gaps.append(requirement.requirement_id)
+                continue
+            for eid in requirement.evidence_ids:
+                excerpt = records.get(eid, {}).get("supporting_excerpt")
+                if excerpt:
+                    supported.append(f"[{eid}] {excerpt}")
+        if not supported:
+            return initial
+        from .efficiency import fingerprint
+        from open_deep_research.quality.gate import HandoffAssessment
+        cache = getattr(getattr(self.models, "recovery", None), "research_cache", None)
+        identity = fingerprint([outcome.task_id, contract, outcome.compressed_research, sorted(records),
+                                initial.model_dump(mode="json")])
+        saved = (await cache.progress()).get("handoff_repairs", {}).get(identity) if cache else None
+        if saved and saved.get("final_assessment") is not None:
+            outcome.assessment["summary_repair"] = saved["receipt"]
+            outcome.compressed_research = saved["receipt"]["replacement_summary"]
+            return HandoffAssessment.model_validate(saved["final_assessment"])
+        if await research_budget_reason(self.models, config):
+            return initial
+        replacement = "\n".join(dict.fromkeys(supported))
+        if gaps:
+            replacement += "\n尚缺直接证据的需求：" + "、".join(gaps)
+        receipt = {"attempts": 1, "reason": "unsupported_claims", "original_summary": outcome.compressed_research,
+                   "initial_assessment": initial.model_dump(mode="json"), "replacement_summary": replacement}
+        if cache:
+            await cache.progress({"handoff_repairs": {identity: {"receipt": receipt}}})
+        outcome.assessment["summary_repair"] = receipt
+        outcome.compressed_research = replacement
+        final = await evaluate_subagent_handoff(outcome.research_topic, outcome.model_dump(mode="json"), config,
+            coverage_contract=contract, requirement_ids=outcome.requirement_ids, evaluator=self.evaluate)
+        receipt["accepted"] = final.accepted
+        if cache:
+            await cache.progress({"handoff_repairs": {identity: {"receipt": receipt, "final_assessment": final.model_dump(mode="json")}}})
+        return final

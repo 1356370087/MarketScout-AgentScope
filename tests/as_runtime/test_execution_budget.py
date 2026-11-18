@@ -159,6 +159,54 @@ async def test_checkpoint_save_cannot_erase_already_delivered_findings(store):
 
 
 @pytest.mark.asyncio
+async def test_decline_report_cost_finishes_from_accepted_evidence_without_model_calls(store, monkeypatch):
+    from test_quality_bypass import marked_snapshot
+    from open_deep_research.agentscope_runtime.recovery import RecoveryStages
+    from open_deep_research.agentscope_runtime.recovery_events import public_events
+    from open_deep_research.agentscope_runtime.report import NativeReportWriter
+
+    state = marked_snapshot()
+    state.completed = list(STAGES[:7])
+    state.status = "waiting"
+    state.approvals = {
+        "report-cost": {"kind": "budget", "payload": {
+            "dimension": "cost_micro_usd", "operation_key": "final_report_generation:0:report:model:0",
+        }},
+    }
+    await store.create_run("owner", state, limits={"cost_micro_usd": 1000})
+    lease = await store.acquire(state.run_id, "owner")
+    await store.save(lease, state)
+    events = await store.events(state.run_id, "owner")
+    assert any("deny" in event[2].get("allowed_actions", []) for row in events for event in public_events(row))
+    receipt = {"action": "deny"}
+    await store.submit_decision(state.run_id, "owner", "decline", "report-cost", receipt)
+    session = RecoverySession(store, lease, state)
+    writer = NativeReportWriter(SimpleNamespace(recovery=session))
+    build = AsyncMock(side_effect=AssertionError("declining must not retry report model calls"))
+    monkeypatch.setattr("open_deep_research.report.orchestrator.build_report", build)
+
+    class ReportStages:
+        async def execute(self, stage, snapshot):
+            assert stage == "final_report_generation"
+            snapshot.final_report = await writer(snapshot, config())
+
+    pipeline = ResearchPipeline(state, RecoveryStages(ReportStages(), session), session.save,
+                                config_fingerprint=state.config_fingerprint, recovery=session)
+    await session.consume_decisions(pipeline)
+    async for _ in pipeline.reply_stream():
+        pass
+    final, _ = await store.load(state.run_id, "owner")
+    assert final.status == "completed" and final.approvals == {}
+    assert "Supported finding" in final.final_report
+    assert final.report_product["completion_status"] == "partial"
+    assert final.report_product["report_review"]["status"] == "skipped"
+    assert final.completion_outcome["reason"] == "report_budget_extension_denied"
+    assert (await store.budget(state.run_id, "owner"))["used"] == {}
+    assert await store.submit_decision(state.run_id, "owner", "decline", "report-cost", receipt) == "applied"
+    build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_report_resume_replays_paid_draft_without_changing_operation_keys(store, tmp_path, monkeypatch):
     from agentscope.model import StructuredResponse
     from pydantic import BaseModel
@@ -170,6 +218,7 @@ async def test_report_resume_replays_paid_draft_without_changing_operation_keys(
     from open_deep_research.report.runtime import ReportMessage, native_report
 
     clock = [1000.]
+    monkeypatch.setenv("RUNS_DIR", str(tmp_path))
     monkeypatch.setattr(store, "_now", AsyncMock(side_effect=lambda _: clock[0]))
     monkeypatch.setattr("time.time", lambda: clock[0])
     state = marked_snapshot()

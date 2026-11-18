@@ -12,7 +12,7 @@ export function interruptNativeRun(runId: string, scenario: string) {
   const project = process.env.COMPOSE_PROJECT_NAME;
   let ids: string[];
   if (scenario === "worker-kill") {
-    ids = docker("ps", "-q", "--filter", `label=insightforge.run_id=${runId}`, "--filter", "label=insightforge.role=native-team").split(/\s+/).filter(Boolean);
+    ids = docker("ps", "-q", "--filter", `label=marketscout.run_id=${runId}`, "--filter", "label=marketscout.role=native-team").split(/\s+/).filter(Boolean);
   } else if (scenario === "api-gateway-kill") {
     ids = ["api", "sandbox-gateway"].flatMap(service => docker("ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", `label=com.docker.compose.service=${service}`).split(/\s+/).filter(Boolean));
     if (ids.length !== 2) throw new Error("专用 API/Gateway 容器不完整");

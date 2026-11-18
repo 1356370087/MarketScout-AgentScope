@@ -58,7 +58,7 @@ for extension in ('docx','pptx'):
             f"{root / 'src'}:/current/src:ro",
             "-v",
             f"{directory}:/evidence",
-            "insight_forge-document-worker:latest",
+            "marketscout-document-worker:latest",
             "-c",
             conversion,
         ],

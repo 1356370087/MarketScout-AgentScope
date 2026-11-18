@@ -15,6 +15,17 @@ GEN = "33333333-3333-3333-3333-333333333333"
 VERSION = "44444444-4444-4444-4444-444444444444"
 
 
+def test_generation_view_reads_canonical_times_after_actor_migration():
+    from datetime import UTC, datetime
+    created = datetime(2026, 10, 30, tzinfo=UTC)
+    view = versioning._generation_view({
+        "id": GEN, "document_id": DOC, "version_id": VERSION, "status": "pending_review",
+        "created_at": OWNER, "updated_at": "document-worker", "create_time": created,
+        "update_time": created, "published_at": None, "review_note": "",
+    })
+    assert view["created_at"] == view["updated_at"] == created.isoformat()
+
+
 class ScriptedConnection:
     """Pops scripted fetchrow outcomes while recording every statement."""
 

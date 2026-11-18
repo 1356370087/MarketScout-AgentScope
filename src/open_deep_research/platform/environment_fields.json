@@ -1,4 +1,10 @@
 {
+  "RESEARCH_EXECUTION_STRATEGY": {
+    "description": "研究策略；默认 adaptive，主 Agent 直接研究并按需委派；delegated 使用原有委派流程。仅影响新运行，显式 teams 使用团队协作。",
+    "bootstrap": false,
+    "secret": false,
+    "default": "adaptive"
+  },
   "LOG_FORMAT": {
     "description": "日志格式：console（本地友好）或 json（生产采集）。",
     "bootstrap": false,
@@ -857,6 +863,12 @@
     "bootstrap": false,
     "secret": false
   },
+  "TZ": {
+    "description": "研究提示词的业务时区，使用 IANA 时区名；默认 Asia/Shanghai。",
+    "bootstrap": true,
+    "secret": false,
+    "default": "Asia/Shanghai"
+  },
   "APP_ENV": {
     "description": "运行环境。production 下强制校验 JWT 密钥与 SMTP；development 下可自动生成临时 JWT 密钥。",
     "bootstrap": true,
@@ -1368,7 +1380,7 @@
     "default": 30
   },
   "RESTIC_REPOSITORY": {
-    "description": "RustFS 示例端口映射：9010 为 S3 接口，9011 为 Web 控制台；以实际部署映射为准。 正确示例：s3:http://rustfs.example.internal:9010/insight-forge 带独立目录前缀的示例：s3:http://rustfs.example.internal:9010/insight-forge/knowledge-backups 不要填写控制台网址，也不要包含 /rustfs/console/browser/ 等页面路径。 http 仅适用于可信内网；使用 https 时应配置服务端证书及客户端信任链。",
+    "description": "RustFS 示例端口映射：9010 为 S3 接口，9011 为 Web 控制台；以实际部署映射为准。 正确示例：s3:http://rustfs.example.internal:9010/marketscout 带独立目录前缀的示例：s3:http://rustfs.example.internal:9010/marketscout/knowledge-backups 不要填写控制台网址，也不要包含 /rustfs/console/browser/ 等页面路径。 http 仅适用于可信内网；使用 https 时应配置服务端证书及客户端信任链。",
     "bootstrap": false,
     "secret": false
   },
@@ -1393,7 +1405,7 @@
     "secret": false
   },
   "KNOWLEDGE_RESTORE_DATABASE_URL": {
-    "description": "灾备恢复演练的目标 PostgreSQL 连接串；仅 restore 命令需要，常规备份可留空。 必须先创建独立空数据库；程序拒绝恢复到源数据库或已包含业务表的数据库。 示例：postgresql://restore_user:替换为密码@app-db:5432/insightforge_restore_check 连接串内密码如含 @、:、/ 等特殊字符，需要进行 URL 编码；不要在示例文件填写真实密码。",
+    "description": "灾备恢复演练的目标 PostgreSQL 连接串；仅 restore 命令需要，常规备份可留空。 必须先创建独立空数据库；程序拒绝恢复到源数据库或已包含业务表的数据库。 示例：postgresql://restore_user:替换为密码@app-db:5432/marketscout_restore_check 连接串内密码如含 @、:、/ 等特殊字符，需要进行 URL 编码；不要在示例文件填写真实密码。",
     "bootstrap": true,
     "secret": false
   },
@@ -1408,7 +1420,7 @@
     "secret": false
   },
   "ROCKETMQ_TOPIC_PREFIX": {
-    "description": "部署独占的 Topic/消费组前缀，默认 insightforge；不同数据库不可共用该前缀。 需预建 <前缀>_coordination_events_v1 和 <前缀>_coordination_control_v1，消息类型 TRANSACTION。",
+    "description": "部署独占的 Topic/消费组前缀，默认 marketscout；不同数据库不可共用该前缀。 需预建 <前缀>_coordination_events_v1 和 <前缀>_coordination_control_v1，消息类型 TRANSACTION。",
     "bootstrap": true,
     "secret": false
   },
@@ -1449,12 +1461,12 @@
     "secret": false
   },
   "AS_ROCKETMQ_TOPIC_PREFIX": {
-    "description": "默认 insightforge_as；须预建 <前缀>_broadcast_wake_v1（NORMAL 类型），不同业务库独占前缀。",
+    "description": "默认 marketscout_as；须预建 <前缀>_broadcast_wake_v1（NORMAL 类型），不同业务库独占前缀。",
     "bootstrap": true,
     "secret": false
   },
   "AS_ROCKETMQ_GROUP": {
-    "description": "启用远程广播时必填：每个并行运行实例使用独立、预建的消费组；重启可复用。 不同实例共用消费组会负载均衡，无法确保所有实例收到广播。示例：insightforge_as_api_01。",
+    "description": "启用远程广播时必填：每个并行运行实例使用独立、预建的消费组；重启可复用。 不同实例共用消费组会负载均衡，无法确保所有实例收到广播。示例：marketscout_as_api_01。",
     "bootstrap": true,
     "secret": false
   },
@@ -1506,7 +1518,7 @@
     "secret": false
   },
   "AS_TEAM_WORKER_MOUNTS": {
-    "description": "Docker --mount 参数的 JSON 数组，默认 []；生产须共享 RUNS_DIR 工件目录与策略文件。 示例：[\"type=bind,source=/srv/insightforge/runs,target=/app/.runs\"]",
+    "description": "Docker --mount 参数的 JSON 数组，默认 []；生产须共享 RUNS_DIR 工件目录与策略文件。 示例：[\"type=bind,source=/srv/marketscout/runs,target=/app/.runs\"]",
     "bootstrap": true,
     "secret": false
   },
@@ -1668,8 +1680,8 @@
     "secret": false,
     "default": "C.UTF-8"
   },
-  "INSIGHTFORGE_TASK_WORKSPACE_ROOT": {
-    "description": "高级配置参数：INSIGHTFORGE_TASK_WORKSPACE_ROOT。用途及默认值遵循对应服务配置契约。",
+  "MARKETSCOUT_TASK_WORKSPACE_ROOT": {
+    "description": "高级配置参数：MARKETSCOUT_TASK_WORKSPACE_ROOT。用途及默认值遵循对应服务配置契约。",
     "bootstrap": false,
     "secret": false,
     "default": "/workspace/work"
@@ -1693,5 +1705,61 @@
     "description": "高级配置参数：SANDBOX_RESULT_PATH。用途及默认值遵循对应服务配置契约。",
     "bootstrap": false,
     "secret": false
+  },
+  "INTELLIGENCE_ENABLED": {
+    "description": "持续情报总开关；默认 false；启用前完成业务迁移并启动 intelligence-worker。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "INTELLIGENCE_MAX_CONCURRENT_RUNS": {
+    "description": "自动研究并发上限；默认 4；每个计划同时最多执行 1 次研究。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 4
+  },
+  "INTELLIGENCE_POLL_SECONDS": {
+    "description": "情报协调与 Worker 空闲轮询间隔；单位秒；默认 5，最小 1。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "number",
+    "default": 5
+  },
+  "INTELLIGENCE_SNAPSHOT_RETENTION_DAYS": {
+    "description": "无引用且不属于活动计划的观察快照保留天数；默认 90。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "integer",
+    "default": 90
+  },
+  "INTELLIGENCE_PUBLIC_ORIGIN": {
+    "description": "MarketScout 对外访问源地址；启用飞书必填；生产使用 HTTPS，不包含路径或查询参数。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "string",
+    "default": ""
+  },
+  "FEISHU_NOTIFICATIONS_ENABLED": {
+    "description": "飞书外部投递开关；默认 false；完成应用配置与个人绑定后开启，可独立关闭投递。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "boolean",
+    "default": false
+  },
+  "FEISHU_APP_ID": {
+    "description": "飞书企业自建应用 App ID；启用飞书通知时必填。",
+    "bootstrap": false,
+    "secret": false,
+    "type": "string",
+    "default": ""
+  },
+  "FEISHU_APP_SECRET": {
+    "description": "飞书企业自建应用 App Secret；只存平台凭据或未跟踪本地配置，不进入运行快照。",
+    "bootstrap": false,
+    "secret": true,
+    "type": "string",
+    "default": ""
   }
 }

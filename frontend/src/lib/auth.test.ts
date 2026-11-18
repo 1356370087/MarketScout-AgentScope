@@ -27,4 +27,9 @@ describe("browser IAM client", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
     await expect(refreshBrowserSession()).resolves.toBe(false);
   });
+
+  it("allows retrying the protected request when another request rotated the session", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 409 }));
+    await expect(refreshBrowserSession()).resolves.toBe(true);
+  });
 });

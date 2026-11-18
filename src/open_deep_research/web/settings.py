@@ -28,3 +28,4 @@ class WebPipelineSettings:
     # Frozen quality policy selects this behavior; old runs retain v5 extraction.
     evidence_fidelity: bool = False
     include_navigation: bool = False
+    unknown_freshness: bool = True

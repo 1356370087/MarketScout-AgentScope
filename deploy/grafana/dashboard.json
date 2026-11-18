@@ -2,7 +2,7 @@
   "annotations": {
     "list": []
   },
-  "description": "Operational overview for the InsightForge research control plane.",
+  "description": "Operational overview for the MarketScout research control plane.",
   "editable": true,
   "graphTooltip": 1,
   "id": null,
@@ -136,7 +136,7 @@
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["insightforge", "operations", "research"],
+  "tags": ["marketscout", "operations", "research"],
   "templating": {
     "list": [
       {
@@ -150,7 +150,7 @@
   },
   "time": {"from": "now-6h", "to": "now"},
   "timezone": "browser",
-  "title": "InsightForge Operations",
-  "uid": "insightforge-operations",
+  "title": "MarketScout Operations",
+  "uid": "marketscout-operations",
   "version": 1
 }

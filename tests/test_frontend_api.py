@@ -284,7 +284,7 @@ def test_terminal_run_does_not_rehydrate_pending_security_approvals(
 def _set_litellm_run_key_env(monkeypatch) -> None:
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm-proxy:4000/v1")
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-test-master")
-    monkeypatch.setenv("LITELLM_RUN_TEAM_ID", "insightforge-runs")
+    monkeypatch.setenv("LITELLM_RUN_TEAM_ID", "marketscout-runs")
     monkeypatch.setenv(
         "LITELLM_RUN_KEY_ENCRYPTION_KEY",
         base64.urlsafe_b64encode(b"k" * 32).decode("ascii"),

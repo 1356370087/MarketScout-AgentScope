@@ -6,6 +6,8 @@ from agentscope.message import SystemMsg, TextBlock, UserMsg
 
 from open_deep_research.report.runtime import ReportMessage, native_report
 
+from .execution_budget import REPORT_BUDGET_DECLINE_REASON
+
 
 def _partial_report_update(snapshot, state, config, reason):
     """Deliver only deterministic accepted evidence after a bounded stop."""
@@ -17,7 +19,7 @@ def _partial_report_update(snapshot, state, config, reason):
     decision = {**snapshot.completion_outcome, "action": "complete_partial", "reason": reason,
                 "gaps": list(dict.fromkeys([*snapshot.completion_outcome.get("gaps", []),
                     *(["report_review_not_completed"] if reason in {"deadline_exceeded", "budget_exhausted",
-                       "report_time_extension_denied", "report_time_extension_limit"} else [])]))}
+                       "report_time_extension_denied", "report_time_extension_limit", REPORT_BUDGET_DECLINE_REASON} else [])]))}
     snapshot.completion_outcome = decision
     state = {**state, "completion_outcome": decision, "completion_decision": decision}
     cfg = Configuration.from_runnable_config(config)
@@ -31,8 +33,10 @@ def _partial_report_update(snapshot, state, config, reason):
         "canonical_report": _canonical_report_payload(markdown, state, config, get_profile(cfg.report_type), [])}
 
 
-def task_evidence(findings):
+def task_evidence(findings, config=None):
     """Retain task ownership for input selection without claiming factual coverage."""
+    from .research_quality import admitted_findings
+    findings = admitted_findings(findings, config or {})
     return [{**record, "requirement_ids": list(dict.fromkeys([
                 *record.get("requirement_ids", []), *finding.get("requirement_ids", []),
             ]))}
@@ -58,16 +62,18 @@ class NativeReportWriter:
             native_report.reset(token)
 
     async def _outline(self, snapshot, config):
+        from .research_quality import admitted_findings
         from open_deep_research.configuration import Configuration
         from open_deep_research.report.assembly import ReportContext
         from open_deep_research.report.profiles import get_profile
 
         cfg = Configuration.from_runnable_config(config)
+        findings = admitted_findings(snapshot.findings, config)
         context = ReportContext.from_state(
             {
                 "research_brief": snapshot.research_brief,
-                "notes": [item.get("compressed_research", "") for item in snapshot.findings],
-                "evidence_registry": task_evidence(snapshot.findings),
+                "notes": [item.get("compressed_research", "") for item in findings],
+                "evidence_registry": task_evidence(snapshot.findings, config),
                 "coverage_contract": snapshot.coverage_contract,
                 "coverage_ledger": snapshot.coverage_ledger,
             },
@@ -86,7 +92,9 @@ class NativeReportWriter:
 
     async def __call__(self, snapshot, config):
         from open_deep_research.report.orchestrator import build_report, _unwrap_update_value
+        from .research_quality import admitted_findings
 
+        findings = admitted_findings(snapshot.findings, config)
         skipped_quality = snapshot.agent_states.get("supervisor", {}).get("middle_context", {}).get("quality_gate", {})
         port = _ReportRun(self.models, snapshot)
         port.metadata = config.get("metadata", {})
@@ -101,10 +109,10 @@ class NativeReportWriter:
                     for m in snapshot.messages
                 ],
                 "research_brief": snapshot.research_brief,
-                "notes": [f.get("compressed_research", "") for f in snapshot.findings],
-                "completed_task_outputs": snapshot.findings,
+                "notes": [f.get("compressed_research", "") for f in findings],
+                "completed_task_outputs": findings,
                 "supervisor_messages": snapshot.agent_states.get("supervisor", {}).get("context", []),
-                "evidence_registry": task_evidence(snapshot.findings),
+                "evidence_registry": task_evidence(snapshot.findings, config),
                 "coverage_contract": snapshot.coverage_contract,
                 "coverage_ledger": snapshot.coverage_ledger,
                 "research_risk_profile": snapshot.research_risk_profile,
@@ -113,13 +121,56 @@ class NativeReportWriter:
                 "report_outline": snapshot.outline,
                 "quality_gate": skipped_quality,
             }
+            if (config.get("metadata", {}).get("run_config_schema_version", 0) >= 25
+                    and getattr(self.models, "recovery", None) is not None):
+                from .execution_receipts import execution_receipts
+                recovery = self.models.recovery
+                state["execution_receipts"] = await execution_receipts(recovery.store, snapshot.run_id, recovery.lease.user_id)
+                snapshot.application["execution_receipts"] = state["execution_receipts"]
             bound_config = {
                 **config,
                 "metadata": {**config.get("metadata", {}), "run_id": snapshot.run_id},
             }
+            version = snapshot.application.get("review_derivation")
+            if version:
+                from .derived_review import read_draft, parent_selection
+                from open_deep_research.report.references import parse_sources_from_text
+                from .recovery_store import digest
+                parent, _ = await self.models.recovery.store.load(version["parent_run_id"], self.models.recovery.lease.user_id)
+                markdown = read_draft(parent, version["base_sha256"])
+                if config.get("metadata", {}).get("run_config_schema_version", 0) >= 28:
+                    from .execution_receipts import source_run_receipts
+                    state["source_run_receipts"] = await source_run_receipts(
+                        self.models.recovery.store, parent, self.models.recovery.lease.user_id)
+                bound_config["metadata"]["source_selection"] = parent_selection(parent).model_dump(mode="json")
+                scope_urls = {r["source_url"] for r in state["evidence_registry"]}
+                state["archived_review_draft"] = {"markdown": markdown, "sha256": version["base_sha256"],
+                    "sources": [s.model_dump(mode="json") for s in parse_sources_from_text(markdown) if s.url in scope_urls]}
+                if config.get("metadata", {}).get("run_config_schema_version", 0) >= 27:
+                    updates = set(version.get("requirement_ids") or version.get("inherited_update_ids", []))
+                    state["verified_supplement"] = [
+                        {"requirement_id": rid, "subject": requirement.get("subject") or "",
+                         "text": requirement["text"], "evidence_ids": snapshot.coverage_ledger[rid]["evidence_ids"]}
+                        for requirement in snapshot.coverage_contract.get("requirements", [])
+                        if (rid := requirement["requirement_id"]) in updates
+                        and snapshot.coverage_ledger.get(rid, {}).get("status") == "supported"
+                        and snapshot.coverage_ledger[rid].get("evidence_ids")]
+                snapshot.application["review_config_fingerprint"] = snapshot.config_fingerprint
+                snapshot.application["review_evidence_sha256"] = digest(snapshot.application.get("review_evidence_manifest", []))
+            if config.get("metadata", {}).get("run_config_schema_version", 0) >= 29:
+                from .execution_receipts import bind_verified_reads
+                executions = [*reversed(state.get("source_run_receipts", [])), state.get("execution_receipts", {})]
+                state["evidence_registry"] = bind_verified_reads(state["evidence_registry"], executions)
             # 研究停止是为了把剩余资源交给报告，不能把“预留”当成已耗尽。
             # 有证据时继续写作、引用校验和审阅；实际预算拒绝仍走恢复报告。
-            if snapshot.completion_outcome.get("action") == "complete_partial" and not state["evidence_registry"]:
+            from .research_quality import quality_enforced
+            partial = snapshot.completion_outcome.get("action") == "complete_partial" or (
+                quality_enforced(config) and snapshot.completion_outcome.get("action") == "terminate")
+            if snapshot.application.get("execution_budget", {}).get("report_budget_declined"):
+                update = _partial_report_update(snapshot, state, bound_config, REPORT_BUDGET_DECLINE_REASON)
+            elif version and snapshot.application.get("supplement_incomplete"):
+                update = _partial_report_update(snapshot, state, bound_config, "supplement_not_verified")
+            elif (partial or config.get("metadata", {}).get("run_config_schema_version", 0) >= 25) and not state["evidence_registry"]:
                 reason = snapshot.completion_outcome.get("reason", "insufficient_evidence")
                 update = _partial_report_update(snapshot, state, bound_config, reason)
             else:
@@ -138,6 +189,20 @@ class NativeReportWriter:
                         str(exc) if str(exc) in {"report_time_extension_denied", "report_time_extension_limit"} else "deadline_exceeded")
                     update = _partial_report_update(snapshot, state, bound_config, reason)
             final_decision = _unwrap_update_value(update.get("completion_decision"), snapshot.completion_outcome)
+            if version:
+                import hashlib
+                final_hash = hashlib.sha256(update["final_report"].encode()).hexdigest()
+                review = update.get("report_review") or {}
+                if review.get("decision") == "pass" and not review.get("skipped") and review.get("draft_sha256") != final_hash:
+                    from .recovery_store import RecoveryConflict
+                    raise RecoveryConflict("reviewed_body_hash_mismatch")
+                if review.get("decision") != "pass" or review.get("degraded") or review.get("skipped"):
+                    if final_decision.get("action") != "complete_partial":
+                        final_decision = {**final_decision, "action": "complete_partial", "reason": "derived_review_incomplete"}
+                    canonical = update.get("canonical_report")
+                    if isinstance(canonical, dict):
+                        canonical["completion_status"] = "partial"
+                snapshot.application["delivered_sha256"] = final_hash
             if skipped_quality.get("skipped_stages"):
                 # 仅补充临时跳过记录；报告自身的降级/失败结论和审阅记录仍有独立效力。
                 report_gate = _unwrap_update_value(update.get("quality_gate"), {}) or {}
@@ -258,22 +323,40 @@ class _ReportRun:
         recovery = self.models.recovery
         if recovery is None:
             return
-        sha = hashlib.sha256(draft.markdown.encode("utf8", errors="replace")).hexdigest()
+        from open_deep_research.report.publication_store import atomic_write_report_bytes
+        raw = draft.markdown.encode("utf8", errors="replace")
+        sha = hashlib.sha256(raw).hexdigest()
         directory = runtime_data_dir() / self.snapshot.run_id / "report-reviews"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / (sha + ".md")).write_bytes(draft.markdown.encode("utf8", errors="replace"))
-        records = unique_evidence([r for task in self.snapshot.findings for r in task.get("evidence_registry", [])])
+        body = directory / (sha + ".md")
+        if body.exists():
+            if body.read_bytes() != raw:
+                from .recovery_store import RecoveryConflict
+                raise RecoveryConflict("report_draft_hash_changed")
+        else:
+            atomic_write_report_bytes(body, raw)
+        records = unique_evidence(task_evidence(self.snapshot.findings, {"metadata": getattr(self, "metadata", {})}))
+        from .recovery_store import digest
+        from .research_quality import admitted_findings
+        raw_versions = {r["evidence_id"]: digest(r) for task in admitted_findings(
+            self.snapshot.findings, {"metadata": getattr(self, "metadata", {})}) for r in task.get("evidence_registry", [])}
         prior = self.snapshot.application.get("report_review_artifacts", {}).get(sha, {})
         manifest = {"sha256": sha, "attempt": attempt, "revision_count": revision_count,
             "coverage_contract": self.snapshot.coverage_contract,
-            "evidence_ids": [r["evidence_id"] for r in records],
+            "evidence_ids": [r["evidence_id"] for r in records], "evidence_versions": raw_versions,
+            "config_fingerprint": self.snapshot.config_fingerprint,
             "evidence_selections": self.snapshot.application.get("report_evidence_selections", {}),
             "review": review.model_dump(mode="json") if review else prior.get("review"),
             "scope": "review_draft", "delivered": False}
         self.review_submission = (draft, attempt, revision_count)
-        (directory / (sha + ".json")).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf8")
         self.snapshot.application.setdefault("report_review_artifacts", {})[sha] = manifest
+        from .research_quality import quality_enforced
+        if quality_enforced({"metadata": getattr(self, "metadata", {})}):
+            self.snapshot.report_product["final_report_draft"] = draft.markdown
+            self.snapshot.report_product["report_draft_sha256"] = sha
+            if review is not None:
+                self.snapshot.report_product["report_review"] = review.model_dump(mode="json")
         await recovery.save(self.snapshot)
+        atomic_write_report_bytes(directory / (sha + ".json"), json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf8"))
 
     async def invoke(self, role, messages, cfg, *, span_name, schema=None):
         from open_deep_research.models.errors import is_token_limit_exceeded

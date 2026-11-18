@@ -11,7 +11,7 @@ import { Providers } from "./providers";
 import type { Locale } from "@/i18n/messages";
 
 export const metadata: Metadata = {
-  title: { default: "InsightForge · 企业竞品分析", template: "%s · InsightForge" },
+  title: { default: "MarketScout · 企业竞品分析", template: "%s · MarketScout" },
   description: "面向企业竞争情报的可验证深度研究工作台",
 };
 

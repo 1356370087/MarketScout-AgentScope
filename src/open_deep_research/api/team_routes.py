@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from open_deep_research.agentscope_runtime.run_config import RunConfig
 from open_deep_research.api.contracts import HumanFeedbackRequest, TeamMessageRequest
+from open_deep_research.configuration import Configuration
 from security.rbac.dependencies import require_permissions
 from security.rbac.permissions import RESEARCH_RUN_INTERACT_OWN, RESEARCH_RUN_READ_OWN
 
@@ -86,7 +87,7 @@ def build_team_router(service):
         with http_errors():
             state, _ = await service.store.load(run_id, principal.user_id)
             run = RunConfig.restore(state.application["configuration"])
-            if not run.get("enable_async_research"):
+            if not Configuration.from_runnable_config(run.compatibility_projection()).use_durable_research_team:
                 return {"enabled": False}
             runtime = getattr(service.pipeline_factory, "runtime", None)
             host = getattr(runtime, "_team_host", None)

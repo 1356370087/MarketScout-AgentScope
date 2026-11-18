@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 from datetime import UTC, datetime
+from open_deep_research.research_time import research_today
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal, Protocol
@@ -73,7 +74,7 @@ class ResearchSnapshot(BaseModel):
     outline: str = ""
     final_report: str = ""
     report_product: dict = Field(default_factory=dict)
-    report_date: str = Field(default_factory=lambda: datetime.now(UTC).date().isoformat())
+    report_date: str = Field(default_factory=research_today)
     pending: PendingDecision | None = None
     decisions: dict[str, str] = Field(default_factory=dict)
     feedback: list[str] = Field(default_factory=list)
@@ -155,7 +156,7 @@ class ResearchPipeline:
             await self._decide(decision_id, action, feedback, **options)
 
     async def _decide(self, decision_id: str, action: str, feedback: str = "", *, source_selection=None, expected_version=None, extension_seconds=None) -> None:
-        from .execution_budget import APPROVAL_STAGE, validate_extension
+        from .execution_budget import APPROVAL_STAGE, can_decline_report_budget, validate_extension
         pending = self.state.pending
         time_decision = pending is not None and pending.stage == APPROVAL_STAGE
         if action not in {"approve", "revise", "cancel", "answer", "deny"}:
@@ -179,11 +180,12 @@ class ResearchPipeline:
             # Keep the stage/revision and all report operation keys unchanged.
             await self._commit(state)
             return
-        if action == "deny" or extension_seconds is not None:
+        if extension_seconds is not None:
             raise ValueError("time decision requires a pending report time request")
         if decision_id in self.state.approvals:
             approval = self.state.approvals[decision_id]
-            if action not in {"approve", "revise", "cancel"}:
+            budget_declined = action == "deny" and can_decline_report_budget(approval, self.state.completed)
+            if action not in {"approve", "revise", "cancel"} and not budget_declined:
                 raise ValueError("unsupported operation approval action")
             state = self.state.model_copy(deep=True)
             state.decisions[decision_id] = receipt
@@ -193,6 +195,8 @@ class ResearchPipeline:
             elif action == "cancel":
                 state.status = "cancelled"
                 state.approvals.clear()
+            elif budget_declined:
+                state.application.setdefault("execution_budget", {})["report_budget_declined"] = True
             else:
                 state.revision_count += 1
                 state.feedback.append(feedback)
@@ -200,6 +204,8 @@ class ResearchPipeline:
                 state.status = "waiting" if state.approvals else "ready"
             await self._commit(state)
             return
+        if action == "deny":
+            raise ValueError("deny requires a pending report time or cost request")
         if pending is None or pending.id != decision_id:
             raise ValueError("stale research decision")
         if action == "answer" and pending.stage != "clarify_with_user":

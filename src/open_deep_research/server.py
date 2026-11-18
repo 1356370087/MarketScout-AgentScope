@@ -34,6 +34,8 @@ from open_deep_research.sandbox.internal_api import build_internal_sandbox_route
 from security.rbac import mount_rbac, register_ownership_checker
 from open_deep_research.platform.router import router as platform_router, setup_router
 from open_deep_research.platform.model_routes import router as platform_model_router
+from open_deep_research.intelligence.router import router as intelligence_router
+from open_deep_research.intelligence.feishu import router as feishu_router
 from open_deep_research.platform.store import PlatformError
 from open_deep_research.platform.quota import QuotaExceeded
 from fastapi.responses import JSONResponse
@@ -66,7 +68,7 @@ _lifecycle = ApplicationLifecycle(
     native_key_cleanup=_access.key_cleanup,
     admission=lambda: _admission,
 )
-app = FastAPI(title="InsightForge", version="0.1.0", lifespan=_lifecycle.lifespan)
+app = FastAPI(title="MarketScout", version="0.1.0", lifespan=_lifecycle.lifespan)
 
 
 @app.exception_handler(PlatformError)
@@ -77,6 +79,8 @@ async def platform_error(_request, exc):
 
 app.include_router(platform_router)
 app.include_router(platform_model_router)
+app.include_router(intelligence_router)
+app.include_router(feishu_router)
 app.include_router(setup_router)
 
 

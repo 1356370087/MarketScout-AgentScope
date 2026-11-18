@@ -86,7 +86,7 @@ class ApiHostContainer:
             "--name",
             self.name,
             "--label",
-            "insightforge.role=native-matrix",
+            "marketscout.role=native-matrix",
             "-p",
             f"127.0.0.1:{self.port}:{self.port}",
             "-v",

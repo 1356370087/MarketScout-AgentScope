@@ -30,7 +30,7 @@ from .network import PublicSyncTransport
 
 REFRESH_INTERVALS = {"manual": None, "daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 MAX_RETRIES = 3
-USER_AGENT = "InsightForge-KB/1.0 (+sync)"
+USER_AGENT = "MarketScout-KB/1.0 (+sync)"
 
 
 class SyncError(RuntimeError):
@@ -127,7 +127,7 @@ class WebAdapter(SourceAdapter):
             except (PermissionError, ValueError) as exc:
                 raise SyncError("sync_egress_denied") from exc
             response = await client.get(url, headers=headers, follow_redirects=False)
-            if not response.is_redirect:
+            if response.status_code == 304 or not response.is_redirect:
                 return response
             location = response.headers.get("location")
             if not location:
@@ -227,11 +227,15 @@ class WebAdapter(SourceAdapter):
                     datetime.now(timezone.utc) + interval if interval else None,
                 )
             elif success:
+                mode = await connection.fetchval(
+                    "SELECT refresh_mode FROM knowledge_sync_sources WHERE id=$1::uuid", source_id)
+                interval = REFRESH_INTERVALS.get(mode or "daily")
                 await connection.execute(
                     """UPDATE knowledge_sync_sources
-                          SET last_success_at=now(), consecutive_failures=0, updated_at=now()
+                          SET last_success_at=now(), consecutive_failures=0, updated_at=now(), next_run_at=$2
                         WHERE id=$1::uuid""",
                     source_id,
+                    datetime.now(timezone.utc) + interval if interval else None,
                 )
             else:
                 interval = REFRESH_INTERVALS.get(

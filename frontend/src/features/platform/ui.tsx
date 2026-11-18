@@ -15,7 +15,7 @@ export function WorkerState({ name, value }: { name: string; value: unknown }) {
 }
 
 export function Heading({ title, description, children }: { title: string; description: string; children?: ReactNode }) {
-  return <div className="platform-heading"><div><span className="platform-eyebrow">INSIGHTFORGE / PLATFORM</span><h1>{title}</h1><p>{description}</p></div>{children && <div className="platform-actions">{children}</div>}</div>;
+  return <div className="platform-heading"><div><span className="platform-eyebrow">MARKETSCOUT / PLATFORM</span><h1>{title}</h1><p>{description}</p></div>{children && <div className="platform-actions">{children}</div>}</div>;
 }
 export function Alert({ error, children }: { error?: unknown; children?: ReactNode }) {
   return error || children ? <div className={`platform-alert ${error ? "error" : ""}`} role={error ? "alert" : "status"}>{error instanceof Error ? error.message : error ? String(error) : children}</div> : null;

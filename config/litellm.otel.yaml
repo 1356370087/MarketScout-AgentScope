@@ -1,298 +1,272 @@
-# 本文件与 litellm.yaml 同步，仅保留 OTel 回调配置差异。
 model_list:
-- model_name: if-supervisor-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 8
-    weight: 1
-    rpm: 300
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-research-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 16
-    weight: 2
-    rpm: 600
-    tpm: 600000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-research-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 8
-    weight: 1
-    rpm: 300
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-summarization-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 16
-    weight: 1
-    rpm: 600
-    tpm: 600000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-message-summary-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 8
-    weight: 1
-    rpm: 300
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-web-rerank-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 16
-    weight: 1
-    rpm: 600
-    tpm: 600000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-web-evidence-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 16
-    weight: 1
-    rpm: 600
-    tpm: 600000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-compression-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 8
-    weight: 1
-    rpm: 300
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-final-report-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 4
-    weight: 1
-    rpm: 120
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-quality-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 8
-    weight: 1
-    rpm: 300
-    tpm: 300000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-report-review-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 4
-    weight: 1
-    rpm: 120
-    tpm: 180000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-evaluation-v1
-  litellm_params:
-    model: zai/glm-5.3-flash
-    api_base: os.environ/ZHIPU_BASE_URL
-    api_key: os.environ/ZHIPU_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 4
-    weight: 1
-    rpm: 120
-    tpm: 200000
-  model_info:
-    base_model: zai/glm-5.3-flash
-    max_input_tokens: 131072
-    max_output_tokens: 32768
-    input_cost_per_token: 1.5e-07
-    output_cost_per_token: 5.0e-07
-- model_name: if-fallback-v1
-  litellm_params:
-    model: deepseek/deepseek-v4-flash
-    api_key: os.environ/DEEPSEEK_API_KEY
-    extra_body:
-      thinking:
-        type: disabled
-    max_parallel_requests: 16
-    weight: 1
-    rpm: 600
-    tpm: 600000
-  model_info:
-    base_model: deepseek/deepseek-v4-flash
-- model_name: if-embedding-v1
-  litellm_params:
-    model: dashscope/qwen3.7-text-embedding
-    api_key: os.environ/DASHSCOPE_API_KEY
-    dimensions: 1536
-    max_parallel_requests: 16
-    rpm: 600
-    tpm: 1000000
-  model_info:
-    base_model: dashscope/qwen3.7-text-embedding
-    max_input_tokens: 8191
-    input_cost_per_token: 2.0e-08
-    output_cost_per_token: 0
+  # Supervisor：研究规划与任务调度
+  - model_name: if-supervisor-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # Researcher：信息检索、分析与复杂推理
+  - model_name: if-research-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 8
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 摘要与长文内容归纳
+  - model_name: if-summarization-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: low
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 8
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 历史会话/消息摘要
+  - model_name: if-message-summary-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: low
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 8
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # Web 检索结果重排（LLM 重排，不是专用 reranker API）
+  - model_name: if-web-rerank-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: low
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 8
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 网页证据抽取、结构化整理
+  - model_name: if-web-evidence-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: low
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 8
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 上下文压缩（建议应用侧额外做事实/引用保真校验）
+  - model_name: if-compression-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: medium
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 最终研究报告生成
+  - model_name: if-final-report-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 内容质量检查
+  - model_name: if-quality-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 最终报告复核
+  - model_name: if-report-review-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 离线/批量评估
+  - model_name: if-evaluation-v2
+    litellm_params:
+      model: openai/gpt-6.1-sol
+      api_base: os.environ/OPENAI_BASE_URL
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: medium
+      # 对内网 OpenAI 兼容模型显式透传推理强度，避免旧路由能力表拒绝该参数。
+      allowed_openai_params: ["reasoning_effort"]
+      max_parallel_requests: 4
+    model_info:
+      base_model: openai/gpt-6.1-sol
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 922000
+      max_output_tokens: 128000
+      input_cost_per_token: 2e-06
+      output_cost_per_token: 1e-05
+
+  # 独立 Provider 故障回退（不会改变上述正常主路由所用模型）。
+  # DeepSeek 官方已将旧 deepseek-v4-flash 映射为新模型；直接使用当前名称。
+  # 注意：故障回退是跨模型切换，输出表现与请求能力可能有差异。
+  - model_name: if-fallback-v2
+    litellm_params:
+      model: deepseek/deepseek-flash
+      # 强制工具选择用于结构化输出；DeepSeek 的该模式要求关闭 thinking。
+      thinking: {type: disabled}
+      api_key: os.environ/DEEPSEEK_API_KEY
+      max_parallel_requests: 8
+    model_info:
+      base_model: deepseek/deepseek-flash
+      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      max_input_tokens: 1000000
+      max_output_tokens: 393216
+      input_cost_per_token: 3e-07
+      output_cost_per_token: 1.2e-06
+
+  # Local Documents：保留原 1536 维 Qwen Embedding，切换 LLM 不应重建该向量索引。
+  # 嵌入模型的额度、区域和实际结算价格仍需按 DashScope 账户核对。
+  - model_name: if-embedding-v1
+    litellm_params:
+      model: dashscope/qwen3.7-text-embedding
+      api_key: os.environ/DASHSCOPE_API_KEY
+      dimensions: 1536
+      max_parallel_requests: 16
+      rpm: 600
+      tpm: 1000000
+    model_info:
+      base_model: dashscope/qwen3.7-text-embedding
+      # 原项目对单次嵌入输入的保守限制；不代表模型官方最大输入。
+      max_input_tokens: 8191
+      # 原文件沿用的估算成本（USD/token）；使用前请按账户实际定价核对。
+      input_cost_per_token: 0.00000002
+      output_cost_per_token: 0
+
 router_settings:
   routing_strategy: simple-shuffle
   enable_pre_call_checks: true
   redis_host: os.environ/LITELLM_REDIS_HOST
   redis_port: os.environ/LITELLM_REDIS_PORT
+  # 注意：多个逻辑别名使用同一个 OPENAI_API_KEY，共享上游账号配额。
+  # 因此不复制原 GLM 的 rpm/tpm 数值；按 OpenAI 实际项目额度、监控情况单独制定限流。
+  # 同一密钥重复写多条 researcher 部署，并不会增加真实的上游配额。
+  allowed_fails: 5
+  cooldown_time: 60
+
 litellm_settings:
-  callbacks:
-  - otel
-  - prometheus
+  callbacks: ["otel", "prometheus"]
+  # 仅适用于内网指标抓取；生产网络需限制端口访问或启用鉴权。
   require_auth_for_metrics_endpoint: false
   num_retries: 2
   request_timeout: 180
-  allowed_fails: 5
-  cooldown_time: 60
+  # 出错时由 GPT-6.1 Sol 主链路回退至 DeepSeek，须事先验证 tool/structured output 兼容性。
   fallbacks:
-  - if-supervisor-v1:
-    - if-fallback-v1
-  - if-research-v1:
-    - if-fallback-v1
-  - if-summarization-v1:
-    - if-fallback-v1
-  - if-message-summary-v1:
-    - if-fallback-v1
-  - if-web-rerank-v1:
-    - if-fallback-v1
-  - if-web-evidence-v1:
-    - if-fallback-v1
-  - if-compression-v1:
-    - if-fallback-v1
-  - if-final-report-v1:
-    - if-fallback-v1
-  - if-quality-v1:
-    - if-fallback-v1
-  - if-report-review-v1:
-    - if-fallback-v1
-  - if-evaluation-v1:
-    - if-fallback-v1
-  context_window_fallbacks:
-  - if-summarization-v1:
-    - if-research-v1
-  - if-message-summary-v1:
-    - if-research-v1
-  - if-web-rerank-v1:
-    - if-research-v1
-  - if-web-evidence-v1:
-    - if-research-v1
-  - if-compression-v1:
-    - if-research-v1
-  - if-final-report-v1:
-    - if-research-v1
+    - if-supervisor-v2: [if-fallback-v2]
+    - if-research-v2: [if-fallback-v2]
+    - if-summarization-v2: [if-fallback-v2]
+    - if-message-summary-v2: [if-fallback-v2]
+    - if-web-rerank-v2: [if-fallback-v2]
+    - if-web-evidence-v2: [if-fallback-v2]
+    - if-compression-v2: [if-fallback-v2]
+    - if-final-report-v2: [if-fallback-v2]
+    - if-quality-v2: [if-fallback-v2]
+    - if-report-review-v2: [if-fallback-v2]
+    - if-evaluation-v2: [if-fallback-v2]
+  # 删除原 context_window_fallbacks：主路由均为同一模型，上下文容量相同，
+  # 转发至 researcher 不能扩容；超长输入应在应用层分块/检索/压缩。
   turn_off_message_logging: true
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/LITELLM_DATABASE_URL

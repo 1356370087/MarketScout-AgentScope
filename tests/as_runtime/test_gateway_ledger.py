@@ -215,7 +215,7 @@ async def test_structured_format_repair_uses_same_schema_budget_and_physical_led
             message = {"role": "assistant", "content": '{"value":2}'}
         else:
             message = {"role": "assistant", "tool_calls": [{"id": "c", "type": "function",
-                "function": {"name": "__insightforge_structured_output",
+                "function": {"name": "__marketscout_structured_output",
                              "arguments": '{"value":0,"value":1}' if len(physical) == 1 else '{"value":2}'}}]}
         return httpx.Response(200, json={"id": "response", "object": "chat.completion", "created": 1,
             "model": "fixture", "choices": [{"index": 0, "message": message,

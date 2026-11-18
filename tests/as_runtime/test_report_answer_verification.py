@@ -894,11 +894,15 @@ def test_scope_projection_keeps_original_subject_without_assigning_sibling_quest
 
 def test_v19_restore_keeps_old_review_contract():
     from open_deep_research.agentscope_runtime.run_config import RunConfig
-    from open_deep_research.configuration import run_config_fingerprint
+    from open_deep_research.configuration import (
+        RUN_CONFIG_SCHEMA_VERSION, frozen_run_config_values, run_config_fingerprint,
+    )
     run = RunConfig.compile()
-    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == 21
+    assert run.snapshot()["contract"]["metadata"]["run_config_schema_version"] == RUN_CONFIG_SCHEMA_VERSION
     snapshot = run.snapshot()
     snapshot["contract"]["metadata"]["run_config_schema_version"] = 19
+    # A historical contract cannot contain fields introduced after its version.
+    snapshot["contract"]["configurable"] = frozen_run_config_values(snapshot["contract"])
     snapshot["contract"]["metadata"]["run_config_fingerprint"] = run_config_fingerprint(snapshot["contract"])
     assert RunConfig.restore(snapshot).snapshot() == snapshot
 

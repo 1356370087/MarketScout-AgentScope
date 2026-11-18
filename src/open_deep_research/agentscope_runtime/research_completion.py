@@ -1,8 +1,7 @@
 """Finite business completion through the native reasoning middleware hook."""
 
 import json
-from dataclasses import asdict
-# from dataclasses import replace  # 恢复收尾质量门禁时还原。
+from dataclasses import asdict, replace
 from uuid import uuid4
 
 from agentscope.message import AssistantMsg, Msg, ToolCallBlock
@@ -16,9 +15,9 @@ from open_deep_research.completion import (
 
 
 class BusinessCompletion(MiddlewareBase):
-    """Require orderly native completion while final quality blocking is paused."""
+    """Use frozen quality-aware completion, retaining historical delivery semantics."""
 
-    def __init__(self, limit, facts, *, min_sources=1, accept_covered_on_exit=False):
+    def __init__(self, limit, facts, *, min_sources=1, accept_covered_on_exit=False, enforce_quality=False):
         self.limit, self.facts = limit, facts
         self.reasoning_calls = 0
         self.finished = False
@@ -26,25 +25,17 @@ class BusinessCompletion(MiddlewareBase):
         self.result = None
         self.accept_covered_on_exit = accept_covered_on_exit
         self.before_reasoning = None
+        self.enforce_quality = enforce_quality
 
     def evaluate(self, *, explicit=False, exhausted=False):
         context = self.facts()
-        # 临时停用研究收尾质量阻塞；恢复时还原下列调用并移除生命周期替代分支。
-        # ResearchCompletionPolicy 本身保留，工具批次及 Researcher 纠偏不受影响。
-        # if (self.accept_covered_on_exit and exhausted and not explicit
-        #         and context.has_remaining_budget and not context.research_stop_reason
-        #         and not context.cancelled and not context.active_task_count
-        #         and not context.unresolved_conflicts and not context.uncovered_requirements):
-        #     verified = self.policy.evaluate(replace(context, explicit_completion_succeeded=True))
-        #     if verified.action is CompletionDecision.COMPLETE:
-        #         self.result = replace(verified, reason="coverage_complete_at_iteration_limit")
-        #         return self.result
-        # context = replace(
-        #     context, explicit_completion_succeeded=explicit,
-        #     has_remaining_budget=context.has_remaining_budget and not exhausted,
-        #     exhausted_reason=context.exhausted_reason or ("iteration_limit" if exhausted else None),
-        # )
-        # self.result = self.policy.evaluate(context)
+        if self.enforce_quality:
+            context = replace(context, explicit_completion_succeeded=explicit,
+                has_remaining_budget=context.has_remaining_budget and not exhausted,
+                exhausted_reason=context.exhausted_reason or ("iteration_limit" if exhausted else None))
+            self.result = self.policy.evaluate(context)
+            return self.result
+        # Historical v22-and-earlier runs retain delivery-driven closing.
         if context.cancelled:
             self.result = CompletionPolicyResult(CompletionDecision.TERMINATE, "cancelled")
         elif context.active_task_count:
@@ -106,8 +97,10 @@ class BusinessCompletion(MiddlewareBase):
                                 "reflection": (
                                     "等待已启动的研究任务结束并收集结果，再调用 ResearchComplete。"
                                     if "active_tasks" in result.gaps else
-                                    "收集已交付结果后调用 ResearchComplete；交接与收尾质量评审已跳过，"
-                                    "不要因覆盖台账未评估而重复派发任务。"
+                                    ("根据验收结果补齐具体需求缺口；仅在预算和补证轮次内继续研究。"
+                                     if self.enforce_quality else
+                                     "收集已交付结果后调用 ResearchComplete；交接与收尾质量评审已跳过，"
+                                     "不要因覆盖台账未评估而重复派发任务。")
                                 )
                             },
                             ensure_ascii=False,

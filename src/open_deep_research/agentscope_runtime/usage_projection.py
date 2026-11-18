@@ -173,6 +173,8 @@ async def project_usage(store, run_id, owner, response, *, provider=None, model=
         and (r["reservation"] or {}).get("tool_calls")
     ]
     rows = [r for r in rows if r["kind"] in {"gateway:model", "model_attempt"}]
+    from .recovery_store import provisional_gateway_cost
+    provisional_cost = sum(provisional_gateway_cost(row) or 0 for row in rows)
     if provider or model:
         rows = [row for row in rows
                 if (not provider or model_dimensions(row)[1] == provider)
@@ -273,6 +275,11 @@ async def project_usage(store, run_id, owner, response, *, provider=None, model=
         }
         for key in set(budget["used"]) | set(budget["reserved"]) | set(budget["limits"])
     }
+    if provisional_cost and "cost_micro_usd" in totals["budgets"]:
+        cost_budget = totals["budgets"]["cost_micro_usd"]
+        cost_budget["settled"] -= provisional_cost
+        cost_budget["reserved"] += provisional_cost
+        cost_budget["unknown_reserved"] = provisional_cost
     totals["cost"].update(
         estimated_cost_micro_usd=sum(costs) if costs else None,
         cost_source=(

@@ -565,7 +565,7 @@ def _bounded_quality_payload(
     """Bound the complete JSON payload while preserving protocol identifiers."""
     bounded = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
     bounded["input_truncated"] = False
-    complete_fields = {"compressed_research", "coverage_contract", "owned_requirements", "task_scope", "task_scope_hash",
+    complete_fields = {"compressed_research", "coverage_contract", "owned_requirements", "task_scope", "task_scope_hash", "source_read_receipts",
                        "evidence_registry", "cumulative_evidence"}
 
     def encoded_length() -> int:
@@ -1558,6 +1558,23 @@ def deterministic_tool_checks(
     }
 
 
+def _handoff_cited_urls(summary, evidence):
+    """Distinguish a bare URL followed by a registered evidence ID from a literal link target."""
+    registered = {row.get("evidence_id"): str(row.get("source_url", "")).rstrip("/") for row in evidence}
+    urls = set()
+    for match in _URL_RE.finditer(summary):
+        url = match[0].rstrip(".,;:")
+        base, separator, annotation = url.partition("：")
+        explicit_target = summary[:match.start()].rstrip().endswith(("(", "<", "`"))
+        if separator and not explicit_target:
+            ref = re.fullmatch(r"(ev_[a-zA-Z0-9_-]+)(?:(?:原文|引用|摘录|证据|记录|“).*)?", annotation)
+            if ref and registered.get(ref[1]) == base.rstrip("/"):
+                url = base
+        if url:
+            urls.add(url)
+    return urls
+
+
 def deterministic_handoff_checks(
     handoff: dict[str, Any],
     *,
@@ -1613,11 +1630,7 @@ def deterministic_handoff_checks(
         else max(traced_source_count, reported_source_count)
     )
     failures: list[str] = []
-    candidate_source_urls = {
-        url.rstrip(".,;:")
-        for url in _URL_RE.findall(compressed)
-        if url.rstrip(".,;:")
-    }
+    candidate_source_urls = _handoff_cited_urls(compressed, accepted_evidence)
     out_of_scope_source_count = 0
     if source_scope_enforced:
         out_of_scope_source_count = sum(

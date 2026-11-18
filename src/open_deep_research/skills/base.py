@@ -31,13 +31,18 @@ class SkillSpec:
     description: str = ""
 
 
-def _collect_context(keys: Optional[Iterable[str]], attr: str) -> str:
+def _collect_context(keys: Optional[Iterable[str]], attr: str, snapshot=None) -> str:
     """Concatenate the named context field of each enabled builtin skill."""
     # Local import to avoid importing the registry at module load.
     from .registry import get_skill
 
     parts: List[str] = []
     for key in keys or []:
+        if snapshot is not None:
+            val = snapshot.get(key, {}).get(attr, "")
+            if val and val not in parts:
+                parts.append(val)
+            continue
         skill = get_skill(key)
         if skill is None:
             continue
@@ -47,14 +52,14 @@ def _collect_context(keys: Optional[Iterable[str]], attr: str) -> str:
     return "\n\n".join(parts)
 
 
-def get_skill_researcher_context(keys: Optional[Iterable[str]]) -> str:
+def get_skill_researcher_context(keys: Optional[Iterable[str]], *, snapshot=None) -> str:
     """Researcher system-prompt guidance from all enabled skills."""
-    return _collect_context(keys, "researcher_context")
+    return _collect_context(keys, "researcher_context", snapshot)
 
 
-def get_skill_report_context(keys: Optional[Iterable[str]]) -> str:
+def get_skill_report_context(keys: Optional[Iterable[str]], *, snapshot=None) -> str:
     """Report writer-prompt guidance from all enabled skills."""
-    return _collect_context(keys, "report_context")
+    return _collect_context(keys, "report_context", snapshot)
 
 
 async def load_skill_tools(config, existing_tool_names: Optional[set] = None) -> list:

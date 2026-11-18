@@ -228,6 +228,10 @@ class RecoverySession:
             raise self.problem
         record = None
         try:
+            identity = self.snapshot.application.get("identity", {})
+            if identity.get("kind") == "intelligence":
+                from open_deep_research.intelligence.authorization import check_run_identity
+                await check_run_identity(identity)
             record = await self.store.begin_operation(
                 self.lease,
                 key,
@@ -268,10 +272,12 @@ class RecoverySession:
             raise
         except BudgetExhausted as exc:
             action = digest([self.lease.run_id, key, "budget"])
+            if action in self.snapshot.decisions:
+                action = digest([action, exc.scope, len(self.snapshot.decisions)])
             self.problem = ApprovalPending(
                 action,
                 "budget",
-                {"operation_key": key, "dimension": exc.dimension.value},
+                {"operation_key": key, **exc.as_payload()},
             )
             raise self.problem from exc
         except BaseException as exc:
@@ -616,6 +622,10 @@ class RecoverySession:
             self.current_command = command["command_id"]
             try:
                 payload = command["payload"]
+                identity = self.snapshot.application.get("identity", {})
+                if identity.get("kind") == "intelligence" and payload.get("source_selection") is not None:
+                    from open_deep_research.intelligence.contracts import IntelligenceError
+                    raise IntelligenceError("automation_source_changes_require_plan_authorization", 403)
                 if payload["action"] == "feedback":
                     state = pipeline.state.model_copy(deep=True)
                     state.feedback_by_task.setdefault(payload["task_id"], []).append(
@@ -625,13 +635,20 @@ class RecoverySession:
                     continue
                 approval = pipeline.state.approvals.get(command["action_id"])
                 if approval and payload["action"] == "approve":
-                    if approval["kind"] == "budget":
+                    if approval["kind"] == "budget" and approval["payload"].get("budget_scope") != "account_month":
                         if not payload.get("limits"):
                             raise ValueError(
                                 "budget approval requires explicit new limits"
                             )
+                        identity = self.snapshot.application.get("identity", {})
+                        if identity.get("kind") == "intelligence":
+                            from open_deep_research.intelligence.authorization import check_budget_override
+                            await check_budget_override(identity, payload["limits"])
                         self.current_limits = payload["limits"]
                     elif approval["kind"] == "egress":
+                        if identity.get("kind") == "intelligence":
+                            from open_deep_research.intelligence.contracts import IntelligenceError
+                            raise IntelligenceError("automation_source_changes_require_plan_authorization", 403)
                         if self.approval_applier is None:
                             raise ValueError(
                                 "egress approval requires its authority adapter"
@@ -704,7 +721,10 @@ class RecoveryStages:
         heartbeat = asyncio.create_task(renew())
         try:
             with self.session.scope(stage, state.revision_count):
-                if stage == "memory_extract_and_write" and state.completion_outcome.get("reason") == "deadline_exceeded":
+                from .execution_budget import REPORT_BUDGET_DECLINE_REASON
+                if stage == "memory_extract_and_write" and state.completion_outcome.get("reason") in {
+                    "deadline_exceeded", REPORT_BUDGET_DECLINE_REASON,
+                }:
                     return None
                 external_effect = (
                     stage == "memory_extract_and_write"

@@ -122,7 +122,7 @@ class ResearchModels:
             return "pipeline" if structured else state.get("task_id", "pipeline")
         return state.get("task_id") or (self.recovery.task_id.get() if self.recovery else "pipeline")
 
-    async def structured(self, role, prompt, schema, state, *, messages=None, purpose=None):
+    async def structured(self, role, prompt, schema, state, *, messages=None, purpose=None, operation_key=None):
         task_id = self._call_task_id(state, structured=True)
         candidates = [self.model_for(role, task_id)] if self.model_for else None
         middleware = self.factory.policy_middleware(role, candidates=candidates)
@@ -152,6 +152,7 @@ class ResearchModels:
                 max_tokens=self.factory.descriptor(role)["max_output_tokens"],
                 pricing=self.pricing(role),
                 account_attempts=getattr(self.factory, "accounts_physical_attempts", False),
+                operation_key=operation_key,
             )
             if self.recovery
             else await call()

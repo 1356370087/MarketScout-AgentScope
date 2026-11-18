@@ -17,7 +17,7 @@ class RocketMQTransport:
     """Keep SDK threads outside the asyncio loop and ACK only durable receipt."""
 
     def __init__(
-        self, store: TeamStore, *, endpoint: str, prefix: str = "insightforge",
+        self, store: TeamStore, *, endpoint: str, prefix: str = "marketscout",
         tls: bool = False, access_key: str = "", secret_key: str = "",
         consumer_group_prefix: str | None = None,
     ):

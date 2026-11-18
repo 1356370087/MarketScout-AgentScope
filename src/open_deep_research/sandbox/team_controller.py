@@ -44,18 +44,18 @@ def install_team_routes(app, runtime):
         runtime._authorize_service(request, operation="native-team")
         lease = request.lease
         name = (
-            "insightforge-team-"
+            "marketscout-team-"
             + hashlib.sha256(
                 f"{request.deployment_id}:{lease['run_id']}:{lease['fence']}:{request.task_id}".encode()
             ).hexdigest()[:24]
         )
         labels = {
-            "insightforge.role": "native-team",
-            "insightforge.deployment": request.deployment_id,
-            "insightforge.run_id": lease["run_id"],
+            "marketscout.role": "native-team",
+            "marketscout.deployment": request.deployment_id,
+            "marketscout.run_id": lease["run_id"],
         }
         if config_environment.get("AS_TEAM_PROJECT"):
-            labels["insightforge.project"] = os.environ["AS_TEAM_PROJECT"]
+            labels["marketscout.project"] = os.environ["AS_TEAM_PROJECT"]
         try:
             container = runtime.client.containers.get(name)
         except NotFound:

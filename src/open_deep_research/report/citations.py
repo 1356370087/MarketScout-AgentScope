@@ -5,12 +5,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .references import numbered_source_urls
+from .references import numbered_source_urls, without_source_sections
 
 
 def body_without_references(markdown: str) -> str:
     """Remove reference-only sections in the supported report languages."""
-    return re.split(r"(?im)^\s*#{1,6}\s*(?:Sources|References|来源|参考资料|参考文献|参考来源)\s*$", markdown, maxsplit=1)[0]
+    return without_source_sections(markdown)
 
 
 @dataclass

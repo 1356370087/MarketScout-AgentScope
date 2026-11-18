@@ -20,14 +20,14 @@ from open_deep_research.events.public import (
 logger = logging.getLogger(__name__)
 
 
-async def publish_handoff(models, outcome, *, context_chars, config=None):
-    """Keep task findings on the run's durable public cursor, after admission."""
+async def publish_handoff_sources(models, outcome):
+    """Publish source metadata without an additional display-summary model call."""
     recovery = getattr(models, "recovery", None)
     if recovery is None:
-        return
+        return []
     assessment = outcome.assessment.get("handoff", {})
     if assessment.get("admission_status") == "rejected":
-        return
+        return []
     publisher = NativeEventPublisher(recovery.store, recovery.lease)
     # Only source metadata crosses this boundary; excerpts and raw results do not.
     records = [
@@ -44,6 +44,16 @@ async def publish_handoff(models, outcome, *, context_chars, config=None):
             payload={"task_id": outcome.task_id, **source},
             dedupe_key=f"task:{outcome.task_id}:source:{source['source_id']}",
         )
+    return sources
+
+
+async def publish_handoff(models, outcome, *, context_chars, config=None):
+    """Keep task findings on the run's durable public cursor, after admission."""
+    recovery = getattr(models, "recovery", None)
+    if recovery is None or outcome.assessment.get("handoff", {}).get("admission_status") == "rejected":
+        return
+    publisher = NativeEventPublisher(recovery.store, recovery.lease)
+    sources = await publish_handoff_sources(models, outcome)
     if not outcome.compressed_research.strip() or outcome.termination == "task_time_reserved":
         return
     from .execution_budget import enabled

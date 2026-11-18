@@ -6,6 +6,7 @@ import {
   clearSession,
   csrfValid,
   refreshSession,
+  refreshInProgressResponse,
   sameOriginValid,
   setSession,
 } from "@/lib/server-auth";
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ac
       return NextResponse.json({ detail: "csrf_validation_failed" }, { status: 403 });
     }
     const pair = await refreshSession(request);
+    if (pair === "in_progress") return refreshInProgressResponse();
     if (!pair) {
       const response = NextResponse.json({ detail: "session_expired" }, { status: 401 });
       clearSession(response);
@@ -57,6 +59,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ac
     }
     if (!access) {
       const pair = await refreshSession(request);
+      if (pair === "in_progress") return refreshInProgressResponse();
       if (pair?.access_token) await revokeUpstream(pair.access_token);
     }
     const response = NextResponse.json({ ok: true });

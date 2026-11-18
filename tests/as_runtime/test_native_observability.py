@@ -107,8 +107,8 @@ async def test_receipts_group_by_role_task_time_without_counting_gateway_twice(s
         await project_usage(store, state.run_id, "other", empty_response())
     first = await telemetry.prometheus_snapshot(store)
     assert first == await telemetry.prometheus_snapshot(store)
-    assert b'insightforge_native_tools{status="success"} 1.0' in first
-    assert b'insightforge_native_tokens{direction="input_tokens"} 20.0' in first
+    assert b'marketscout_native_tools{status="success"} 1.0' in first
+    assert b'marketscout_native_tokens{direction="input_tokens"} 20.0' in first
     assert state.run_id.encode() not in first
 
 

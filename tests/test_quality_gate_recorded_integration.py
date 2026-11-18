@@ -91,7 +91,7 @@ def fake_model_transport(monkeypatch, response):
             "model": "if-quality-v1", "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
                 "role": "assistant", "content": None, "tool_calls": [{
                     "id": "offline-call", "type": "function", "function": {
-                        "name": "__insightforge_structured_output", "arguments": json.dumps(response),
+                        "name": "__marketscout_structured_output", "arguments": json.dumps(response),
                     },
                 }],
             }}],

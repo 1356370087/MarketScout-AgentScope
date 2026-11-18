@@ -58,7 +58,7 @@ class VersionedDocumentParser(ParserBase):
 class VersionedDocumentChunker(ChunkerBase):
     """Keep table row groups and prose windows identical to the domain index."""
 
-    chunker_type = "insightforge_versioned_document"
+    chunker_type = "marketscout_versioned_document"
 
     def __init__(self, settings):
         super().__init__()

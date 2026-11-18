@@ -25,6 +25,19 @@ def test_source_selection_defaults_to_web() -> None:
     assert selection.documents_enabled is False
 
 
+def test_document_summary_uses_time_columns_instead_of_audit_actors():
+    from datetime import UTC, datetime
+    from open_deep_research.documents.repository import _summary
+    stamp = datetime(2026, 10, 30, tzinfo=UTC)
+    row = {"id": "38d7d636-bc49-42d5-bbc8-0e6378b388d5", "filename": "notes.md",
+           "media_type": "text/markdown", "size_bytes": 10, "sha256": "a" * 64,
+           "status": "ready", "failure_code": None, "page_count": 1, "chunk_count": 1,
+           "ocr_pages": 0, "created_at": "owner", "updated_at": "document-worker",
+           "create_time": stamp, "update_time": stamp, "deleted_at": None}
+    summary = _summary(row)
+    assert summary.created_at == summary.updated_at == stamp.isoformat()
+
+
 def test_chunk_window_contract_matches_documented_token_approximation() -> None:
     assert CHUNK_TARGET_CHARS == 3200
     assert CHUNK_OVERLAP_CHARS == 480

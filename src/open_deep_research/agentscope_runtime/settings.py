@@ -37,7 +37,7 @@ class ASRuntimeSettings:
     storage_auto_create: bool
     bus_table_prefix: str
     rocketmq_endpoint: str = ""
-    rocketmq_topic_prefix: str = "insightforge_as"
+    rocketmq_topic_prefix: str = "marketscout_as"
     rocketmq_group: str = ""
     rocketmq_access_key: str = ""
     rocketmq_secret_key: str = ""
@@ -57,7 +57,7 @@ class ASRuntimeSettings:
             bus_table_prefix=config_environment.get("AS_BUS_TABLE_PREFIX") or "as_bus_",
             rocketmq_endpoint=config_environment.get("AS_ROCKETMQ_ENDPOINT", ""),
             rocketmq_topic_prefix=config_environment.get(
-                "AS_ROCKETMQ_TOPIC_PREFIX", "insightforge_as"
+                "AS_ROCKETMQ_TOPIC_PREFIX", "marketscout_as"
             ),
             rocketmq_group=config_environment.get("AS_ROCKETMQ_GROUP", ""),
             rocketmq_access_key=config_environment.get("AS_ROCKETMQ_ACCESS_KEY", ""),

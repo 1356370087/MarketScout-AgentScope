@@ -102,7 +102,7 @@ def build_research_pipeline(
     workers = None
     if (
         recovery is not None
-        and Configuration.from_runnable_config(config_provider()).enable_async_research
+        and Configuration.from_runnable_config(config_provider()).use_durable_research_team
         and team is None
     ):
         raise ValueError("durable async research requires a bound native team")
@@ -148,6 +148,9 @@ def build_research_pipeline(
         context_chars=context_chars,
         team_workers=workers,
     )
+    if Configuration.from_runnable_config(config_provider()).use_adaptive_research:
+        from .adaptive_research import AdaptiveResearch
+        supervisor = AdaptiveResearch(researcher)
     stages = NativeResearchStages(
         models,
         supervisor,

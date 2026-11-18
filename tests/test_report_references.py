@@ -121,6 +121,24 @@ def test_replace_sources_section_replaces_existing():
     assert "Body." in out
 
 
+def test_bilingual_source_catalogue_preserves_body_and_does_not_waive_ambiguous_writer_urls():
+    from open_deep_research.report.references import generated_catalogue_conflict, numbered_source_urls, source_sections
+    from open_deep_research.report.orchestrator import _remap_numbered_citations
+    import pytest
+    writer = "# Report\n\nUse [1].\n\n```markdown\n### Sources\nexample source\n```\n\n### Sources（来源）\n- [1] A: https://a.example\n"
+    generated = "[1] B: https://b.example\n[2] A: https://a.example"
+    legacy = writer + "\n### Sources\n" + generated
+    sources = [SourceRef(title="B", url="https://b.example"), SourceRef(title="A", url="https://a.example")]
+    assert generated_catalogue_conflict(legacy, writer)
+    repaired = replace_sources_section(_remap_numbered_citations(writer, sources), generated)
+    assert "Use [2]." in repaired and "### Sources\nexample source" in repaired
+    assert len(source_sections(repaired)) == 1 and numbered_source_urls(repaired)["2"] == "https://a.example"
+    ambiguous = writer + "- [1] C: https://c.example\n"
+    assert not generated_catalogue_conflict(ambiguous + "\n### Sources\n" + generated, ambiguous)
+    with pytest.raises(ValueError, match="ambiguous_citation"):
+        _remap_numbered_citations(ambiguous, sources)
+
+
 def test_replace_sources_section_appends_when_absent():
     md = "# Title\n\nBody with [x](https://x.io)."
     out = replace_sources_section(md, "[1] X: https://x.io")

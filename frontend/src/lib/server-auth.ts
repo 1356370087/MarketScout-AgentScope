@@ -14,9 +14,10 @@ type TokenPair = {
   expires_in: number;
   refresh_expires_in: number;
 };
+type RefreshResult = TokenPair | "in_progress" | null;
 
 const secure = process.env.NODE_ENV === "production";
-const refreshFlights = new Map<string, Promise<TokenPair | null>>();
+const refreshFlights = new Map<string, Promise<RefreshResult>>();
 const hopByHopHeaders = new Set([
   "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
   "trailer", "transfer-encoding", "upgrade", "host", "content-length", "cookie", "authorization",
@@ -68,18 +69,25 @@ export function setSession(response: NextResponse, pair: TokenPair, csrf?: strin
   });
 }
 
-async function performRefresh(refresh: string): Promise<TokenPair | null> {
+export function refreshInProgressResponse(status: 409 | 503 = 409): NextResponse {
+  return NextResponse.json({ detail: "refresh_in_progress" }, {
+    status, headers: { "Retry-After": "1" },
+  });
+}
+
+async function performRefresh(refresh: string): Promise<RefreshResult> {
   const upstream = await fetch(new URL("/auth/refresh", backendOrigin), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ refresh_token: refresh }),
     cache: "no-store",
   });
+  if (upstream.status === 409) return "in_progress";
   if (!upstream.ok) return null;
   return upstream.json() as Promise<TokenPair>;
 }
 
-export async function refreshSession(request: NextRequest): Promise<TokenPair | null> {
+export async function refreshSession(request: NextRequest): Promise<RefreshResult> {
   const refresh = request.cookies.get(REFRESH_COOKIE)?.value;
   if (!refresh) return null;
   const key = createHash("sha256").update(refresh).digest("hex");
@@ -146,7 +154,11 @@ export async function authenticatedProxy(request: NextRequest, upstreamPath: str
   let access = request.cookies.get(ACCESS_COOKIE)?.value;
   let pair: TokenPair | null = null;
   if (!access) {
-    pair = await refreshSession(request);
+    const refreshed = await refreshSession(request);
+    // A sibling request owns the rotation. Do not erase its new cookies.
+    // Protected SSE routes reserve 409 for cursor recovery, so use 503 here.
+    if (refreshed === "in_progress") return refreshInProgressResponse(503);
+    pair = refreshed;
     access = pair?.access_token;
   }
   if (!access) {
@@ -158,7 +170,9 @@ export async function authenticatedProxy(request: NextRequest, upstreamPath: str
   // Multipart bodies are one-shot ReadableStreams. Retrying a 401 would
   // require buffering the upload, so let the client refresh and resubmit it.
   if (upstream.status === 401 && !pair && !streamingBody) {
-    pair = await refreshSession(request);
+    const refreshed = await refreshSession(request);
+    if (refreshed === "in_progress") return refreshInProgressResponse(503);
+    pair = refreshed;
     if (pair) upstream = await callUpstream(request, target, pair.access_token, body);
   }
   const headers = new Headers(upstream.headers);

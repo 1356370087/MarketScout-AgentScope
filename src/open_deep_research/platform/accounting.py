@@ -1,14 +1,36 @@
 """研究之外的物理模型调用也经过同一月度配额入口。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import math
 from uuid import uuid4
 from contextvars import ContextVar
+from contextlib import contextmanager
 from . import quota, runtime
 from .store import PlatformError
 
 current_charge = ContextVar("platform_physical_charge", default=None)
+service_allowance = ContextVar("service_cost_allowance", default=None)
+service_budget_port = ContextVar("service_budget_port", default=None)
+
+
+@contextmanager
+def scoped_service_budget(port):
+    token = service_budget_port.set(port if port is not None else service_budget_port.get())
+    try:
+        yield
+    finally:
+        service_budget_port.reset(token)
+
+
+@contextmanager
+def bounded_service_cost(amount):
+    """Conservative per-job allowance shared by every physical retry."""
+    token = service_allowance.set([amount])
+    try:
+        yield
+    finally:
+        service_allowance.reset(token)
 
 
 def transport_options():
@@ -23,6 +45,7 @@ def transport_options():
 class ServiceCharge:
     identity: str
     pricing: tuple[float, float]
+    budget_port: object = field(default=None, repr=False)
 
 
 class UncertainServiceCall(RuntimeError):
@@ -65,9 +88,22 @@ async def begin(model, payload, output_tokens, source, *, identity=None, owner=N
     price = pricing or model_price(model, snapshot)
     input_tokens = len(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
     amount = math.ceil(input_tokens * price[0] + output_tokens * price[1])
+    allowance = service_allowance.get()
+    if allowance is not None:
+        if amount > allowance[0]:
+            raise quota.QuotaExceeded()
+        allowance[0] -= amount
     identity = identity or "service:" + str(uuid4())
     await quota.reserve(owner, identity, amount, runtime.source() or source, detail={"model": model, "pricing_micro_usd": list(price)})
-    return ServiceCharge(identity, price)
+    port = service_budget_port.get()
+    if port is not None:
+        try:
+            await port.reserve(identity, amount, owner)
+        except BaseException:
+            # No provider call has started; only this personal reservation is released.
+            await quota.release(identity)
+            raise
+    return ServiceCharge(identity, price, port)
 
 
 async def complete(charge, usage=None, error=None):
@@ -77,13 +113,19 @@ async def complete(charge, usage=None, error=None):
         code = getattr(error, "status_code", None)
         if code in {400, 401, 403, 404, 413, 422, 429}:
             await quota.settle(charge.identity, 0)
+            if charge.budget_port is not None:
+                await charge.budget_port.settle(charge.identity, 0)
             return
         await quota.mark_unknown(charge.identity)
+        if charge.budget_port is not None:
+            await charge.budget_port.settle(charge.identity, None)
         if error is not None:
             raise UncertainServiceCall("service_call_outcome_unknown") from error
         return
     cost = math.ceil(usage.get("input_tokens", 0) * charge.pricing[0] + usage.get("output_tokens", 0) * charge.pricing[1])
     await quota.settle(charge.identity, cost)
+    if charge.budget_port is not None:
+        await charge.budget_port.settle(charge.identity, cost)
 
 
 async def call(model, payload, output_tokens, source, invoke):

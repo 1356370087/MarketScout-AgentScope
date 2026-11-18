@@ -56,6 +56,19 @@ def document_read_sql(actor: str, alias: str = "d") -> str:
                  OR {alias}.home_knowledge_base_id IN ({readable_bases_sql(actor)}))"""
 
 
+def document_review_sql(actor: str, alias: str = "d") -> str:
+    """Draft access stays with its author or current knowledge reviewers."""
+    return f"""(({alias}.owner_id={actor}::uuid AND {document_read_sql(actor, alias)}) OR
+        {alias}.home_knowledge_base_id IN (
+          SELECT kb.id FROM knowledge_bases kb
+          LEFT JOIN knowledge_workspaces w ON w.id=kb.workspace_id
+          LEFT JOIN knowledge_workspace_members wm ON wm.workspace_id=w.id AND wm.user_id={actor}::uuid
+          LEFT JOIN knowledge_base_members bm ON bm.knowledge_base_id=kb.id AND bm.user_id={actor}::uuid
+          WHERE (kb.workspace_id IS NULL AND kb.owner_id={actor}::uuid)
+             OR (w.kind='personal' AND w.created_by={actor}::uuid)
+             OR (w.kind='team' AND (wm.role IN ('owner','admin') OR (wm.role='member' AND bm.role='manager')))))"""
+
+
 class AuthorizationError(RuntimeError):
     """Raised when the actor lacks the required capability."""
 

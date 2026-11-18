@@ -123,7 +123,7 @@ async def snapshot(destination):
         (destination / "manifest.json").write_text(
             json.dumps(
                 {
-                    "format": "insightforge-dr-v1",
+                    "format": "marketscout-dr-v1",
                     "revision": revision,
                     "counts": counts,
                     "files": files,
@@ -142,7 +142,7 @@ async def backup():
     started = time.monotonic()
     # Initialize explicitly with the init command; authentication errors never trigger init.
     await asyncio.to_thread(restic, "snapshots", "--json")
-    with tempfile.TemporaryDirectory(prefix="insightforge-backup-") as directory:
+    with tempfile.TemporaryDirectory(prefix="marketscout-backup-") as directory:
         destination = Path(directory) / "snapshot"
         destination.mkdir()
         await snapshot(destination)
@@ -151,7 +151,7 @@ async def backup():
             "backup",
             "--json",
             "--tag",
-            "insightforge-knowledge",
+            "marketscout-knowledge",
             "snapshot",
             cwd=directory,
         )
@@ -200,13 +200,13 @@ async def restore(snapshot_id, destination, database_url):
             "restore",
             snapshot_id,
             "--tag",
-            "insightforge-knowledge",
+            "marketscout-knowledge",
             "--target",
             str(destination),
         )
         root = destination / "snapshot"
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-        if manifest["format"] != "insightforge-dr-v1":
+        if manifest["format"] != "marketscout-dr-v1":
             raise ValueError("backup_manifest_invalid")
         for name, checksum in manifest["files"].items():
             path = (root / name).resolve()
@@ -278,7 +278,7 @@ async def main():
                 restic,
                 "forget",
                 "--tag",
-                "insightforge-knowledge",
+                "marketscout-knowledge",
                 "--group-by",
                 "tags",
                 "--keep-daily",

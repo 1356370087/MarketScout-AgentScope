@@ -100,7 +100,7 @@ async def test_alembic_upgrade_heads_from_empty(test_db_url):
             assert (await conn.execute(text("SELECT count(*) FROM iam_roles WHERE is_system"))).scalar() == 4
             assert (await conn.execute(text("SELECT count(*) FROM iam_role_permissions"))).scalar() == 56
             rev = (await conn.execute(text("SELECT version_num FROM alembic_version"))).scalar()
-            assert rev == "0022_team_task_fields"
+            assert rev == "0023_continuous_intelligence"
             business_tables = (
                 await conn.execute(text(
                     "SELECT table_name FROM information_schema.tables "

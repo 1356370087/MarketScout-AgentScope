@@ -7,7 +7,19 @@ from open_deep_research.budgets import BudgetDimension, BudgetExhausted, Deadlin
 from open_deep_research.configuration import Configuration
 
 APPROVAL_STAGE = "report_time_extension_approval"
+REPORT_BUDGET_DECLINE_REASON = "report_budget_extension_denied"
 MAX_REQUESTS = 2
+
+
+def can_decline_report_budget(approval, completed):
+    """Only a report-stage cost hold can finish from prior admitted evidence."""
+    payload = approval.get("payload", {})
+    return (
+        approval.get("kind") == "budget"
+        and completed[-1:] == ["outline_approval"]
+        and payload.get("dimension") == BudgetDimension.COST_MICRO_USD.value
+        and payload.get("operation_key", "").startswith("final_report_generation:")
+    )
 
 
 class ReportTimeApprovalPending(RuntimeError):

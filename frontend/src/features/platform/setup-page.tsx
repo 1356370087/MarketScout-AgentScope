@@ -22,7 +22,7 @@ export default function SetupPage() {
       await cache.invalidateQueries(); router.replace("/admin/configurations"); router.refresh();
     } catch (cause) { setError(cause instanceof Error ? cause.message : "初始化失败"); } finally { setBusy(false); }
   }
-  return <AuthShell eyebrow="首次启动" title="初始化 InsightForge" copy="创建首位管理员，然后导入配置、确认预算并发布。" footer={<Link href="/login">已有账号，前往登录</Link>}>
+  return <AuthShell eyebrow="首次启动" title="初始化 MarketScout" copy="创建首位管理员，然后导入配置、确认预算并发布。" footer={<Link href="/login">已有账号，前往登录</Link>}>
     {status.error && <p role="alert" className="form-alert error">无法读取初始化状态，请确认数据库已完成迁移并且 API 可访问。</p>}
     {status.data?.initialized ? <div className="platform-alert">管理员已创建。<Link href="/login">登录后继续配置</Link></div> : status.data?.setup_available ? <form action={initialize} className="auth-form"><PasswordField id="setup-token" name="token" label="一次性初始化口令" required autoComplete="off" /><label className="field">管理员名称<input name="display_name" required defaultValue="管理员" /></label><label className="field">邮箱<input name="email" type="email" required autoComplete="username" /></label><PasswordField id="setup-password" name="password" label="密码" required autoComplete="new-password" />{error && <p role="alert" className="form-alert error">{error}</p>}<button className="primary" disabled={busy}>{busy ? "正在初始化…" : "创建管理员并配置平台"}</button></form> : status.data && <p className="platform-alert">请先在部署环境设置初始化口令，再刷新此页面。</p>}
   </AuthShell>;

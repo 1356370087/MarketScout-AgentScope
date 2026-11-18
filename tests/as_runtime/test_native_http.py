@@ -73,6 +73,82 @@ async def settle(service):
     await asyncio.sleep(0)
 
 
+async def test_monthly_budget_recheck_retains_run_limit_and_publishes_scope(host, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+    from open_deep_research.platform import quota
+
+    service, client, _, _ = host
+    response = await client.post("/runs", json={"messages": [{"role": "user", "content": "research"}]})
+    run_id = response.json()["run_id"]
+    await settle(service)
+    session = await RecoverySession.open(service.store, run_id, "alice")
+    state = session.snapshot
+    state.pending = None
+    state.approvals = {"month": {"kind": "budget", "payload": {"dimension": "cost_micro_usd",
+        "budget_scope": "account_month", "required": 400000, "available": 260000}}}
+    await session.save(state)
+    await session.close()
+    initial = await service.store.budget(run_id, "alice")
+    monkeypatch.setattr(service, "start", AsyncMock())
+    check = AsyncMock(side_effect=[{"available": 260000}, {"available": 400000}])
+    monkeypatch.setattr(quota, "runway", check)
+    action = f"/runs/{run_id}/human-actions/month"
+    projected = (await client.get(f"/runs/{run_id}")).json()["pending_human_action"]["payload"]
+    assert (projected["budget_scope"], projected["required"], projected["available"]) == ("account_month", 400000, 260000)
+    assert (await client.post(action, json={"action": "approve", "limits": {"cost_micro_usd": 99999999}})).status_code == 422
+    assert (await client.post(action, json={"action": "approve"})).status_code == 409
+    assert (await client.post(action, json={"action": "approve"})).status_code == 200
+    session = await RecoverySession.open(service.store, run_id, "alice")
+    try:
+        flow = ResearchPipeline(session.snapshot, SimpleNamespace(), session.save,
+                                config_fingerprint=session.snapshot.config_fingerprint, recovery=session)
+        await session.consume_decisions(flow)
+        assert not flow.state.approvals and (await service.store.budget(run_id, "alice"))["limits"] == initial["limits"]
+    finally:
+        await session.close()
+
+
+async def test_budget_http_requires_exact_explicit_limit_and_replays_once(host, monkeypatch):
+    from types import SimpleNamespace
+    from open_deep_research.agentscope_runtime.recovery import RecoverySession
+
+    service, client, _, _ = host
+    created = await client.post("/runs", json={"messages": [{"role": "user", "content": "Question"}]})
+    run_id = created.json()["run_id"]
+    await settle(service)
+    recovery = await RecoverySession.open(service.store, run_id, "alice")
+    state = recovery.snapshot
+    state.pending = None
+    state.approvals = {"cost": {"kind": "budget", "payload": {"dimension": "cost_micro_usd"}}}
+    await recovery.save(state)
+    await recovery.close()
+    current = await service.store.budget(run_id, "alice")
+    limit = current["limits"].get("cost_micro_usd", 0) + 2_000_000
+
+    async def no_start(*args, **kwargs):
+        pass
+    monkeypatch.setattr(service, "start", no_start)
+    url = f"/runs/{run_id}/human-actions/cost"
+    for body in [{"action": "approve"}, {"action": "approve", "limits": {"fetch_calls": 20}}]:
+        assert (await client.post(url, json=body)).status_code == 422
+    paused = (await client.get(f"/runs/{run_id}")).json()
+    assert paused["status"] == "awaiting_budget_approval"
+    assert paused["pending_human_action"]["payload"]["dimension"] == "cost_micro_usd"
+    assert paused["pending_human_action"]["payload"]["content_markdown"]
+    approved = {"action": "approve", "limits": {"cost_micro_usd": limit}}
+    assert (await client.post(url, json=approved)).status_code == 200
+    session = await RecoverySession.open(service.store, run_id, "alice")
+    flow = ResearchPipeline(session.snapshot, SimpleNamespace(), session.save,
+                            config_fingerprint=session.snapshot.config_fingerprint, recovery=session)
+    await session.consume_decisions(flow)
+    await session.close()
+    assert (await client.post(url, json=approved)).status_code == 200
+    after = await service.store.budget(run_id, "alice")
+    assert after["limits"] == {**current["limits"], "cost_micro_usd": limit}
+
+
 async def test_native_task_activity_uses_sql_owner_and_replays(host, monkeypatch):
     from open_deep_research.api.activity_routes import ActivityRoutes
     from open_deep_research.api.streams import StreamOptions, _task_activity_iterator

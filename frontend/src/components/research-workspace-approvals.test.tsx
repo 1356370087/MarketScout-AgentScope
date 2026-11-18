@@ -13,6 +13,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.search),
 }));
 
+vi.mock("@/features/research/review-versions", () => ({ ReviewVersions: () => null }));
 vi.mock("@/hooks/use-run-stream", () => ({ useRunStream: vi.fn() }));
 vi.mock("@/hooks/use-run-usage", () => ({ useRunUsage: () => ({ data: { task_operations: { "task-1": { model_call_count: 7, tool_call_count: 3 } } } }) }));
 vi.mock("./app-shell", () => ({

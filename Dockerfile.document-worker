@@ -15,10 +15,10 @@ COPY config ./config
 # Docling 通过独立服务 HTTP 接入；本地解析依赖已纳入主锁文件。
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 # Match the API owner so private (0600) uploads remain readable on the shared volume.
-RUN groupadd --system --gid 10001 insightforge \
-    && useradd --system --uid 10001 --gid insightforge --no-create-home insightforge \
+RUN groupadd --system --gid 10001 marketscout \
+    && useradd --system --uid 10001 --gid marketscout --no-create-home marketscout \
     && mkdir -p /data/documents /data/platform-config \
-    && chown insightforge:insightforge /data/documents /data/platform-config
+    && chown marketscout:marketscout /data/documents /data/platform-config
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
-USER insightforge:insightforge
+USER marketscout:marketscout
 CMD ["python", "-m", "open_deep_research.documents.worker"]

@@ -24,7 +24,7 @@ from .models import (
     SourceRef,
     TableBlock,
 )
-from .references import _safe_reference_url, dedupe_sources
+from .references import _safe_reference_url, dedupe_sources, is_sources_heading
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,15 +44,6 @@ _ACTIVE_HTML_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>|<!--.*?-->", re.DOTALL)
-_SOURCE_HEADING_PREFIX_RE = re.compile(
-    r"^(?:(?:\d+(?:\.\d+)*)|[一二三四五六七八九十百]+)\s*[.)、．:：-]?\s*",
-    re.IGNORECASE,
-)
-_SOURCE_HEADING_RE = re.compile(
-    r"(?:sources?|references?(?:\s+(?:and|&)\s+further\s+reading)?|"
-    r"further\s+reading|来源|参考(?:资料|文献)(?:与延伸阅读)?)",
-    re.IGNORECASE,
-)
 
 
 def _strip_controls(value: str, *, keep_newlines: bool = True) -> str:
@@ -101,12 +92,6 @@ def _safe_href(value: str, allowed_urls: set[str]) -> str | None:
         if allowed_parsed._replace(fragment="").geturl() == candidate_base:
             return candidate
     return None
-
-
-def _is_sources_heading(value: str) -> bool:
-    """Recognize common numbered and extended source-section headings."""
-    normalized = _SOURCE_HEADING_PREFIX_RE.sub("", value.strip(), count=1)
-    return _SOURCE_HEADING_RE.fullmatch(normalized) is not None
 
 
 def _inline_runs(node: Tag, allowed_urls: set[str]) -> list[InlineRun]:
@@ -341,7 +326,7 @@ def canonicalize_report(
             if raw_level == 1 and not title:
                 title = heading_title
                 continue
-            if _is_sources_heading(heading_title):
+            if is_sources_heading(heading_title):
                 current = None
                 in_sources_section = True
                 continue

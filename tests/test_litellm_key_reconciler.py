@@ -21,7 +21,7 @@ def settings() -> RunKeySettings:
     return RunKeySettings(
         base_url="http://litellm-proxy:4000/v1",
         master_key="master",
-        team_id="insightforge-runs",
+        team_id="marketscout-runs",
         encryption_key=b"k" * 32,
         default_budget_micro_usd=2_000_000,
         maximum_budget_micro_usd=5_000_000,

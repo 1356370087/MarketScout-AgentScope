@@ -426,6 +426,7 @@ def build_reviewer_payload(
     draft: ReportDraft | Mapping[str, Any] | str,
     state: Mapping[str, Any] | None = None,
     config: RunnableConfig | None = None,
+    *, required_evidence_ids=(),
 ) -> dict[str, Any]:
     """Build the bounded, security-filtered Reviewer input payload.
 
@@ -459,6 +460,7 @@ def build_reviewer_payload(
     # Keep the draft and evidence intact; the native port budgets whole records.
     payload = {
         "research_brief": str(normalized_state.get("research_brief") or ""),
+        "completion_outcome": normalized_state.get("completion_outcome") or {},
         "_run_schema_version": (config or {}).get("metadata", {}).get("run_config_schema_version", 18),
         "coverage_contract": {"requirements": requirements, "dimension_coverage": dimension_coverage},
         "evidence_registry": _review_evidence(records, normalized_draft),
@@ -474,6 +476,8 @@ def build_reviewer_payload(
         "reference_style": normalized_draft.reference_style,
         "outline": [{"name": section.name} for section in normalized_draft.sections],
     }
+    if normalized_state.get("execution_receipts"):
+        payload["execution_receipts"] = normalized_state["execution_receipts"]
     if (config or {}).get("metadata", {}).get("run_config_schema_version", 18) >= 20:
         from .writing import answer_evidence_order, evidence_bindings, project_evidence
         from .verification import example_inventory
@@ -481,10 +485,28 @@ def build_reviewer_payload(
 
         contract = coverage_contract.model_dump(mode="json") if coverage_contract else _unwrap(normalized_state.get("coverage_contract"), {})
         kinds = {r["requirement_id"]: r.get("kind", "factual") for r in contract.get("requirements", [])}
+        if payload["_run_schema_version"] >= 28:
+            from open_deep_research.quality.contract import research_page_limit
+            ancestry = normalized_state.get("source_run_receipts")
+            if ancestry is not None:
+                payload["source_run_receipts"] = ancestry
+                origin = next((r for r in ancestry if r["relationship"] == "original_research"), {})
+            else:
+                origin = normalized_state.get("execution_receipts") or {}
+            limits = []
+            for row in contract.get("requirements", []):
+                maximum = research_page_limit(row["text"]) if not row.get("subject") else None
+                if maximum is not None:
+                    kinds[row["requirement_id"]] = "process"
+                    limits.append({"requirement_id": row["requirement_id"], "maximum": maximum,
+                                   "run_id": origin.get("run_id"), "observed": origin.get("physical_fetches")})
+            if limits:
+                payload["research_read_limits"] = limits
         requirements = [{**r, "kind": kinds.get(r["requirement_id"], "factual")} for r in requirements]
         payload["coverage_contract"]["requirements"] = requirements
         payload["coverage_contract"]["scope_context"] = original_requirement_context(contract)
-        payload["requirement_to_evidence"] = evidence_bindings(records, _unwrap(raw_ledger, {}))
+        payload["requirement_to_evidence"] = evidence_bindings(records, _unwrap(raw_ledger, {}),
+            prefer_reviewed=payload["_run_schema_version"] >= 27)
         payload["required_requirement_ids"] = [r["requirement_id"] for r in requirements
             if r["kind"] == "factual" and payload["requirement_to_evidence"].get(r["requirement_id"])]
         payload["evidence_registry"] = answer_evidence_order(project_evidence(records), requirements,
@@ -496,17 +518,74 @@ def build_reviewer_payload(
         payload["previous_issues"] = [item for item in previous.get("issues", []) if item.get("issue_id")]
         payload["previous_draft_sha256"] = previous.get("draft_sha256")
         if (config or {}).get("metadata", {}).get("run_config_schema_version", 18) >= 20:
+            from .boundaries import boundary_scope_requested
             # The report can change; the original question and accepted source
             # scope cannot shrink to exempt a previously established ordering.
-            payload["required_boundary_cases"] = sorted({case for review in history
+            payload["required_boundary_cases"] = (sorted({case for review in history
                 for case in review.get("provenance", {}).get("boundary_applicable_cases", [])})
+                if boundary_scope_requested(payload["coverage_contract"]) else [])
         body = body_without_references(normalized_draft.markdown)
         urls = {source.url for source in parse_sources_from_text(body)}
         numbers = numbered_source_urls(normalized_draft.markdown)
         urls.update(numbers[number] for number in re.findall(r"\[(\d+)\]", body) if number in numbers)
         payload["citation_inventory"] = {"body_source_urls": sorted(urls), "body_source_count": len(urls),
             "listed_source_urls": sorted({source.url for source in parse_sources_from_text(normalized_draft.markdown)})}
+    if payload["_run_schema_version"] >= 27:
+        _fit_reviewer_projection(payload, _unwrap(raw_ledger, {}),
+            Configuration.from_runnable_config(config).report_review_max_input_chars,
+            pinned_ids=set(required_evidence_ids) | {r["evidence_id"] for r in records if r.get("conflict_group") and r.get("evidence_id")})
     return payload
+
+
+def _fit_reviewer_projection(payload, ledger, limit, *, pinned_ids):
+    """Keep the complete draft and verified witnesses inside the configured character ceiling."""
+    from .writing import ReportInputBudgetExceeded
+
+    records = payload["evidence_registry"]
+    eligible = {row["evidence_id"] for row in records}
+    required = set(pinned_ids) & eligible
+    for obligation in (ledger or {}).values():
+        if isinstance(obligation, dict):
+            required.update(eligible.intersection(obligation.get("evidence_ids", [])))
+    for issue in payload.get("previous_issues", []):
+        required.update(eligible.intersection(issue.get("evidence_ids", [])))
+    references = set(re.findall(r"(?<![\w-])(ev_[A-Za-z0-9_-]+)(?![\w-])", payload["draft_markdown"]))
+    required.update(eid for eid in eligible if eid in references or f"[{eid}]" in payload["draft_markdown"])
+    represented = {_canonical_reference(row.get("source_url")) for row in records if row["evidence_id"] in required}
+    cited = {_canonical_reference(url) for url in payload.get("citation_inventory", {}).get("body_source_urls", [])}
+    for row in records:
+        source = _canonical_reference(row.get("source_url"))
+        if source in cited - represented:
+            required.add(row["evidence_id"])
+            represented.add(source)
+    bindings = payload.get("requirement_to_evidence", {})
+    for rid in payload.get("required_requirement_ids", []):
+        ids = bindings.get(rid, [])
+        if not required.intersection(ids):
+            first = next((eid for eid in ids if eid in eligible), None)
+            if first:
+                required.add(first)
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, default=str))
+    if size(payload) <= limit:
+        return
+    fixed = {**payload, "evidence_registry": [], "input_truncated": True,
+             "omitted_evidence_count": len(records)}
+    used = size(fixed)
+    selected = []
+    for row in sorted(records, key=lambda r: r["evidence_id"] not in required):
+        chars = size(row) + 2
+        if used + chars > limit:
+            if row["evidence_id"] in required:
+                raise ReportInputBudgetExceeded("report_review_required_projection_exceeds_character_limit")
+            continue
+        selected.append(row)
+        used += chars
+    if used > limit or (records and not selected):
+        raise ReportInputBudgetExceeded("report_review_fixed_projection_exceeds_character_limit")
+    ids = {row["evidence_id"] for row in selected}
+    payload.update(evidence_registry=selected, input_truncated=True, omitted_evidence_count=len(records)-len(selected),
+                   requirement_to_evidence={rid: [eid for eid in values if eid in ids] for rid, values in bindings.items()})
 
 
 def _track_review_issues(issues, resolutions, previous, *, advisory_retention=False):
@@ -1122,9 +1201,37 @@ def _normalize_candidate(
     )
     if model_error is None and requirements and len(coverage) != len(requirements):
         deterministic_failures.append("coverage_contract_rows_missing_or_invalid")
-    if coverage:
-        missing_rows = [row for row in coverage if row.status == "missing"]
-        partial_rows = [row for row in coverage if row.status == "partial"]
+    # The text of a report cannot prove its execution history. Keep every row
+    # visible, but score the artifact on facts and deliverables. Explicit
+    # citation, contradiction and scope issues still go through the usual gate.
+    process_ids = {
+        row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])
+        if row.get("kind") == "process"
+    }
+    for check in payload.get("research_read_limits", []):
+        row = next((item for item in coverage if item.requirement_id == check["requirement_id"]), None)
+        actual = check["observed"]
+        if row is not None and actual is not None:
+            row.status = "covered" if actual <= check["maximum"] else "missing"
+            row.explanation = f"运行 {check['run_id']} 的 SQL 回执记录实际抓取 {actual} 次，上限 {check['maximum']}。"
+        if actual is not None and actual > check["maximum"]:
+            deterministic_failures.append("research_read_limit_exceeded")
+            issues.append(_issue("coverage", "critical", "实际抓取次数超过研究计划上限。",
+                requirement_id=check["requirement_id"], revision_instruction="披露已发生的执行偏差，保留原运行回执。"))
+    content_coverage = [row for row in coverage if row.requirement_id not in process_ids]
+    if content_coverage:
+        missing_rows = [row for row in content_coverage if row.status == "missing"]
+        partial_rows = [row for row in content_coverage if row.status == "partial"]
+        # A bounded partial research outcome may be faithfully reported with
+        # explicit gaps. Keep coverage partial, but do not invent a repair for
+        # a gap the Reviewer individually marked as already disclosed.
+        if ((state.get("completion_outcome") or {}).get("action") == "complete_partial"
+                and model_review.decision == "pass"
+                and config.get("metadata", {}).get("quality_policy_version") == "quality-gate-v6"):
+            disclosed = {issue.requirement_id for issue in issues
+                         if issue.category == "coverage" and issue.severity == "info"
+                         and not issue.blocking and not issue.requires_change}
+            partial_rows = [row for row in partial_rows if row.requirement_id not in disclosed]
         if missing_rows:
             issues.append(
                 _issue(
@@ -1268,10 +1375,11 @@ def _normalize_candidate(
         )
         for name in _DIMENSIONS
     }
-    if requirements:
-        covered = sum(row.status == "covered" for row in coverage)
-        partial = sum(row.status == "partial" for row in coverage)
-        heuristic_coverage_score = (covered + 0.5 * partial) / len(requirements)
+    content_requirement_count = sum(row["requirement_id"] not in process_ids for row in requirements)
+    if content_requirement_count:
+        covered = sum(row.status == "covered" for row in content_coverage)
+        partial = sum(row.status == "partial" for row in content_coverage)
+        heuristic_coverage_score = (covered + 0.5 * partial) / content_requirement_count
         score_values["coverage"] = min(score_values["coverage"], heuristic_coverage_score)
         if not supplied_dimensions:
             score_values["coverage"] = heuristic_coverage_score
@@ -1458,7 +1566,18 @@ async def _invoke_reviewer(
             "change, and harmless repetition are informational or low editorial feedback. Do not "
             "request new rephrasing of an already corrected passage without identifying a real defect. "
             "For a verification or an observation requiring no correction, set requires_change=false "
-            "and severity=info. Do not label a statement you explicitly confirm as correct as a defect."
+            "and severity=info. Do not label a statement you explicitly confirm as correct as a defect. "
+            "For process requirements about execution history, keep an explicit coverage row. Use only this run’s execution_receipts for actions and ordering. A missing receipt is unverified. "
+            "If this input lacks runtime receipts, mark verification partial and report the limitation "
+            "as informational. Do not lower the artifact coverage score or request prose changes solely "
+            "to compensate for absent runtime receipts. Flag any evidenced scope violation or "
+            "unsupported process claim in the draft as a normal blocking issue. "
+            "When completion_outcome.action is complete_partial, distinguish faithful disclosure of "
+            "a bounded evidence gap from a repairable omission. Keep coverage=partial for facts that "
+            "remain unverified. For EACH partial requirement whose limitation is explicitly and "
+            "accurately disclosed and needs no writing change, emit a coverage issue with that exact "
+            "requirement_id, severity=info, blocking=false and requires_change=false. Missing answers, "
+            "unsupported assertions and undisclosed gaps remain blocking."
         )
     schema = ReportReview
     if fields["_run_schema_version"] >= 18:
@@ -1504,6 +1623,11 @@ async def _invoke_reviewer(
                 max_length=len(required_ids) if required_ids else None)))
     if fields["_run_schema_version"] >= 20:
         required_ids = [row["requirement_id"] for row in payload.get("coverage_contract", {}).get("requirements", [])]
+        if fields["_run_schema_version"] >= 28:
+            messages[0].content += ("\nUse research_read_limits to verify page limits. source_run_receipts refer to "
+                "separately identified original or supplemental work. Evaluate each process condition against its "
+                "own SQL receipts. Never attribute another run's web or skill actions to this review. A process "
+                "record with incomplete detail remains unverified and cannot certify factual claims in the report.")
         messages[0].content += (
             "\nVerify each covered answer, not just the presence of its heading or terminology. "
             "The complete canonical draft is draft_passages concatenated in numeric index order. "
@@ -1556,7 +1680,7 @@ async def _invoke_reviewer(
         result.example_checks = checks
     if fields["_run_schema_version"] >= 20:
         from .boundaries import audit_boundaries, needs_boundary_audit
-        if needs_boundary_audit(payload["draft_markdown"]) or payload.get("required_boundary_cases"):
+        if needs_boundary_audit(payload["draft_markdown"], scope=payload["coverage_contract"]) or payload.get("required_boundary_cases"):
             boundary_issues = payload.get("_verified_boundary_issues")
             if boundary_issues is None:
                 boundary_issues = await audit_boundaries(payload, config, cfg, require_report_runtime().invoke)
@@ -1808,6 +1932,8 @@ def _revision_prompt(
     extra = {"coverage_contract": state.get("coverage_contract", {}),
              "requirement_to_evidence": {k: v.get("evidence_ids", []) for k, v in state.get("coverage_ledger", {}).items()}} if modern else {}
     extra["_quality_policy_version"] = config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION)
+    if config.get("metadata", {}).get("run_config_schema_version", 0) >= 29:
+        extra.update({key: state[key] for key in ("execution_receipts", "source_run_receipts") if state.get(key)})
     if extra["_quality_policy_version"] in {"quality-gate-v5", "quality-gate-v6"}:
         extra["required_requirement_ids"] = [rid for rid, ids in extra.get("requirement_to_evidence", {}).items() if ids]
     records = _state_evidence(state)
@@ -1816,6 +1942,10 @@ def _revision_prompt(
             *(eid for issue in review.issues for eid in issue.evidence_ids),
             *(eid for citation in review.citation_audit if not citation.supported for eid in citation.evidence_ids),
         ]))
+        if config.get("metadata", {}).get("run_config_schema_version", 0) >= 27:
+            bounded = build_reviewer_payload(draft, state, config, required_evidence_ids=issue_ids)
+            selected = {r["evidence_id"] for r in bounded["evidence_registry"]}
+            records = [r for r in records if r["evidence_id"] in selected]
         by_id = {row["evidence_id"]: row for row in records}
         preferred = [by_id[eid] for eid in issue_ids if eid in by_id]
         extra["required_evidence_ids"] = [row["evidence_id"] for row in preferred]

@@ -56,6 +56,7 @@ def configuration(case, mode, *, model=None):
     }
     values.update({tokens: getattr(cfg, tokens) for _, _, tokens in ROLES.values()})
     values.update(
+        research_execution_strategy=cfg.research_execution_strategy,
         enable_memory=False,
         enable_async_research=cfg.enable_async_research,
         allow_clarification=False,

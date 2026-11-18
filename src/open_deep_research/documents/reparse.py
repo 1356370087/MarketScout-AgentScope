@@ -127,7 +127,7 @@ async def queue_scoped_reparse(
         id_map: dict[str, str] = {}
         for row in unit_rows:
             new_unit_id = str(
-                uuid5(NAMESPACE_URL, f"insightforge:unit:{generation_id}:{row['ordinal']}")
+                uuid5(NAMESPACE_URL, f"marketscout:unit:{generation_id}:{row['ordinal']}")
             )
             id_map[str(row["id"])] = new_unit_id
             await connection.execute(
@@ -160,7 +160,7 @@ async def queue_scoped_reparse(
                     embedding, embedding_model, content_hash)
                    VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb,
                            $7::vector, $8, $9)""",
-                str(uuid5(NAMESPACE_URL, f"insightforge:segment:{generation_id}:{ordinal}")),
+                str(uuid5(NAMESPACE_URL, f"marketscout:segment:{generation_id}:{ordinal}")),
                 generation_id,
                 id_map.get(str(row["unit_id"])),
                 ordinal,
@@ -324,7 +324,7 @@ async def execute_scoped_reparse(
         for unit, texts, vector_map in hashed_plans:
             next_ordinal += 1
             unit_id = str(
-                uuid5(NAMESPACE_URL, f"insightforge:unit:{generation['id']}:{next_ordinal}")
+                uuid5(NAMESPACE_URL, f"marketscout:unit:{generation['id']}:{next_ordinal}")
             )
             await connection.execute(
                 """INSERT INTO research_document_units

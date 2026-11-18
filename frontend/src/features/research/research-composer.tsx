@@ -1,5 +1,7 @@
 "use client";
 
+import { researchExecutionConfig, researchExecutionLabels, researchExecutionMode, type ResearchExecutionMode } from "@/lib/research-execution";
+
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -84,7 +86,7 @@ export function ResearchComposer() {
   const [docSearch, setDocSearch] = useState("");
   const [dragging, setDragging] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [researchMode, setResearchMode] = useState<string>();
+  const [researchMode, setResearchMode] = useState<ResearchExecutionMode>();
   const [teamMode, setTeamMode] = useState<string>();
   const [createError, setCreateError] = useState("");
   const capabilities = useQuery({ queryKey: ["capabilities"], queryFn: researchApi.capabilities, retry: false,
@@ -119,7 +121,7 @@ export function ResearchComposer() {
   const [storedSettings, setStoredSettings] = useState<Record<string, unknown>>({});
   useEffect(() => { queueMicrotask(() => setStoredSettings(loadSettings())); }, []);
   const activeSettings = { ...capabilities.data?.defaults, ...(managed ? preferences.data?.configurable : storedSettings) };
-  const selectedResearchMode = researchMode ?? (activeSettings.enable_async_research ? String(activeSettings.async_research_mode ?? "collaborator") : "sync");
+  const selectedResearchMode = researchMode ?? researchExecutionMode(activeSettings);
   const selectedTeamMode = teamMode ?? String(activeSettings.team_execution_mode ?? "direct");
   const sourceLabel = modes.find((item) => item.value === mode)?.label ?? mode;
 
@@ -139,7 +141,7 @@ export function ResearchComposer() {
     try {
       if (managed) {
         const configurable = { ...preferences.data?.configurable,
-          ...(researchMode === undefined ? {} : { enable_async_research: selectedResearchMode !== "sync", async_research_mode: selectedResearchMode === "teams" ? "teams" : "collaborator" }),
+          ...(researchMode === undefined ? {} : researchExecutionConfig(selectedResearchMode)),
           ...(teamMode === undefined ? {} : { team_execution_mode: selectedTeamMode }) };
         const preview = await platformApi.preview((profile ?? preferences.data?.profile_revision_id) || null, configurable);
         setConfirmation({ preview, configurable, query: researchQuery, selection, theme: sanitizePublicationTheme(preferences.data?.publication_theme, defaultPublicationTheme) });
@@ -147,8 +149,7 @@ export function ResearchComposer() {
       }
       const created = await researchApi.createRun(
         researchQuery,
-        { ...loadSettings(capabilities.data?.defaults), enable_async_research: selectedResearchMode !== "sync",
-          async_research_mode: selectedResearchMode === "teams" ? "teams" : "collaborator", team_execution_mode: selectedTeamMode },
+        { ...loadSettings(capabilities.data?.defaults), ...researchExecutionConfig(selectedResearchMode), team_execution_mode: selectedTeamMode },
         researchQuery.slice(0, 80),
         selection,
         loadPublicationTheme(),
@@ -178,9 +179,9 @@ export function ResearchComposer() {
     {configurationRequired && <p className="form-alert" role="status">平台正在等待首次配置。请管理员进入<Link href="/admin/configurations">配置中心</Link>完成发布。</p>}
     {managed && <label className="composer-profile">研究配置<select aria-label="研究配置模板" value={profile ?? preferences.data?.profile_revision_id ?? ""} onChange={(event) => setProfile(event.target.value)}><option value="">当前平台默认配置</option>{profiles.data?.items.filter((item) => item.status === "active").map((item) => <option key={item.id} value={item.id}>{item.name} · v{item.number} · {item.scope === "personal" ? "个人" : "平台"}</option>)}</select></label>}
     <div className="composer-preferences"><SurfaceDialog title="研究偏好" description="本次研究使用的执行方式。" trigger={<button type="button" className="ui-text-button"><SlidersHorizontal size={15} /> 研究偏好</button>}>
-      <ChoiceGroup label="研究执行模式" value={selectedResearchMode} onChange={setResearchMode} options={[{ value: "sync", label: "同步研究", description: "按研究计划执行" }, { value: "collaborator", label: "异步委派", description: "由 Lead 分配研究任务" }, { value: "teams", label: "团队协作", description: "多个成员协同研究" }]} />
+      <ChoiceGroup label="研究执行模式" value={selectedResearchMode} onChange={(value) => setResearchMode(value as ResearchExecutionMode)} options={[{ value: "adaptive", label: "自适应研究", description: "直接研究，按需分配独立任务" }, { value: "sync", label: "同步委派", description: "按研究计划逐批委派" }, { value: "collaborator", label: "异步委派", description: "由 Lead 分配研究任务" }, { value: "teams", label: "团队协作", description: "多个成员协同研究" }]} />
       {selectedResearchMode === "teams" && <ChoiceGroup label="团队默认执行方式" value={selectedTeamMode} onChange={setTeamMode} options={[{ value: "direct", label: "直接执行" }, { value: "plan_approval", label: "先规划，由 Lead 审批" }]} />}
-      <p className="empty-note">Lead 创建团队，启动成员时可单独调整。</p>
+      {selectedResearchMode === "teams" && <p className="empty-note">Lead 创建团队，启动成员时可单独调整。</p>}
     </SurfaceDialog></div>
     {!query && <div className="composer-template-row" aria-label="竞品分析模板">
       {promptTemplates.map(({ label, icon: Icon, prompt }) => <button key={label} type="button" onClick={() => setQuery(prompt)}><Icon size={16} /><span>{label}<small>{prompt.split("，")[0]}</small></span></button>)}
@@ -229,7 +230,7 @@ export function ResearchComposer() {
       <div className="source-config-footer"><span>{selected.length} 个文件已选择</span><button type="button" onClick={() => void documents.refetch()} title="刷新状态"><RefreshCw size={13} /></button>{selected.length > 0 && <button type="button" onClick={() => setSelected([])} title="清空已选文件"><X size={13} /></button>}</div>
     </div>}
     {(createError || (!validSources && mode !== "web")) && <p className="composer-error" role="alert">{createError || "请选择符合当前模式的研究来源。"}</p>}
-    <dl className="composer-config-summary" aria-label="本次研究配置"><div><dt>研究方式</dt><dd>{{ sync: "同步研究", collaborator: "异步委派", teams: "团队协作" }[selectedResearchMode]}</dd></div><div><dt>研究模型</dt><dd>{String(activeSettings.research_model ?? "服务端默认")}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}{selected.length ? ` · ${selected.length} 份资料` : ""}{selectedBases.length ? ` · ${selectedBases.length} 个库` : ""}{selectedCollections.length ? ` · ${selectedCollections.length} 个集合` : ""}{materialScope.version_mode === "as_of" ? ` · 截至 ${materialScope.as_of_published ?? "待选择"}` : ""}</dd></div></dl>
+    <dl className="composer-config-summary" aria-label="本次研究配置"><div><dt>研究方式</dt><dd>{researchExecutionLabels[selectedResearchMode]}</dd></div><div><dt>研究模型</dt><dd>{String(activeSettings.research_model ?? "服务端默认")}</dd></div><div><dt>资料范围</dt><dd>{sourceLabel}{selected.length ? ` · ${selected.length} 份资料` : ""}{selectedBases.length ? ` · ${selectedBases.length} 个库` : ""}{selectedCollections.length ? ` · ${selectedCollections.length} 个集合` : ""}{materialScope.version_mode === "as_of" ? ` · 截至 ${materialScope.as_of_published ?? "待选择"}` : ""}</dd></div></dl>
     <div className="composer-footer">
       <div className="composer-context">
         <span className="source-ready"><i />{sourceLabel}</span>

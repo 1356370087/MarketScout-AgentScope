@@ -35,7 +35,8 @@ def evaluation_state(snapshot):
     elif not result:
         result = {
             "status": "partial"
-            if (product.get("quality_gate") or {}).get("status") in {"failed", "degraded"}
+            if (product.get("quality_gate") or {}).get("status") in {"failed", "degraded", "partial"}
+            or product.get("completion_status") == "partial"
             else "success"
         }
     # Keep runtime delivery authority alongside independent offline scores.
@@ -141,6 +142,7 @@ async def run_native_question(
         return state
 
     run_id = None
+    interaction_error = None
     try:
         if resource_provider is None and config_getenv("EVALUATION_CALLBACK_HOST"):
             from .callbacks import gateway_callbacks
@@ -162,7 +164,8 @@ async def run_native_question(
                 for interaction in interactions:
                     parked, _ = await service.store.load(run_id, principal.user_id)
                     if parked.status != "waiting":
-                        raise ValueError("scripted_interaction_expected_waiting_run")
+                        interaction_error = "scripted_interaction_expected_waiting_run"
+                        break
                     if interaction["stage"] == "tool":
                         matches = [
                             key
@@ -172,14 +175,16 @@ async def run_native_question(
                             == interaction.get("tool_name")
                         ]
                         if len(matches) != 1:
-                            raise ValueError("scripted_tool_approval_mismatch")
+                            interaction_error = "scripted_tool_approval_mismatch"
+                            break
                         action_id = matches[0]
                     else:
                         if (
                             parked.pending is None
                             or parked.pending.stage != interaction["stage"]
                         ):
-                            raise ValueError("scripted_interaction_stage_mismatch")
+                            interaction_error = "scripted_interaction_stage_mismatch"
+                            break
                         action_id = parked.pending.id
                     await service.decide(
                         run_id,
@@ -208,6 +213,10 @@ async def run_native_question(
 
         frozen = RunConfig.restore(snapshot.application["configuration"])
         state = await project(snapshot)
+        if interaction_error:
+            # A missed scripted control is an observed outcome, not a missing
+            # experiment. Keep the native trace and bills without retrying it.
+            state["scripted_interaction_error"] = interaction_error
         state["evaluation_configuration"] = {
             key: frozen.get(key)
             for key in config["configurable"]

@@ -1,6 +1,6 @@
 """AgentScope 原生 MCP 连接器（T026/T027/T028）。
 
-基于 ``agentscope.mcp.MCPClient``（mcp 1.30 SDK）替换依赖 mcp 2.x 与
+基于 ``agentscope.mcp.MCPClient``（MCP 2.x SDK）替换依赖旧工具循环与
 LangChain 的旧 ``tools/mcp`` 适配层：
 
 - 传输映射：stdio（有状态长连接）/ streamable_http（逐调用临时会话，保持旧
@@ -29,12 +29,12 @@ from typing import Any, Literal, Self
 from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from agentscope.mcp import HttpMCPConfig, MCPClient, StdioMCPConfig
 from agentscope.message import ToolResultState
 from jsonschema.exceptions import ValidationError as JSONSchemaValidationError
 from jsonschema.validators import validator_for
-from mcp import McpError
+from mcp import MCPError
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import URL_ELICITATION_REQUIRED
@@ -353,8 +353,8 @@ def _render_blocks(blocks: Iterable[Any]) -> str:
     )
 
 
-def _find_mcp_error(exc: BaseException) -> McpError | None:
-    if isinstance(exc, McpError):
+def _find_mcp_error(exc: BaseException) -> MCPError | None:
+    if isinstance(exc, MCPError):
         return exc
     for nested in getattr(exc, "exceptions", ()):
         if found := _find_mcp_error(nested):
@@ -673,7 +673,7 @@ class NativeMcpTool:
         self.descriptor = descriptor
         self.name = descriptor.name
         self.input_schema = build_args_schema(
-            descriptor.name, dict(descriptor.inputSchema or {})
+            descriptor.name, dict(descriptor.input_schema or {})
         )
         self.origin = origin
         self.effect = effect
@@ -688,7 +688,7 @@ class NativeMcpTool:
             "name": descriptor.name,
             "description": descriptor.description or "",
             # 保留原始引用：模型绑定拿到未丢约束的远端 schema。
-            "parameters": descriptor.inputSchema or {},
+            "parameters": descriptor.input_schema or {},
         }
 
     async def description(self, input: Any = None) -> str:
@@ -778,7 +778,7 @@ def _restricted_network(config):
 
 def _discovery_tool_names(config, names, effects, origin, role=AgentRole.RESEARCHER):
     """Authorize configured tool metadata before contacting its server."""
-    declared = [NativeMcpTool(None, McpToolDescriptor(name=name, inputSchema={"type": "object"}),
+    declared = [NativeMcpTool(None, McpToolDescriptor(name=name, input_schema={"type": "object"}),
                               origin=origin, effect=ToolEffect(effects[name]), retryable=False,
                               egress_urls_url=None, auth_satisfied=True)
                 for name in names if name in effects]

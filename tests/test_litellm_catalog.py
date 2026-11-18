@@ -78,48 +78,48 @@ def test_versioned_litellm_config_has_complete_alias_and_fallback_references() -
     deployments = config["model_list"]
     names = {deployment["model_name"] for deployment in deployments}
     expected = {
-        "if-supervisor-v1",
-        "if-research-v1",
-        "if-summarization-v1",
-        "if-message-summary-v1",
-        "if-web-rerank-v1",
-        "if-web-evidence-v1",
-        "if-compression-v1",
-        "if-final-report-v1",
-        "if-quality-v1",
-        "if-report-review-v1",
-        "if-evaluation-v1",
-        "if-fallback-v1",
+        "if-supervisor-v2",
+        "if-research-v2",
+        "if-summarization-v2",
+        "if-message-summary-v2",
+        "if-web-rerank-v2",
+        "if-web-evidence-v2",
+        "if-compression-v2",
+        "if-final-report-v2",
+        "if-quality-v2",
+        "if-report-review-v2",
+        "if-evaluation-v2",
+        "if-fallback-v2",
     }
 
     assert expected <= names
-    assert sum(item["model_name"] == "if-research-v1" for item in deployments) == 2
+    assert sum(item["model_name"] == "if-research-v2" for item in deployments) == 1
     assert all(item["model_info"].get("base_model") for item in deployments)
     quality_aliases = {
-        "if-quality-v1",
-        "if-report-review-v1",
-        "if-evaluation-v1",
+        "if-quality-v2",
+        "if-report-review-v2",
+        "if-evaluation-v2",
     }
     assert {
         item["litellm_params"]["model"]
         for item in deployments
         if item["model_name"] in quality_aliases
-    } == {"zai/glm-5.3-flash"}
-    # GLM 的元数据尚未内置于固定版本的 LiteLLM，必须显式声明。
-    glm_deployments = [
+    } == {"openai/gpt-6.1-sol"}
+    # 平台在发布前校验目录，不能依赖代理启动后才补齐模型能力及价格。
+    chat_deployments = [
         item for item in deployments
-        if item["litellm_params"]["model"] == "zai/glm-5.3-flash"
+        if item["litellm_params"]["model"] == "openai/gpt-6.1-sol"
     ]
-    catalog = parse_model_info({"data": glm_deployments})
+    catalog = parse_model_info({"data": chat_deployments})
     validate_model_catalog(
-        catalog, [item["model_name"] for item in glm_deployments],
+        catalog, [item["model_name"] for item in chat_deployments],
         budget_enabled=True,
     )
     for mapping in config["litellm_settings"]["fallbacks"]:
         source, targets = next(iter(mapping.items()))
         assert source in names
         assert set(targets) <= names
-    for mapping in config["litellm_settings"]["context_window_fallbacks"]:
+    for mapping in config["litellm_settings"].get("context_window_fallbacks", []):
         source, targets = next(iter(mapping.items()))
         assert source in names
         assert set(targets) <= names

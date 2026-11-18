@@ -1,6 +1,6 @@
 """AgentScope 运行时接入层（M2 服务底座）。
 
-本包把 AgentScope 2.0.8 的服务组件装配进 InsightForge：
+本包把 AgentScope 2.0.8 的服务组件装配进 MarketScout：
 
 - ``settings``：AS 运行时配置（环境变量驱动）。
 - ``storage``：隔离的原生服务存储（PostgreSQL 独立 schema / 演示 SQLite）。

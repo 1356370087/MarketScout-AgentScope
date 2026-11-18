@@ -24,6 +24,7 @@ from .identity import document_owner_id
 from .repository import DocumentConflictError
 from .settings import get_document_settings
 from .storage import StagedUpload
+from open_deep_research.knowledge.authz import document_review_sql
 
 _INGESTIBLE_STATUSES = ("draft", "pending_review")
 
@@ -56,8 +57,8 @@ def _generation_view(row: dict[str, Any]) -> dict[str, Any]:
         "version_id": str(row["version_id"]),
         "status": row["status"],
         "revision": int(row.get("revision") or 0),
-        "created_at": _iso(row["created_at"]) or "",
-        "updated_at": _iso(row["updated_at"]) or "",
+        "created_at": _iso(row.get("create_time", row["created_at"])) or "",
+        "updated_at": _iso(row.get("update_time", row["updated_at"])) or "",
         "published_at": _iso(row["published_at"]),
         "review_note": row["review_note"],
         "is_current": bool(row.get("is_current")),
@@ -73,17 +74,19 @@ async def _record_operation(
     generation_id: str | None = None,
     changes: dict[str, Any] | None = None,
     reason: str = "",
+    actor_id: str | None = None,
 ) -> None:
     await connection.execute(
         """INSERT INTO research_document_operations
            (owner_id, document_id, generation_id, operation, actor_id, reason, changes)
-           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $1::uuid, $5, $6::jsonb)""",
+           VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $7::uuid, $5, $6::jsonb)""",
         owner_id,
         document_id,
         generation_id,
         operation,
         reason,
         _json_literal(changes or {}),
+        actor_id or owner_id,
     )
 
 
@@ -349,7 +352,7 @@ async def complete_generation_rich(
     for ordinal, unit in enumerate(prepared.units):
         unit_rows.append(
             (
-                str(uuid5(NAMESPACE_URL, f"insightforge:unit:{generation_id}:{ordinal}")),
+                str(uuid5(NAMESPACE_URL, f"marketscout:unit:{generation_id}:{ordinal}")),
                 generation_id,
                 ordinal,
                 unit.unit_type,
@@ -367,7 +370,7 @@ async def complete_generation_rich(
     ):
         segment_rows.append(
             (
-                str(uuid5(NAMESPACE_URL, f"insightforge:segment:{generation_id}:{ordinal}")),
+                str(uuid5(NAMESPACE_URL, f"marketscout:segment:{generation_id}:{ordinal}")),
                 generation_id,
                 unit_ids[unit_index],
                 ordinal,
@@ -470,11 +473,11 @@ async def publish_generation(
     pool = await get_document_pool()
     async with pool.acquire() as connection, connection.transaction():
         state = await connection.fetchrow(
-            """SELECT g.id AS generation_id, g.status, g.version_id,
+            f"""SELECT g.id AS generation_id, g.status, g.version_id,
                       g.metadata_snapshot, d.current_generation_id, d.owner_id
                  FROM research_document_generations g
                  JOIN research_documents d ON d.id=g.document_id
-                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND d.owner_id=$3::uuid
+                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND {document_review_sql('$3')}
                 FOR UPDATE OF d""",
             generation_id,
             document_id,
@@ -497,26 +500,31 @@ async def publish_generation(
         if state["status"] != "published":
             await connection.execute(
                 """UPDATE research_document_generations
-                   SET status='published', published_at=now(), updated_at=now()
+                   SET status='published', published_at=now(), update_time=now(), updated_at=$2
                  WHERE id=$1::uuid""",
                 generation_id,
+                owner_id,
             )
         if previous != str(generation_id):
             await connection.execute(
                 """UPDATE research_documents
-                   SET current_generation_id=$2::uuid, updated_at=now()
+                   SET current_generation_id=$2::uuid, update_time=now(), updated_at=$3
                  WHERE id=$1::uuid""",
                 document_id,
                 generation_id,
+                owner_id,
             )
             await _record_operation(
                 connection,
-                owner_id=owner_id,
+                owner_id=str(state["owner_id"]),
+                actor_id=owner_id,
                 operation="set_current" if state["status"] == "published" else "publish",
                 document_id=document_id,
                 generation_id=generation_id,
                 changes={"previous_current": previous, "current": str(generation_id)},
             )
+            from open_deep_research.intelligence.publications import record_publication
+            await record_publication(connection, document_id, generation_id, previous, owner_id)
         from open_deep_research.knowledge.maintenance import enqueue
         kb_id = await connection.fetchval('SELECT home_knowledge_base_id FROM research_documents WHERE id=$1::uuid', document_id)
         if kb_id:
@@ -633,10 +641,10 @@ async def generation_detail(
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
-            """SELECT g.*, (d.current_generation_id=g.id) AS is_current
+            f"""SELECT g.*, (d.current_generation_id=g.id) AS is_current
                  FROM research_document_generations g
                  JOIN research_documents d ON d.id=g.document_id
-                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND d.owner_id=$3::uuid""",
+                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND {document_review_sql('$3')}""",
             generation_id,
             document_id,
             owner_id,
@@ -650,7 +658,7 @@ async def list_generations(owner_id: str, document_id: str) -> list[dict[str, An
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         owned = await connection.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM research_documents WHERE id=$1::uuid AND owner_id=$2::uuid)",
+            f"SELECT EXISTS(SELECT 1 FROM research_documents d WHERE d.id=$1::uuid AND {document_review_sql('$2')})",
             document_id,
             owner_id,
         )
@@ -665,7 +673,7 @@ async def list_generations(owner_id: str, document_id: str) -> list[dict[str, An
                  FROM research_document_generations g
                  JOIN research_documents d ON d.id=g.document_id
                 WHERE g.document_id=$1::uuid
-                ORDER BY g.created_at DESC, g.id DESC""",
+                ORDER BY g.create_time DESC, g.id DESC""",
             document_id,
         )
     views = []
@@ -692,12 +700,12 @@ async def generation_review_detail(
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         state = await connection.fetchrow(
-            """SELECT g.*, (d.current_generation_id=g.id) AS is_current,
+            f"""SELECT g.*, (d.current_generation_id=g.id) AS is_current,
                       (SELECT count(*) FROM research_document_units u
                         WHERE u.generation_id=g.id) AS unit_total
                  FROM research_document_generations g
                  JOIN research_documents d ON d.id=g.document_id
-                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND d.owner_id=$3::uuid""",
+                WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND {document_review_sql('$3')}""",
             generation_id,
             document_id,
             owner_id,
@@ -750,7 +758,7 @@ async def list_versions(owner_id: str, document_id: str) -> list[dict[str, Any]]
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         owned = await connection.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM research_documents WHERE id=$1::uuid AND owner_id=$2::uuid)",
+            f"SELECT EXISTS(SELECT 1 FROM research_documents d WHERE d.id=$1::uuid AND {document_review_sql('$2')})",
             document_id,
             owner_id,
         )
@@ -760,7 +768,7 @@ async def list_versions(owner_id: str, document_id: str) -> list[dict[str, Any]]
             """SELECT v.*,
                       (SELECT g.status FROM research_document_generations g
                         WHERE g.version_id=v.id
-                        ORDER BY g.created_at DESC LIMIT 1) AS generation_status,
+                        ORDER BY g.create_time DESC LIMIT 1) AS generation_status,
                       (SELECT g.id FROM research_document_generations g
                         WHERE g.version_id=v.id AND g.status='published'
                         ORDER BY g.published_at DESC LIMIT 1) AS published_generation_id
@@ -802,7 +810,7 @@ async def diff_generations(
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         owned = await connection.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM research_documents WHERE id=$1::uuid AND owner_id=$2::uuid)",
+            f"SELECT EXISTS(SELECT 1 FROM research_documents d WHERE d.id=$1::uuid AND {document_review_sql('$2')})",
             document_id,
             owner_id,
         )

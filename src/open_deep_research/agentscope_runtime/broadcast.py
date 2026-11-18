@@ -33,7 +33,7 @@ class RocketMQBroadcast:
         self,
         endpoint: str,
         *,
-        topic_prefix: str = "insightforge_as",
+        topic_prefix: str = "marketscout_as",
         access_key: str = "",
         secret_key: str = "",
         tls: bool = False,

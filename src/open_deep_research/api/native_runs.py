@@ -39,6 +39,11 @@ from open_deep_research.security.inputs import (
 )
 
 
+def idempotent_run_id(owner, key):
+    """Stable execution identity shared with durable dispatch intents."""
+    return uuid5(NAMESPACE_URL, digest([owner, key])).hex
+
+
 def browser_status(state):
     """Preserve the existing browser status vocabulary at the HTTP boundary."""
     if state.status == "ready":
@@ -51,7 +56,7 @@ def browser_status(state):
                 "outline_approval": "awaiting_outline_approval",
                 "report_time_extension_approval": "awaiting_report_time_extension_approval",
             }[state.pending.stage]
-        return "awaiting_fetch_budget_approval"
+        return "awaiting_budget_approval"
     return state.status
 
 
@@ -74,6 +79,7 @@ class NativeRuns:
         # The supported single-worker deployment serializes admission through
         # the durable insert; simultaneous requests cannot overbook one slot.
         self.creation_lock = asyncio.Lock()
+        self.automation_start_lock = asyncio.Lock()
         from open_deep_research.api.retention import NativeRunRetention
         self.retention = NativeRunRetention(self)
 
@@ -96,20 +102,54 @@ class NativeRuns:
         except OSError, ValueError:
             raise RecoveryConflict("historical_artifact_corrupted") from None
 
-    async def resume(self, run_id, owner, overrides=None):
+    async def resume(self, run_id, owner, overrides=None, *, automation=False):
         try:
             state, _ = await self.store.load(run_id, owner)
         except KeyError:
             self.history(run_id, owner)
             raise RecoveryConflict("legacy_checkpoint_read_only") from None
         RunConfig.restore(state.application["configuration"], overrides=overrides)
-        await self.start(run_id, owner, resume_failed=True)
+        if state.application.get("identity", {}).get("kind") == "intelligence" and not automation:
+            raise RecoveryConflict("automation_resume_via_work_item")
+        if run_id in self.tasks and not self.tasks[run_id].done():
+            return True if automation else None
+        started = await self.start(run_id, owner, resume_failed=True)
+        return started if automation else None
 
     async def create(self, request, principal, *, idempotency_key=None):
         async with self.creation_lock:
             return await self._create(request, principal, idempotency_key=idempotency_key)
 
-    async def _create(self, request, principal, *, idempotency_key=None):
+    async def create_automated(self, request, *, item_id, authorization_id, manifest, execution_number=1):
+        """Trusted coordinator entry; HTTP metadata cannot select this identity."""
+        from open_deep_research.intelligence.authorization import principal_for_grant, require_managed_accounting
+        require_managed_accounting()
+        from open_deep_research.intelligence.contracts import STRICT_QUALITY
+        principal, grant, plan = await principal_for_grant(authorization_id)
+        for key, value in STRICT_QUALITY.items():
+            if request.configurable.get(key) is not value:
+                raise ValueError("continuous_research_requires_strict_quality")
+        identity = {"kind": "intelligence", "authorization_id": grant["id"], "plan_id": plan["id"],
+                    "item_id": item_id, "execution_number": execution_number, "authz_version": principal.authz_version}
+        async with self.creation_lock:
+            return await self._create(request, principal, idempotency_key=f"intelligence:{item_id}:{execution_number}",
+                automation={"identity": identity, "observation_manifest": manifest,
+                    "budget_micro_usd": grant["scope"]["budget"]["run_micro_usd"]})
+
+    async def create_review(self, parent_id, inputs, principal, key, *, preview=False):
+        from open_deep_research.agentscope_runtime.derived_review import review_inputs
+        parent, _ = await self.store.load(parent_id, principal.user_id)
+        request, version, estimate = review_inputs(parent, inputs)
+        if preview:
+            from open_deep_research.platform import runtime, quota
+            month = await quota.runway(principal.user_id) if runtime.enabled() else None
+            return {"estimated_review_micro_usd": estimate, "monthly_available": month and month["available"], **version}
+        if not key:
+            raise ValueError("draft_review_requires_idempotency_key")
+        async with self.creation_lock:
+            return await self._create(request, principal, idempotency_key=key, derivation=version)
+
+    async def _create(self, request, principal, *, idempotency_key=None, automation=None, derivation=None):
         if self.closed:
             raise RecoveryConflict("runtime_shutting_down")
         validate_http_configurable(request.configurable)
@@ -123,11 +163,12 @@ class NativeRuns:
             raise ValueError("research message content must be text")
         owner = principal.user_id
         run_id = (
-            uuid5(NAMESPACE_URL, digest([owner, idempotency_key])).hex
+            idempotent_run_id(owner, idempotency_key)
             if idempotency_key
             else uuid4().hex
         )
-        request_digest = digest(request.model_dump(mode="json"))
+        request_digest = digest({**request.model_dump(mode="json"), **({"automation": automation} if automation else {}),
+                                 **({"review_derivation": derivation} if derivation else {})})
         try:
             previous, _ = await self.store.load(run_id, owner)
         except KeyError:
@@ -162,7 +203,28 @@ class NativeRuns:
             **request.metadata, **prepared.get("metadata", {}),
             "request_id": current_request_id(),
         }
+        if automation:
+            prepared["metadata"]["observation_manifest"] = automation["observation_manifest"]
+        if derivation:
+            if platform_runtime.enabled():
+                from open_deep_research.platform.quota import runway
+                if (await runway(owner))["available"] == 0:
+                    raise RecoveryConflict("monthly_quota_exhausted")
+            # The submitter can always impose a lower ceiling on this child.
+            effective = Configuration.from_runnable_config(prepared).max_run_cost_micro_usd
+            requested_cap = derivation["max_cost_micro_usd"]
+            authorized = min(effective, requested_cap) if effective is not None else requested_cap
+            prepared["configurable"] = {**prepared.get("configurable", {}), "max_run_cost_micro_usd": authorized}
         config = RunConfig.compile(prepared)
+        if derivation:
+            cap = config.get("max_run_cost_micro_usd")
+            if (not cap or cap > derivation["max_cost_micro_usd"] or not config.get("report_review_enabled")
+                    or config.get("report_review_fail_open") or not config.get("quality_evaluation_enabled")
+                    or config.get("quality_evaluation_fail_open")):
+                raise ValueError("review_requires_strict_gates_and_authorized_cost_limit")
+        if automation:
+            from open_deep_research.intelligence.authorization import validate_frozen_automation
+            validate_frozen_automation(config, automation["budget_micro_usd"])
         messages = [
             (
                 UserMsg
@@ -187,8 +249,9 @@ class NativeRuns:
                     "knowledge_manifest": prepared.get("metadata", {}).get("knowledge_manifest"),
                     "selected_source_snapshots": prepared.get("metadata", {}).get("selected_source_snapshots", []),
                     "request_digest": request_digest,
+                    **({"review_derivation": derivation} if derivation else {}),
                     "request_metadata": {**request.metadata, "request_id": current_request_id()},
-                    "identity": {
+                    "identity": automation["identity"] if automation else {
                         "session_id": principal.session_id,
                         "authz_version": principal.authz_version,
                     },
@@ -217,6 +280,56 @@ class NativeRuns:
         return run_id
 
     async def start(self, run_id, owner, *, automatic=False, resume_failed=False):
+        state, _ = await self.store.load(run_id, owner)
+        if state.application.get("identity", {}).get("kind") == "intelligence":
+            async with self.automation_start_lock:
+                from open_deep_research.intelligence.settings import settings
+                identity = state.application["identity"]
+                async with self.store.engine.connect() as connection:
+                    runs = self.store.runs
+                    active = (await connection.execute(select(runs.c.snapshot["application"]["identity"]["plan_id"].as_string()).where(
+                        runs.c.run_id != run_id, runs.c.owner.is_not(None), runs.c.expires > self.store._clock(connection),
+                        runs.c.snapshot["application"]["identity"]["kind"].as_string() == "intelligence"))).scalars().all()
+                if len(active) >= settings().max_runs or identity["plan_id"] in active:
+                    return False
+                return await self._start(run_id, owner, automatic=automatic, resume_failed=resume_failed)
+        return await self._start(run_id, owner, automatic=automatic, resume_failed=resume_failed)
+
+    async def _can_resume_catalogue(self, conn, row):
+        """Resume a paid writer's committed result after a provable local assembly failure."""
+        import hashlib
+        from open_deep_research.report.references import generated_catalogue_conflict
+        state = row["snapshot"]
+        if (state.get("error") != "ValueError" or state.get("inflight") != "final_report_generation"
+                or state.get("completed", [])[-1:] != ["outline_approval"] or any(row["reserved"].values())):
+            return False
+        product = state.get("report_product") or {}
+        draft, sha = product.get("final_report_draft"), product.get("report_draft_sha256")
+        artifact = state.get("application", {}).get("report_review_artifacts", {}).get(sha)
+        if not draft or not artifact or artifact.get("review") or hashlib.sha256(draft.encode()).hexdigest() != sha:
+            return False
+        ops = self.store.ops.c
+        unsafe = await conn.scalar(select(exists().where(ops.run_id == row["run_id"], or_(
+            ops.state != "committed", ops.kind.in_(["model:report_review", "model:report_revisor"]),
+            ops.result["status"].as_string().in_(["uncertain", "unknown"]),
+            ops.result["outcome"]["status"].as_string().in_(["uncertain", "unknown"]),
+            ops.result["cost_status"].as_string() == "unknown", ops.result["usage_status"].as_string() == "unknown",
+            ops.result["uncertain"].as_boolean().is_(True)))))
+        if unsafe:
+            return False
+        results = await conn.scalars(select(ops.result).where(ops.run_id == row["run_id"],
+            ops.kind == "model:final_report", ops.key.like("final_report_generation:%:report:lead.final_report:%")))
+        for result in results:
+            if (result or {}).get("codec") != "agentscope-response-v1":
+                continue
+            blocks = (result.get("response") or {}).get("content") or []
+            writer = blocks if isinstance(blocks, str) else "".join(
+                b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
+            if generated_catalogue_conflict(draft, writer):
+                return True
+        return False
+
+    async def _start(self, run_id, owner, *, automatic=False, resume_failed=False):
         if self.closed:
             raise RecoveryConflict("runtime_shutting_down")
         state, _ = await self.store.load(run_id, owner)
@@ -233,31 +346,33 @@ class NativeRuns:
                     has_operations = await connection.scalar(select(exists().where(
                         self.store.ops.c.run_id == run_id
                     )))
+                    local_catalogue = await self._can_resume_catalogue(connection, row)
                     budget_exhausted = any(
                         row["used"].get(dimension, 0)
                         + row["reserved"].get(dimension, 0) >= maximum
                         for dimension, maximum in row["limits"].items()
+                        if not (local_catalogue and dimension == "fetch_calls")
                     )
                     deadline_exceeded = (
                         row["deadline"] is not None
                         and await self.store._now(connection) >= row["deadline"]
                     )
-                    # 显式重试仅重开尚未进入研究阶段或外部操作的初始化失败。
                     if (
                         persisted["status"] != "failed"
-                        or persisted.get("completed")
-                        or persisted.get("inflight")
+                        or (not local_catalogue and (persisted.get("completed") or persisted.get("inflight") or has_operations))
                         or persisted.get("completion_outcome", {}).get("action") == "terminate"
                         or persisted.get("error") in {
                             "UnknownOperation", "BudgetExhausted", "DeadlineExceeded", "ResearchTerminated"
                         }
-                        or has_operations
                         or budget_exhausted
                         or deadline_exceeded
                     ):
                         raise RecoveryConflict("run_not_recoverable")
                 ready = recovery.snapshot.model_copy(deep=True)
                 ready.status, ready.error = "ready", None
+                if local_catalogue:
+                    ready.application["report_preflight_recovery"] = {"reason": "duplicate_generated_bibliography",
+                        "initial_draft_sha256": ready.report_product["report_draft_sha256"]}
                 await recovery.save(ready)
             if automatic and recovery.snapshot.status not in {"ready", "running", "waiting"}:
                 await recovery.close()
@@ -280,7 +395,7 @@ class NativeRuns:
         task.add_done_callback(completed)
         return True
 
-    async def recover_interrupted(self):
+    async def recover_interrupted(self, *, kind=None):
         """Restart unowned native work and acknowledged decisions after shutdown.
 
         Waiting without an answer and terminal failures require explicit user
@@ -292,6 +407,7 @@ class NativeRuns:
         runs, decisions = self.store.runs, self.store.decisions
         async with self.store.engine.connect() as connection:
             rows = (await connection.execute(select(runs.c.run_id, runs.c.user_id).where(
+                *([runs.c.snapshot["application"]["identity"]["kind"].as_string() == kind] if kind else []),
                 runs.c.expires <= self.store._clock(connection),
                 or_(
                     runs.c.snapshot["status"].as_string().in_({"ready", "running"}),
@@ -346,8 +462,12 @@ class NativeRuns:
             await recovery.close()
 
     async def decide(
-        self, run_id, owner, action_id, action, message="", command_id=None, *, source_selection=None, expected_version=None, extension_seconds=None
+        self, run_id, owner, action_id, action, message="", command_id=None, *, source_selection=None, expected_version=None, extension_seconds=None, limits=None
     ):
+        if source_selection is not None:
+            snapshot, _ = await self.store.load(run_id, owner)
+            if snapshot.application.get("identity", {}).get("kind") == "intelligence":
+                raise RecoveryConflict("automation_source_changes_require_plan_authorization")
         payload = {"action": action, "feedback": message}
         if source_selection is not None:
             payload["source_selection"] = source_selection
@@ -355,6 +475,8 @@ class NativeRuns:
             payload["expected_version"] = expected_version
         if extension_seconds is not None:
             payload["extension_seconds"] = extension_seconds
+        if limits is not None:
+            payload["limits"] = limits
         command_id = command_id or digest([action_id, payload])
         result = await self.store.submit_decision(
             run_id,

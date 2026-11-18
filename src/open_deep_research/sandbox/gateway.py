@@ -2468,6 +2468,8 @@ class GatewayRuntime:
                 await budget.flush_pending()
             from open_deep_research.models.errors import GATEWAY_TOKEN_LIMIT_MARKER
             error_code = exc.code if isinstance(exc, ModelGatewayError) else "gateway_model_failed"
+            if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+                error_code = "gateway_model_timeout"
             if getattr(exc, "provider_error_code", None) == GATEWAY_TOKEN_LIMIT_MARKER:
                 error_code = GATEWAY_TOKEN_LIMIT_MARKER
             outcome = GatewayModelOutcomeV2(
@@ -2523,7 +2525,7 @@ def create_gateway_app(
                 await close_document_pool()
 
     app = FastAPI(
-        title="InsightForge Sandbox Gateway",
+        title="MarketScout Sandbox Gateway",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,

@@ -24,7 +24,7 @@ def settings() -> RunKeySettings:
     return RunKeySettings(
         base_url="http://litellm-proxy:4000/v1",
         master_key="master",
-        team_id="insightforge-runs",
+        team_id="marketscout-runs",
         encryption_key=b"k" * 32,
         default_budget_micro_usd=2_000_000,
         maximum_budget_micro_usd=5_000_000,
@@ -45,7 +45,7 @@ def test_key_alias_run_attribution_and_reissue_summation() -> None:
             {"key_alias": "run-abc123-a1b2c3d4", "spend": "1.000000"},
             {"key_alias": "run-abc123-e5f6a7b8", "spend": 0.5},
             {"key_alias": "run-shortdead", "spend": "9"},  # malformed tail
-            {"key_alias": "insightforge-service", "spend": "3"},  # non-run
+            {"key_alias": "marketscout-service", "spend": "3"},  # non-run
             {"spend": "4"},  # aliasless
         ]
     )
@@ -54,7 +54,7 @@ def test_key_alias_run_attribution_and_reissue_summation() -> None:
 
     parsed = {entry.key_alias: entry for entry in entries}
     assert parsed["run-abc123-a1b2c3d4"].run_id == "abc123"
-    assert parsed["insightforge-service"].run_id is None
+    assert parsed["marketscout-service"].run_id is None
     assert parsed["run-shortdead"].run_id is None
 
 
@@ -102,7 +102,7 @@ def test_list_keys_with_spend_paginates_and_stops() -> None:
                 {"key_alias": f"run-run{index:02d}-a1b2c3d4", "spend": "1.0"}
                 for index in range(3)
             ]
-            keys.append({"key_alias": "insightforge-service", "spend": "2"})
+            keys.append({"key_alias": "marketscout-service", "spend": "2"})
             return httpx.Response(200, json={"keys": keys})
         return httpx.Response(200, json={"keys": []})
 

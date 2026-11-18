@@ -189,6 +189,7 @@ async def rank_candidates(
     top_k: int = 5,
     max_per_domain: int = 2,
     min_authority: float = 0.0,
+    unknown_freshness: bool = True,
 ) -> list[RankedCandidate]:
     """Apply stable rules, authority admission, and domain diversity."""
     semantic: dict[str, tuple[float, float, float]] = {}
@@ -217,14 +218,14 @@ async def rank_candidates(
             min(1.0, len(candidate.snippet) / 500),
         )
         rank_score = max(0.0, 1.0 - (position / total))
-        freshness = 0.5
+        freshness = None if unknown_freshness else 0.5
         score = (
             0.45 * relevance
             + 0.20 * authority
             + 0.15 * information_gain
-            + 0.10 * freshness
             + 0.10 * rank_score
         )
+        score = score / 0.90 if unknown_freshness else score + 0.05
         ranked.append(
             RankedCandidate(
                 candidate=candidate,
@@ -616,6 +617,7 @@ class WebResearchPipeline:
             top_k=allowed_fetches,
             min_authority=self.settings.min_source_authority,
             max_per_domain=allowed_fetches if self.settings.finite_corpus else 2,
+            unknown_freshness=self.settings.unknown_freshness,
         )
         selected = [item.candidate for item in ranked if item.selected]
         authority_rejected_all = bool(
@@ -861,12 +863,12 @@ class WebResearchPipeline:
                             if needs_extraction_fallback(
                                 document, evidence=self.extract_evidence
                             ):
-                                attempts.append(
-                                    {
-                                        "backend": backend,
-                                        "status": "insufficient_content",
-                                    }
-                                )
+                                attempt = {"backend": backend, "status": "insufficient_content"}
+                                from .pricing_navigation import published_links, requested_field
+                                if requested_field(request.objective) and not inspect_untrusted_content(document.markdown):
+                                    attempt["pricing_navigation"] = {"url": document.final_url,
+                                        "content_hash": document.content_hash, "links": published_links(document)}
+                                attempts.append(attempt)
                                 continue
                             document = document.model_copy(
                                 update={"candidate_id": candidate.candidate_id}
@@ -967,6 +969,8 @@ class WebResearchPipeline:
         document_progress = {}
         all_chunks: list[DocumentChunk] = []
         for document in unique_documents if self.extract_evidence else []:
+            if urlsplit(document.final_url).path.rstrip("/").lower() == "/llms.txt":
+                continue
             document_chunks = chunk_document(document, self.settings)
             previous = saved_progress.get("documents", {}).get(document.document_id, {})
             visited = set(previous.get("visited_chunks", []))

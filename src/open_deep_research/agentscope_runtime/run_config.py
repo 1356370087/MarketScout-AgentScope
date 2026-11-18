@@ -20,6 +20,8 @@ FIELD_MAP = json.loads(
     Path(__file__).with_name("config_fields.json").read_text(encoding="utf-8")
 )
 _METADATA = {
+    "observation_manifest",
+    "research_skill_snapshot",
     "platform_revision_id",
     "profile_revision_id",
     "platform_snapshot",
@@ -98,7 +100,7 @@ class RunConfig:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "schema": "insightforge.run-config.v1",
+            "schema": "marketscout.run-config.v1",
             "engine": "agentscope",
             "contract": json.loads(self._contract_json),
         }
@@ -112,14 +114,14 @@ class RunConfig:
         cls, snapshot: dict[str, Any], *, overrides: dict[str, Any] | None = None
     ) -> RunConfig:
         if (
-            snapshot.get("schema") != "insightforge.run-config.v1"
+            snapshot.get("schema") != "marketscout.run-config.v1"
             or snapshot.get("engine") != "agentscope"
         ):
             raise ValueError("unsupported native run configuration schema")
         contract = snapshot["contract"]
         if (
             contract.get("metadata", {}).get("run_config_schema_version")
-            not in {13, 14, 15, 16, 19, 20, RUN_CONFIG_SCHEMA_VERSION}
+            not in {13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, RUN_CONFIG_SCHEMA_VERSION}
         ):
             raise ValueError("unsupported native frozen contract version")
         if not contract["metadata"].get("run_config_fingerprint"):
@@ -127,6 +129,9 @@ class RunConfig:
         if contract["metadata"].get("runtime_config_frozen") is not True:
             raise ValueError("native configuration must be frozen")
         for key, value in (overrides or {}).items():
+            if (contract["metadata"]["run_config_schema_version"] < 22
+                    and key == "research_execution_strategy" and value != "delegated"):
+                raise ValueError(f"frozen configuration conflict: {key}")
             if contract["metadata"]["run_config_schema_version"] == 13 and key in {
                 "async_research_mode", "team_execution_mode"
             } and value != {"async_research_mode": "collaborator", "team_execution_mode": "direct"}[key]:

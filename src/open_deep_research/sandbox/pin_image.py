@@ -58,7 +58,7 @@ def pin_image(policy_path: str | Path, image_id: str) -> None:
 def main() -> None:
     """Inspect a local tag and pin its content ID into the selected policy."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image", default="insightforge-sandbox-worker:local")
+    parser.add_argument("--image", default="marketscout-sandbox-worker:local")
     parser.add_argument("--policy", default="config/sandbox-policy.toml")
     args = parser.parse_args()
     image_id = inspect_image_id(args.image)

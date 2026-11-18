@@ -20,7 +20,7 @@ from open_deep_research.quality.policy import (
 
 # v21 pins report time authorization, delivery-driven closing and owned tool
 # assessment. Existing v20 and older runs retain their original contracts.
-RUN_CONFIG_SCHEMA_VERSION = 21
+RUN_CONFIG_SCHEMA_VERSION = 30
 # Oldest frozen run contract still resumable. Older schemas changed the
 # contract in ways that cannot be reconstructed from the persisted manifest.
 RUN_CONFIG_MIN_RESUMABLE_SCHEMA_VERSION = 7
@@ -217,6 +217,8 @@ _V17_ONWARD_FROZEN_FIELDS = {
 RUN_CONFIG_FROZEN_FIELDS_V16 = RUN_CONFIG_FROZEN_FIELDS
 RUN_CONFIG_FROZEN_FIELDS_V17 = (*RUN_CONFIG_FROZEN_FIELDS, *sorted(_V17_ONWARD_FROZEN_FIELDS))
 RUN_CONFIG_FROZEN_FIELDS = (*RUN_CONFIG_FROZEN_FIELDS_V17, "report_time_reserve_ratio")
+RUN_CONFIG_FROZEN_FIELDS_V21 = RUN_CONFIG_FROZEN_FIELDS
+RUN_CONFIG_FROZEN_FIELDS = (*RUN_CONFIG_FROZEN_FIELDS_V21, "research_execution_strategy", "skills")
 RUN_CONFIG_FROZEN_FIELDS_V15 = tuple(
     name for name in RUN_CONFIG_FROZEN_FIELDS_V16 if name not in _V16_ONWARD_FROZEN_FIELDS
 )
@@ -690,7 +692,7 @@ class Configuration(BaseModel):
         default=False,
         description="Export content-free TraceRecorder spans through OTLP/HTTP.",
     )
-    otel_service_name: str = Field(default="insightforge-api", min_length=1)
+    otel_service_name: str = Field(default="marketscout-api", min_length=1)
     otel_exporter_otlp_endpoint: Optional[str] = Field(default=None)
     prometheus_enabled: bool = Field(
         default=False,
@@ -1288,6 +1290,9 @@ class Configuration(BaseModel):
     )
     """Map of user role (from JWT app_metadata) to blocked tool origins. None = no role-based blocking."""
     # Async SubAgent Configuration
+    research_execution_strategy: Literal["adaptive", "delegated"] = Field(
+        default="adaptive", description="研究策略：adaptive 由主 Agent 直接研究并按需委派；delegated 使用原有 Supervisor 委派流程。仅影响新运行。",
+    )
     async_research_mode: Literal["collaborator", "teams"] = "collaborator"
     team_execution_mode: Literal["direct", "plan_approval"] = "direct"
     enable_async_research: bool = Field(
@@ -1310,6 +1315,16 @@ class Configuration(BaseModel):
             }
         }
     )
+
+    @property
+    def use_adaptive_research(self) -> bool:
+        return self.research_execution_strategy == "adaptive" and not (
+            self.enable_async_research and self.async_research_mode == "teams"
+        )
+
+    @property
+    def use_durable_research_team(self) -> bool:
+        return self.enable_async_research and not self.use_adaptive_research
     inflight_run_memory_retention_seconds: float = Field(
         default=600,
         ge=0,
@@ -1594,7 +1609,7 @@ class Configuration(BaseModel):
     )
     # Runtime quality gates
     quality_evaluation_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Evaluate researcher tool results and subagent handoffs at runtime.",
     )
     quality_evaluation_model: str = Field(
@@ -1626,7 +1641,7 @@ class Configuration(BaseModel):
         ),
     )
     quality_evaluation_fail_open: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Continue on evaluator transport or parsing failures; deterministic "
             "evidence admission checks still apply."
@@ -1668,7 +1683,7 @@ class Configuration(BaseModel):
     # sees only the canonical draft plus admitted evidence and can optionally
     # ask the report writer to repair the draft before publication.
     report_review_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Review and, when needed, revise the final report draft before publication.",
         metadata={
             "x_oap_ui_config": {
@@ -1723,7 +1738,7 @@ class Configuration(BaseModel):
         description="Maximum bounded Revisor passes after the initial report review.",
     )
     report_review_fail_open: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Publish a clearly marked degraded draft when the report reviewer "
             "is unavailable; deterministic safety checks still fail closed."
@@ -1855,7 +1870,7 @@ class Configuration(BaseModel):
         description="Administrator-owned SandboxPolicyBundle TOML path.",
     )
     sandbox_controller_socket: str = Field(
-        default="/run/insightforge/sandbox-controller.sock",
+        default="/run/marketscout/sandbox-controller.sock",
         description="Unix socket exposed by the trusted sandbox controller.",
     )
     sandbox_gateway_url: str = Field(
@@ -2409,6 +2424,8 @@ class Configuration(BaseModel):
         rigor, _warning = _resolve_quality_rigor(rigor_config)
         if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 18:
             values["report_time_reserve_ratio"] = 1.0
+        if frozen and metadata.get("run_config_schema_version", RUN_CONFIG_SCHEMA_VERSION) < 22:
+            values["research_execution_strategy"] = "delegated"
         values["quality_evaluation_rigor"] = rigor
         # Explicit env-var overrides for fields with non-standard env names
         if not platform_runtime.enabled() and config_environment.get("MEM0_PROVIDER") and "memory_provider" not in (configurable or {}):
@@ -2464,6 +2481,8 @@ def frozen_run_config_values(config: RuntimeConfig) -> dict[str, Any]:
         if schema_version == 16
         else RUN_CONFIG_FROZEN_FIELDS_V17
         if schema_version == 17
+        else RUN_CONFIG_FROZEN_FIELDS_V21
+        if schema_version < 22
         else RUN_CONFIG_FROZEN_FIELDS
     )
     return {
@@ -2490,6 +2509,10 @@ def run_config_fingerprint(config: RuntimeConfig) -> str:
     }
     if payload["schema_version"] >= 19 and config.get("metadata", {}).get("platform_snapshot"):
         payload["platform_snapshot"] = config["metadata"]["platform_snapshot"]
+    if payload["schema_version"] >= 22:
+        payload["research_skill_snapshot"] = config.get("metadata", {}).get("research_skill_snapshot")
+    if payload["schema_version"] >= 24:
+        payload["observation_manifest"] = config.get("metadata", {}).get("observation_manifest")
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -2552,6 +2575,8 @@ def freeze_run_config(
             if schema_version == 16
             else RUN_CONFIG_FROZEN_FIELDS_V17
             if schema_version == 17
+            else RUN_CONFIG_FROZEN_FIELDS_V21
+            if schema_version < 22
             else RUN_CONFIG_FROZEN_FIELDS
         )
         missing = [
@@ -2622,5 +2647,7 @@ def freeze_run_config(
             ),
         }
     )
+    from open_deep_research.skills.runtime import skill_snapshot
+    metadata["research_skill_snapshot"] = skill_snapshot(resolved_config.skills)
     metadata["run_config_fingerprint"] = run_config_fingerprint(frozen)
     return frozen

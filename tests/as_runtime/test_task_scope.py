@@ -123,6 +123,27 @@ def test_v21_premises_and_report_goal_do_not_become_web_obligations():
     assert all(text[r.source_start:r.source_end] == r.text for r in value.requirements)
 
 
+@pytest.mark.parametrize("goal,kind,facets", [
+    ("对比 Dify 与 FastGPT", "deliverable", ["知识库功能", "部署方式", "入门付费价格"]),
+    ("对比 Dify 与 FastGPT 的定价", "factual", ["部署方式"]),
+    ("对比 Dify 与 FastGPT", "factual", []),
+])
+def test_comparison_roster_does_not_duplicate_explicit_fact_requirements(goal, kind, facets):
+    text = "，".join([goal, *facets])
+    atoms = [{"source_message_index": 0, "source_text": clause, "kind": "factual"}
+             for clause in [goal, *facets]]
+    value = compile_planned_requirements([{"role": "user", "content": text}], atoms,
+        atomic=True, preserve_scope=True, task_scopes=True,
+        entities=[{"name": "Dify"}, {"name": "FastGPT"}])
+    goal_rows = [row for row in value.requirements if row.text == goal]
+    assert {row.kind for row in goal_rows} == {kind}
+    if kind == "deliverable":
+        assert len(goal_rows) == 1 and goal_rows[0].subject is None
+    for facet in facets:
+        assert {row.subject for row in value.requirements if row.text == facet and row.kind == "factual"} == {"Dify", "FastGPT"}
+    assert all(text[row.source_start:row.source_end] == row.text for row in value.requirements)
+
+
 def test_plan_sources_use_real_subdomain_boundary():
     c = contract().model_dump(mode="json")
     c["source_selection"] = {"mode": "specific", "sources": [{"type": "domain", "domain": "elastic.co"}]}
@@ -130,3 +151,10 @@ def test_plan_sources_use_real_subdomain_boundary():
                                             "https://elastic.co.evil.example/"]}, c, {})
     assert checks["allowed"] == ["https://docs.elastic.co/guide"]
     assert len(checks["denied"]) == 2
+
+
+def test_a_fetch_limit_is_an_execution_constraint_but_report_length_is_a_deliverable():
+    from open_deep_research.quality.contract import classify_requirement_kind
+
+    assert classify_requirement_kind("最多读取 12 个相关页面") == "process"
+    assert classify_requirement_kind("报告最多 12 页") == "deliverable"

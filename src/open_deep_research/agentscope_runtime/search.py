@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from open_deep_research.research_time import research_today
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -84,7 +85,7 @@ class NativeSummarizer:
     ) -> str:
         prompt = summarize_webpage_prompt.format(
             webpage_content=content,
-            date=datetime.now(UTC).date().isoformat(),
+            date=research_today(),
         )
 
         async def handler(current_model: Any, messages: Any, **_: Any):

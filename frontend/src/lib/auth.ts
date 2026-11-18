@@ -32,7 +32,9 @@ export async function refreshBrowserSession(): Promise<boolean> {
     credentials: "same-origin",
     headers: csrfHeaders(),
   });
-  return response.ok;
+  // Another same-origin request may already be setting the rotated cookies.
+  // Let callers reconnect their protected request; the API still checks auth.
+  return response.ok || response.status === 409;
 }
 
 export async function authFetch<T>(path: string, init: RequestInit = {}): Promise<T> {

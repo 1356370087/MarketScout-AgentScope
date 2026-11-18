@@ -44,7 +44,7 @@ class TeamRuntime:
                     await db.fetchval("SELECT count(*) FROM research_coordination_transactions WHERE false")
                 self.transport = RocketMQTransport(
                     TeamStore(self.pool), endpoint=endpoint,
-                    prefix=config_getenv("ROCKETMQ_TOPIC_PREFIX", "insightforge"),
+                    prefix=config_getenv("ROCKETMQ_TOPIC_PREFIX", "marketscout"),
                     tls=config_getenv("ROCKETMQ_TLS", "false").lower() == "true",
                     access_key=config_getenv("ROCKETMQ_ACCESS_KEY", ""),
                     secret_key=config_getenv("ROCKETMQ_SECRET_KEY", ""),

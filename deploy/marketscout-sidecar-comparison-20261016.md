@@ -12,7 +12,7 @@
 
 Compose 项目为 `marketscout-compare-20261016`；应用镜像与容器均采用 `marketscout` 前缀，Worker 镜像为 `marketscout-sandbox-worker:local`。Docker 镜像名称按格式要求使用小写。仓库默认 Compose 名、Gateway 容器名及相关 Worker 镜像示例也已改为 MarketScout。
 
-全部数据库连接指定的远程 `172.22.208.30:5432`。复用原有独立验收数据库、加密配置及历史工件卷，未启动本地 PostgreSQL，未清空历史数据。旧数据库中的沙箱逻辑 `deployment_id` 属于不可变恢复契约，因此保留；它与新容器、镜像名称不同。产品界面原有的 InsightForge 文案没有在本次 Docker 命名修改中一并替换。
+全部数据库连接指定的远程 `172.22.208.30:5432`。复用原有独立验收数据库、加密配置及历史工件卷，未启动本地 PostgreSQL，未清空历史数据。旧数据库中的沙箱逻辑 `deployment_id` 属于不可变恢复契约，因此保留；它与新容器、镜像名称不同。产品界面原有的 MarketScout 文案没有在本次 Docker 命名修改中一并替换。
 
 构建后的配置版本 `fcb9e213-c5a9-4dae-9167-6ee20ca93d13` 已生效，API/LiteLLM/Sandbox 均报告 applied。核对了四个 Python 运行容器的全部源码哈希与工作区一致；Controller 和 Publisher 保持 `network_mode: none`。第一次启动遇到旧项目网段冲突，已为本次项目使用独立控制网段，没有删除旧网络。
 

@@ -2,7 +2,7 @@
 
 from uuid import NAMESPACE_URL, uuid5
 
-_DEV_DOCUMENT_OWNER = str(uuid5(NAMESPACE_URL, "insightforge:documents:local-dev-user"))
+_DEV_DOCUMENT_OWNER = str(uuid5(NAMESPACE_URL, "marketscout:documents:local-dev-user"))
 
 
 def document_owner_id(owner_id: str) -> str:

@@ -302,7 +302,7 @@ def test_result_ready_wins_at_exact_deadline_boundary() -> None:
         attrs = {
             "Config": {
                 "Labels": {
-                    "com.insightforge.sandbox.deadline_at": str(time.time() - 1),
+                    "com.marketscout.sandbox.deadline_at": str(time.time() - 1),
                 }
             },
             "State": {},
@@ -334,7 +334,7 @@ def test_deadline_is_measured_from_container_start_not_create() -> None:
         attrs = {
             "Config": {
                 "Labels": {
-                    "com.insightforge.sandbox.deadline_at": str(time.time() - 1),
+                    "com.marketscout.sandbox.deadline_at": str(time.time() - 1),
                 }
             },
             "State": {
@@ -380,13 +380,13 @@ def test_reconcile_rechecks_deployment_labels_before_mutation() -> None:
             self.id = resource_id
             self.status = "running"
             labels = {
-                "com.insightforge.sandbox.deployment_id": deployment_id,
-                "com.insightforge.sandbox.resource_kind": kind,
-                "com.insightforge.sandbox.run_id": f"run-{resource_id}",
-                "com.insightforge.sandbox.task_id": f"task-{resource_id}",
-                "com.insightforge.sandbox.fence_token": "1",
-                "com.insightforge.sandbox.profile_id": "research-gateway-only",
-                "com.insightforge.sandbox.deadline_at": "0",
+                "com.marketscout.sandbox.deployment_id": deployment_id,
+                "com.marketscout.sandbox.resource_kind": kind,
+                "com.marketscout.sandbox.run_id": f"run-{resource_id}",
+                "com.marketscout.sandbox.task_id": f"task-{resource_id}",
+                "com.marketscout.sandbox.fence_token": "1",
+                "com.marketscout.sandbox.profile_id": "research-gateway-only",
+                "com.marketscout.sandbox.deadline_at": "0",
             }
             self.attrs = (
                 {"Config": {"Labels": labels}, "State": {}}
@@ -414,7 +414,7 @@ def test_reconcile_rechecks_deployment_labels_before_mutation() -> None:
         del all
         observed_filters.append(filters)
         labels = filters["label"]
-        if "com.insightforge.sandbox.resource_kind=worker" in labels:
+        if "com.marketscout.sandbox.resource_kind=worker" in labels:
             return [owned_worker, foreign_worker]
         return [owned_seed, foreign_seed]
 
@@ -451,7 +451,7 @@ def test_reconcile_rechecks_deployment_labels_before_mutation() -> None:
         "remove:owned-volume:True",
     ]
     assert all(
-        "com.insightforge.sandbox.deployment_id=deployment-a" in item["label"]
+        "com.marketscout.sandbox.deployment_id=deployment-a" in item["label"]
         for item in observed_filters
     )
 

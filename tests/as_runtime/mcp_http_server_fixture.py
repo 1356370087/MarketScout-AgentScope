@@ -1,10 +1,10 @@
-"""MCP streamable-http/sse fixture server on the mcp 1.30 SDK (FastMCP)."""
+"""MCP streamable-http/sse fixture server on the MCP 2.x SDK (MCPServer)."""
 
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-mcp = FastMCP("test-http-server", host="127.0.0.1", port=int(sys.argv[1]))
+mcp = MCPServer("test-http-server")
 
 
 @mcp.tool(description="Echo the text back.")
@@ -26,4 +26,4 @@ async def slow(seconds: float) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(sys.argv[2] if len(sys.argv) > 2 else "streamable-http")
+    mcp.run(sys.argv[2] if len(sys.argv) > 2 else "streamable-http", host="127.0.0.1", port=int(sys.argv[1]))

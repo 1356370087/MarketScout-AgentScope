@@ -15,7 +15,7 @@ export function EmptyState({ title, description, action }: { title: string; desc
 const labels: Record<string, string> = {
   pending: "等待中", queued: "排队中", running: "进行中", active: "协作中", completed: "已完成", failed: "失败", cancelled: "已取消", cancelling: "正在停止",
   waiting_for_confirmation: "等待确认", ready: "可检索", processing: "处理中", deleting: "正在清理", accepted: "已接纳", rejected: "需补证", closed: "已关闭",
-  awaiting_clarification: "待澄清", awaiting_plan_approval: "待确认计划", awaiting_outline_approval: "待确认大纲", awaiting_fetch_budget_approval: "待确认预算",
+  awaiting_clarification: "待澄清", awaiting_plan_approval: "待确认计划", awaiting_outline_approval: "待确认大纲", awaiting_fetch_budget_approval: "待确认预算", awaiting_budget_approval: "待确认预算",
   awaiting_report_time_extension_approval: "待确认报告时间",
 };
 export function StatusBadge({ status, label }: { status: string; label?: string }) {

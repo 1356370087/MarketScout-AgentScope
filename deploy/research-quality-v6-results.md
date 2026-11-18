@@ -8,7 +8,7 @@
 
 ## 实际验证范围
 
-- Docker 专用项目 `insightforge-platform-e2e-20261015`，真实 IAM 登录、API、Gateway、Controller、LiteLLM、SQL 恢复账本与无网络的 Publisher Worker。
+- Docker 专用项目 `marketscout-platform-e2e-20261015`，真实 IAM 登录、API、Gateway、Controller、LiteLLM、SQL 恢复账本与无网络的 Publisher Worker。
 - 全部数据库连接远程 `172.22.208.30:5432`，未启动本地数据库容器。凭据仅保存在未跟踪配置。
 - `quality-gate-v6`，冻结契约版本 19，现有模型路由 `if-e2e-research--58fb58777c91`。质量严格度沿用 `balanced`：运行维度下限 3、均分下限 3.0、报告聚合下限 0.75、关键维度下限 0.70。没有降低阈值；研究与报告 fail-open 均关闭。
 - 每题费用上限 1,000,000 微美元；用户月上限 5,000,000 微美元，最多并发两项研究。末轮按这个并发限制执行，原题与每题预算保持不变。

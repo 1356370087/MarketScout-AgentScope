@@ -413,6 +413,7 @@ async def test_researcher_source_mode_filters_native_tool_catalog(
         "think_tool",
         "ResearchComplete",
         "CompressContext",
+        "ReadSkill",
     }
     assert names == expected
 
@@ -459,20 +460,29 @@ async def test_native_coalesced_context_can_offload_older_complete_round():
 
 
 @pytest.mark.parametrize("skill", ["medical", "legal", "finance"])
-async def test_native_researcher_receives_selected_domain_skill(skill):
+@pytest.mark.parametrize("strategy", ["adaptive", "delegated"])
+async def test_native_researcher_receives_selected_domain_skill(skill, strategy):
     from open_deep_research.agentscope_runtime.research_agents import Researcher
     from open_deep_research.skills import get_skill_researcher_context
 
     async def tools_for(assignment):
         return []
 
-    models = Models({"researcher": [[TextBlock(text="Domain findings")]]})
-    config = cfg(skills=[skill])
+    script = ([[tool_call("ReadSkill", "skill", key=skill)], [TextBlock(text="Domain findings")]]
+              if strategy == "adaptive" else [[TextBlock(text="Domain findings")]])
+    models = Models({"researcher": script})
+    config = cfg(skills=[skill], research_execution_strategy=strategy)
     await Researcher(models, lambda: config, tools_for, run_id="run").run(
         ResearchAssignment(research_topic="q"), contract()
     )
-    prompt = str(models.created[0][2].calls[0]["messages"])
-    assert get_skill_researcher_context([skill]) in prompt
+    calls = models.created[0][2].calls
+    first_prompt = calls[0]["messages"][0].get_text_content()
+    guidance = get_skill_researcher_context([skill])
+    if strategy == "adaptive":
+        assert skill in first_prompt and guidance not in first_prompt
+        assert guidance in str(calls[1]["messages"])
+    else:
+        assert guidance in first_prompt
 
 
 async def test_terminal_no_evidence_is_durable_and_never_reenters_research():

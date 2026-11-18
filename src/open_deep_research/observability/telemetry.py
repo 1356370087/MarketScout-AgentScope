@@ -736,11 +736,11 @@ class OTelSpanBridge:
             "llm": SpanKind.CLIENT,
         }.get(self.source.kind, SpanKind.INTERNAL)
         attributes: dict[str, str | int | float | bool] = {
-            "insightforge.run_id": self.source.run_id,
-            "insightforge.span.kind": self.source.kind,
+            "marketscout.run_id": self.source.run_id,
+            "marketscout.span.kind": self.source.kind,
         }
         if self.source.agent_role:
-            attributes["insightforge.agent.role"] = self.source.agent_role
+            attributes["marketscout.agent.role"] = self.source.agent_role
         if self.source.kind == "llm":
             attributes["gen_ai.operation.name"] = "chat"
             if self.source.model:
@@ -768,11 +768,11 @@ class OTelSpanBridge:
             usage = self.source.usage
             self.span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
             self.span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
-            self.span.set_attribute("insightforge.retry_count", self.source.retry_count)
+            self.span.set_attribute("marketscout.retry_count", self.source.retry_count)
             status = "error" if exc or self.source.error_type else (
                 self.source.final_status or "success"
             )
-            self.span.set_attribute("insightforge.status", status)
+            self.span.set_attribute("marketscout.status", status)
             if self.source.error_type:
                 self.span.set_attribute("error.type", self.source.error_type)
             self.span.set_status(

@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 from open_deep_research.config_types import RuntimeConfig
 from pydantic import BaseModel, ConfigDict, Field
 
-from open_deep_research.budgets import BudgetGate
+from open_deep_research.budgets import BudgetExhausted, BudgetGate
 from open_deep_research.configuration import Configuration
 from open_deep_research.events.public import event_publisher_from_config
 from open_deep_research.sandbox.approvals import ApprovalKind, SecurityApprovalStore
@@ -498,7 +498,7 @@ def build_internal_sandbox_router(
     def _budget_exhausted(exc: BaseException) -> HTTPException:
         dimension = getattr(exc, "dimension", None)
         return HTTPException(
-            429, "budget_exhausted:" + getattr(dimension, "value", "unknown")
+            429, exc.to_wire() if isinstance(exc, BudgetExhausted) else "budget_exhausted:" + getattr(dimension, "value", "unknown")
         )
 
     def authorize(request: ServiceRequest, context: InternalRunContext) -> None:

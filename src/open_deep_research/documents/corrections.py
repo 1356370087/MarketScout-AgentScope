@@ -25,6 +25,7 @@ from .repository import DocumentConflictError
 from .retrieval import locator_dict
 from .settings import DocumentSettings, get_document_settings
 from .structuring import StructuredUnit, plan_table_segments
+from open_deep_research.knowledge.authz import document_review_sql
 
 _EDITABLE_STATUSES = ("draft", "pending_review")
 
@@ -94,7 +95,7 @@ async def _load_generation(
     return await connection.fetchrow(
         f"""SELECT g.*, d.owner_id FROM research_document_generations g
              JOIN research_documents d ON d.id=g.document_id
-            WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND d.owner_id=$3::uuid
+            WHERE g.id=$1::uuid AND g.document_id=$2::uuid AND {document_review_sql('$3')}
             {locking}""",
         generation_id,
         document_id,
@@ -324,7 +325,7 @@ async def apply_corrections(
                 generation_id,
             )
             second_unit_id = str(
-                uuid5(NAMESPACE_URL, f"insightforge:unit:{generation_id}:split:{split_unit_id}")
+                uuid5(NAMESPACE_URL, f"marketscout:unit:{generation_id}:split:{split_unit_id}")
             )
             await connection.execute(
                 """INSERT INTO research_document_units
@@ -369,19 +370,21 @@ async def apply_corrections(
 
         new_revision = await connection.fetchval(
             """UPDATE research_document_generations
-               SET revision=revision+1, updated_at=now()
+               SET revision=revision+1, update_time=now(), updated_at=$2
                 WHERE id=$1::uuid RETURNING revision""",
             generation_id,
+            owner_id,
         )
         await connection.execute(
             """INSERT INTO research_document_operations
                (owner_id, document_id, generation_id, operation, actor_id, reason, changes)
-               VALUES ($1::uuid, $2::uuid, $3::uuid, 'correct', $1::uuid, $4, $5::jsonb)""",
-            owner_id,
+               VALUES ($1::uuid, $2::uuid, $3::uuid, 'correct', $6::uuid, $4, $5::jsonb)""",
+            str(state["owner_id"]),
             document_id,
             generation_id,
             reason,
             _json_literal(applied | {"revision": int(new_revision)}),
+            owner_id,
         )
     return {"revision": int(new_revision), "applied": applied}
 
@@ -433,7 +436,7 @@ async def _write_unit_segments(
             literal = vector_literal(list(reusable[digest]))
         rows.append(
             (
-                str(uuid5(NAMESPACE_URL, f"insightforge:segment:{generation_id}:{unit_id}:{offset}")),
+                str(uuid5(NAMESPACE_URL, f"marketscout:segment:{generation_id}:{unit_id}:{offset}")),
                 generation_id,
                 unit_id,
                 base_ordinal + 1 + offset,

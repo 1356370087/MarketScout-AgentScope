@@ -55,9 +55,13 @@ def allowed_models(config):
     from open_deep_research.platform import runtime as platform_runtime
     if platform_runtime.enabled():
         from open_deep_research.platform.components import model_aliases
-        aliases = model_aliases((platform_runtime.snapshot() or {}).get("document", {}))
-        if "if-fallback-v1" in aliases:
-            values.add(aliases["if-fallback-v1"])
+        document = (platform_runtime.snapshot() or {}).get("document", {})
+        aliases = model_aliases(document)
+        settings = document.get("litellm", {}).get("litellm_settings", {})
+        for field in ("fallbacks", "context_window_fallbacks"):
+            for mapping in settings.get(field, []):
+                for targets in mapping.values():
+                    values.update(aliases.get(target, target) for target in targets)
     else:
         values.add("if-fallback-v1")
     for provider in config.resolved_search_providers:
@@ -377,7 +381,7 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
             launcher = (
                 launcher_factory()
                 if launcher_factory
-                and cfg.enable_async_research
+                and cfg.use_durable_research_team
                 and worker_task_id is None
                 and worker_member_id is None
                 else None

@@ -25,7 +25,7 @@ from agentscope.message import (
 )
 from pydantic import ValidationError
 
-SCHEMA = "insightforge.agentscope.messages.v1"
+SCHEMA = "marketscout.agentscope.messages.v1"
 
 
 class MessageCompatibilityError(ValueError):

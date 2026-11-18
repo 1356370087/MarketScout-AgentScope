@@ -28,7 +28,7 @@ def decode_root_key(encoded: str) -> bytes:
 
 def _hkdf_expand(root: bytes, context: bytes, length: int = 32) -> bytes:
     """Derive a context-separated key with HKDF-SHA256."""
-    prk = hmac.new(b"insightforge-sandbox-v1", root, hashlib.sha256).digest()
+    prk = hmac.new(b"marketscout-sandbox-v1", root, hashlib.sha256).digest()
     output = b""
     previous = b""
     counter = 1

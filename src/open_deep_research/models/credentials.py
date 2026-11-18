@@ -161,7 +161,7 @@ def spend_micro_usd_from_key_info(payload: dict[str, Any]) -> int:
 class RunKeySecretStore:
     """AES-GCM encrypted, atomically written per-run key storage."""
 
-    _AAD = b"insightforge-litellm-run-key-v1"
+    _AAD = b"marketscout-litellm-run-key-v1"
 
     def __init__(self, runs_dir: str | Path, encryption_key: bytes) -> None:
         """Bind an encrypted store to an administrator-owned runs directory."""

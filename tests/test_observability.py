@@ -1085,16 +1085,16 @@ def test_otel_bridge_exports_only_content_free_attributes():
     assert len(spans) == 1
     attributes = dict(spans[0].attributes)
     assert attributes == {
-        "insightforge.run_id": "run-1",
-        "insightforge.span.kind": "llm",
-        "insightforge.agent.role": "researcher",
+        "marketscout.run_id": "run-1",
+        "marketscout.span.kind": "llm",
+        "marketscout.agent.role": "researcher",
         "gen_ai.operation.name": "chat",
         "gen_ai.request.model": "if-research-v1",
         "gen_ai.provider.name": "openai",
         "gen_ai.usage.input_tokens": 2,
         "gen_ai.usage.output_tokens": 4,
-        "insightforge.retry_count": 1,
-        "insightforge.status": "success",
+        "marketscout.retry_count": 1,
+        "marketscout.status": "success",
     }
     exported = repr(attributes)
     assert "secret prompt body" not in exported

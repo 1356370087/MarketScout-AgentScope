@@ -226,7 +226,7 @@ async def run_worker(*, once: bool = False) -> None:
 def main() -> None:
     """Run the document worker CLI."""
     parser = argparse.ArgumentParser(
-        description="InsightForge document ingestion worker"
+        description="MarketScout document ingestion worker"
     )
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()

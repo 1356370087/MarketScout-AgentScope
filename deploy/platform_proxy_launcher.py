@@ -39,7 +39,7 @@ def main():
         configuration = {"model_list": [], "general_settings": {
             "master_key": "os.environ/LITELLM_MASTER_KEY", "database_url": "os.environ/LITELLM_DATABASE_URL"}}
     os.environ["STORE_MODEL_IN_DB"] = "True"
-    with tempfile.TemporaryDirectory(prefix="insightforge-proxy-") as directory:
+    with tempfile.TemporaryDirectory(prefix="marketscout-proxy-") as directory:
         path = Path(directory) / "litellm.yaml"
         path.write_text(yaml.safe_dump(configuration, allow_unicode=True), encoding="utf-8")
         child = subprocess.Popen(["litellm", "--config", str(path), "--host", "0.0.0.0", "--port", "4000"])

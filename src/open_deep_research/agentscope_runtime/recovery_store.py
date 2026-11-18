@@ -67,6 +67,17 @@ def digest(value):
     ).hexdigest()
 
 
+def provisional_gateway_cost(op):
+    """Return a conservative hold that an uncertain receipt cannot confirm as spend."""
+    receipt = op["result"] or {}
+    outcome = receipt.get("outcome") or {}
+    if (op["kind"] == "gateway:model" and op["state"] == "committed" and not receipt.get("usage_correction")
+            and (receipt.get("status") == "uncertain" or outcome.get("status") == "uncertain")
+            and outcome.get("response_cost_usd") is None):
+        return (op["actual"] or {}).get("cost_micro_usd")
+    return None
+
+
 def _no_credentials(value):
     if isinstance(value, dict):
         for key, item in value.items():
@@ -551,9 +562,10 @@ class RecoveryStore:
             state, _ = await self.load(lease.run_id, lease.user_id)
             if state.application.get("identity", {}).get("session_id"):
                 from open_deep_research.agentscope_runtime.production import authorize_run_owner
-                from security.rbac.permissions import RESEARCH_RUN_CREATE
+                from security.rbac.permissions import RESEARCH_RUN_CONTROL_OWN, RESEARCH_RUN_CREATE
                 principal = await authorize_run_owner(lease.user_id, state.application)
-                if principal is None or not principal.has(RESEARCH_RUN_CREATE.code):
+                if principal is None or not principal.has(RESEARCH_RUN_CREATE.code) or (
+                        state.application.get("review_derivation") and not principal.has(RESEARCH_RUN_CONTROL_OWN.code)):
                     raise PermissionError("run_owner_no_longer_authorized")
         quota_record = None
         if metered:
@@ -564,18 +576,24 @@ class RecoveryStore:
                 await check_credentials(snapshot, lease.user_id)
             if "cost_micro_usd" not in (reserve or {}):
                 raise ValueError("managed_model_call_requires_cost_reservation")
-            quota_record = await quota.reserve(platform_runtime.billing_owner() or lease.user_id, self._monthly_key(lease.run_id, key),
-                reserve["cost_micro_usd"], kind)
+            from uuid import uuid4
+            monthly_key = self._monthly_key(lease.run_id, key)
+            trace = {"token": uuid4().hex, "phase": "before_dispatch", "run_id": lease.run_id,
+                     "operation_key": key, "fence": lease.fence,
+                     **{k: v for k, v in (observation or {}).items() if k in {"stage", "task_id", "agent_role"}}}
         try:
+            if metered:
+                quota_record = await quota.reserve(platform_runtime.billing_owner() or lease.user_id, monthly_key,
+                    reserve["cost_micro_usd"], kind, detail=trace)
             result = await self._begin_operation(lease, key, kind, payload, replay_safe=replay_safe,
-                reserve=reserve, observation=observation, partial_fetches=partial_fetches)
-        except (BudgetExhausted, DeadlineExceeded, ValueError):
-            if quota_record and quota_record["status"] == "reserved":
-                await quota.release(self._monthly_key(lease.run_id, key))
-            raise
+                reserve=reserve, observation=observation, partial_fetches=partial_fetches,
+                allow_create=not metered or quota_record["created_reservation"])
+            if metered and not result["replayed"]:
+                await quota.grant_dispatch(monthly_key, trace)
         except BaseException:
             if metered:
-                await quota.mark_unknown(self._monthly_key(lease.run_id, key))
+                # A grant must win this compare-and-update before any upstream call.
+                await quota.release(monthly_key, before_dispatch_token=trace["token"])
             raise
         if metered and result.get("replayed"):
             await self._sync_monthly(lease, key)
@@ -598,18 +616,24 @@ class RecoveryStore:
         identity = self._monthly_key(lease.run_id, key)
         receipt = op["result"] or {}
         outcome = receipt.get("outcome") or {}
-        uncertain = not receipt.get("usage_correction") and (receipt.get("uncertain") or receipt.get("cost_status") == "unknown" or outcome.get("cost_status") == "unknown" or outcome.get("usage_status") == "unknown")
-        if op["state"] == "committed" and not uncertain:
-            if receipt.get("usage_correction"):
-                await quota.correct(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
-            else:
-                await quota.settle(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
+        provisional = provisional_gateway_cost(op)
+        unbilled_gateway = (op["kind"] == "gateway:model" and outcome.get("response_cost_usd") is None
+            and (receipt.get("status") == "uncertain" or outcome.get("status") == "uncertain"))
+        uncertain = (unbilled_gateway or receipt.get("uncertain") or receipt.get("cost_status") == "unknown"
+                     or outcome.get("cost_status") == "unknown" or outcome.get("usage_status") == "unknown")
+        if receipt.get("usage_correction"):
+            await quota.correct(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
+        elif op["state"] == "committed" and not uncertain:
+            await quota.settle(identity, (op["actual"] or {}).get("cost_micro_usd", 0))
         else:
-            await quota.mark_unknown(identity)
+            if provisional is not None and not outcome.get("usage"):
+                await quota.mark_unknown(identity, provisional_settlement=provisional)
+            else:
+                await quota.mark_unknown(identity)
 
     async def _begin_operation(
         self, lease, key, kind, payload, *, replay_safe=False, reserve=None, observation=None,
-        partial_fetches=False,
+        partial_fetches=False, allow_create=True,
     ):
         fingerprint = digest(payload)
         unknown = False
@@ -641,6 +665,9 @@ class RecoveryStore:
                         "run deadline exceeded before operation retry"
                     )
                 if op["state"] == "quarantined" or not op["replay_safe"]:
+                    if not allow_create and op["state"] == "started" and op["fence"] == lease.fence:
+                        # Duplicate grant requests cannot invalidate the active writer.
+                        raise UnknownOperation(key)
                     await conn.execute(
                         update(self.ops)
                         .where(self.ops.c.run_id == lease.run_id, self.ops.c.key == key)
@@ -663,6 +690,8 @@ class RecoveryStore:
                     and await self._now(conn) >= row["deadline"]
                 ):
                     raise DeadlineExceeded("run deadline exceeded")
+                if not allow_create:
+                    raise UnknownOperation("existing monthly reservation has no confirmed operation receipt")
                 reserve = dict(reserve or {})
                 reserved = dict(row["reserved"])
                 for dimension, amount in reserve.items():
@@ -680,7 +709,8 @@ class RecoveryStore:
                         + amount
                         > maximum
                     ):
-                        raise BudgetExhausted(BudgetDimension(dimension))
+                        raise BudgetExhausted(BudgetDimension(dimension),
+                            available=max(0, maximum - row["used"].get(dimension, 0) - reserved.get(dimension, 0)), required=amount)
                     reserved[dimension] = reserved.get(dimension, 0) + amount
                 await conn.execute(
                     update(self.runs)
@@ -749,13 +779,17 @@ class RecoveryStore:
                 "operation belongs to another epoch or needs reconciliation"
             )
         used, reserved = dict(row["used"]), dict(row["reserved"])
+        previous = op["actual"] or {}
+        if (op["result"] or {}).get("usage_correction"):
+            result = {**result, "usage_correction": op["result"]["usage_correction"]}
+            actual = previous
         actual = dict(op["reservation"] if actual is None else actual)
         for dimension, amount in actual.items():
             BudgetDimension(dimension)
             if amount < 0:
                 raise ValueError("negative settlement")
             # Keep actual accounting even if a provider violated its declared cap.
-            used[dimension] = used.get(dimension, 0) + amount
+            used[dimension] = used.get(dimension, 0) + amount - previous.get(dimension, 0)
         for dimension, amount in op["reservation"].items():
             reserved[dimension] = reserved.get(dimension, 0) - amount
         await conn.execute(
@@ -792,9 +826,12 @@ class RecoveryStore:
             op = (await conn.execute(select(self.ops).where(
                 self.ops.c.run_id == lease.run_id, self.ops.c.key == key
             ))).mappings().one()
-            if op["kind"] not in {"model_attempt", "gateway:model"} or op["state"] != "committed":
-                raise RecoveryConflict("only committed native model attempts can be reconciled")
-            result = dict(op["result"])
+            unknown = op["state"] != "committed"
+            if op["kind"] not in {"model_attempt", "gateway:model"} or (unknown and (
+                    op["kind"] != "gateway:model" or cost_micro_usd is None or
+                    (op["state"] == "started" and op["fence"] == lease.fence))):
+                raise RecoveryConflict("model operation unavailable for financial reconciliation")
+            result = dict(op["result"] or {})
             correction = {"receipt_id": receipt_id, "usage": facts}
             if result.get("usage_correction"):
                 if result["usage_correction"] != correction:
@@ -811,20 +848,24 @@ class RecoveryStore:
                 if any(reported.get(k) is not None and reported[k] != facts[k]
                        for k in ("input_tokens", "output_tokens")):
                     raise RecoveryConflict("provider receipt conflicts with reported tokens")
-            actual = dict(op["actual"])
-            actual.update(facts)
+            previous = op["actual"] or {}
+            actual = {"model_calls": 1, **previous, **facts}
             pricing = result.get("pricing_micro_usd")
             if cost_micro_usd is None and pricing is not None:
                 import math
                 actual["cost_micro_usd"] = math.ceil(input_tokens * pricing[0] + output_tokens * pricing[1])
             used = dict(row["used"])
             for dimension, amount in actual.items():
-                used[dimension] = used.get(dimension, 0) + amount - op["actual"].get(dimension, 0)
+                used[dimension] = used.get(dimension, 0) + amount - previous.get(dimension, 0)
             result["usage_correction"] = correction
-            await conn.execute(update(self.runs).where(self._identity(lease)).values(used=used))
+            reserved = dict(row["reserved"])
+            if unknown:
+                for dimension, amount in op["reservation"].items():
+                    reserved[dimension] -= amount
+            await conn.execute(update(self.runs).where(self._identity(lease)).values(used=used, reserved=reserved))
             await conn.execute(update(self.ops).where(
                 self.ops.c.run_id == lease.run_id, self.ops.c.key == key
-            ).values(result=result, actual=actual))
+            ).values(result=result, actual=actual, **({"state": "quarantined", "reservation": {}} if unknown else {})))
             await self._event(conn, row, "research.usage_reconciled",
                               {"operation_key": key, "usage": actual},
                               event_id=digest([lease.run_id, key, "usage_correction"]))
@@ -848,6 +889,8 @@ class RecoveryStore:
                 await self._commit_operation(conn, row, lease, key, result)
                 return
             if not_executed:
+                if (op["result"] or {}).get("usage_correction"):
+                    raise RecoveryConflict("trusted bill proves dispatch")
                 reserved = dict(row["reserved"])
                 for dimension, amount in op["reservation"].items():
                     reserved[dimension] -= amount
@@ -991,7 +1034,16 @@ class RecoveryStore:
                 return same_action["state"]
             pending = row["snapshot"].get("pending")
             approvals = row["snapshot"].get("approvals", {})
-            from .execution_budget import APPROVAL_STAGE, validate_extension
+            identity = row["snapshot"].get("application", {}).get("identity", {})
+            if identity.get("kind") == "intelligence":
+                if payload.get("source_selection") is not None or (
+                    payload.get("action") == "approve" and approvals.get(action_id, {}).get("kind") == "egress"
+                ):
+                    raise RecoveryConflict("automation_source_changes_require_plan_authorization")
+                if payload.get("limits") is not None:
+                    from open_deep_research.intelligence.authorization import check_budget_override
+                    await check_budget_override(identity, payload["limits"])
+            from .execution_budget import APPROVAL_STAGE, can_decline_report_budget, validate_extension
             time_decision = (pending or {}).get("stage") == APPROVAL_STAGE
             feedback = payload.get("action") == "feedback"
             if feedback:
@@ -1002,6 +1054,30 @@ class RecoveryStore:
                     raise RecoveryConflict("feedback targets a foreign task")
             elif action_id != (pending or {}).get("id") and action_id not in approvals:
                 raise RecoveryConflict("stale or foreign approval")
+            budget_approval = approvals.get(action_id, {})
+            report_budget = can_decline_report_budget(budget_approval, row["snapshot"].get("completed", []))
+            if budget_approval.get("kind") == "budget" and payload.get("action") == "approve":
+                dimension = budget_approval["payload"]["dimension"]
+                limits = payload.get("limits") or {}
+                if budget_approval["payload"].get("budget_scope") == "account_month":
+                    if limits:
+                        raise ValueError("monthly quota recheck does not change run limits")
+                    from open_deep_research.platform import quota
+                    month = await quota.runway(user_id)
+                    required = budget_approval["payload"].get("required") or 1
+                    if month["available"] is not None and month["available"] < required:
+                        raise RecoveryConflict("monthly_quota_still_insufficient")
+                elif set(limits) != {dimension}:
+                    raise ValueError("budget approval requires an explicit limit for the requested dimension")
+                derived_cap = row["snapshot"].get("application", {}).get("review_derivation", {}).get("max_cost_micro_usd")
+                if dimension == "cost_micro_usd" and limits and derived_cap and limits[dimension] > derived_cap:
+                    raise ValueError("derived_review_cost_authorization_exceeded")
+                minimum = max(row["limits"].get(dimension, 0),
+                              row["used"].get(dimension, 0) + row["reserved"].get(dimension, 0))
+                if limits and (type(limits[dimension]) is not int or limits[dimension] <= minimum):
+                    raise ValueError("approved limit must exceed the current limit and committed/reserved usage")
+            elif "limits" in payload:
+                raise ValueError("limits require a budget approval")
             if time_decision:
                 validate_extension(pending, payload.get("action"), payload.get("expected_version"),
                                    payload.get("extension_seconds"))
@@ -1009,6 +1085,8 @@ class RecoveryStore:
                 raise ValueError("extension_seconds requires report time approval")
             if "expected_version" in payload and payload["expected_version"] != (pending or {}).get("payload", {}).get("version"):
                 raise RecoveryConflict("source_plan_version_changed")
+            if "source_selection" in payload and row["snapshot"].get("application", {}).get("review_derivation"):
+                raise RecoveryConflict("review_supplement_scope_is_frozen")
             if "source_selection" in payload and (pending or {}).get("stage") != "plan_approval":
                 raise RecoveryConflict("source_selection_requires_plan_approval")
             if "source_selection" in payload:
@@ -1028,7 +1106,7 @@ class RecoveryStore:
                 "cancel",
                 "answer",
                 "feedback",
-            } and not (time_decision and payload.get("action") == "deny"):
+            } and not ((time_decision or report_budget) and payload.get("action") == "deny"):
                 raise ValueError("invalid decision action")
             _no_credentials(payload)
             await conn.execute(

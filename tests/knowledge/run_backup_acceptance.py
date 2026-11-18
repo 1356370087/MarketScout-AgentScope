@@ -172,7 +172,7 @@ def main():
             "AWS_SECRET_ACCESS_KEY": "unused-local-repository",
         }.items():
             base += ["-e", f"{key}={value}"]
-        base += ["insight_forge-knowledge-backup:latest"]
+        base += ["marketscout-knowledge-backup:latest"]
         outputs = {
             "init": command([*base, "init"]),
             "backup": command([*base, "backup"]),

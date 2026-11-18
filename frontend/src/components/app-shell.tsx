@@ -12,7 +12,7 @@ import { SurfaceDialog } from "@/components/ui/workspace";
 import { researchApi } from "@/lib/api";
 import { authFetch, iamApi, localAuthBypass } from "@/lib/auth";
 
-const statusLabel: Record<string, string> = { pending: "排队", running: "运行中", awaiting_clarification: "待澄清", awaiting_plan_approval: "待审批", awaiting_outline_approval: "待审批", awaiting_fetch_budget_approval: "待增额", awaiting_report_time_extension_approval: "待延期确认", completed: "已完成", failed: "失败", cancelled: "已取消" };
+const statusLabel: Record<string, string> = { pending: "排队", running: "运行中", awaiting_clarification: "待澄清", awaiting_plan_approval: "待审批", awaiting_outline_approval: "待审批", awaiting_fetch_budget_approval: "待增额", awaiting_budget_approval: "待确认预算", awaiting_report_time_extension_approval: "待延期确认", completed: "已完成", failed: "失败", cancelled: "已取消" };
 
 const narrowQuery = "(max-width: 1199px)";
 const subscribeViewport = (notify: () => void) => {
@@ -44,10 +44,11 @@ export function AppShell({ children, inspector, inspectorOpen, onInspectorOpenCh
   const switchLocale = () => { const next = document.documentElement.lang === "en" ? "zh-CN" : "en"; document.cookie = `odr.locale=${next};path=/;max-age=31536000;samesite=lax`; location.reload(); };
   const link = (href: string, label: string, icon: ReactNode, active: boolean) => <Link href={href} aria-current={active ? "page" : undefined} className={active ? "active" : ""} onClick={() => setLeftOpen(false)}>{icon}<span>{label}</span></Link>;
   const sidebar = <>
-    <Link className="brand-lockup" href="/research/new" aria-label="InsightForge 首页"><div className="brand-mark"><Radar size={19} /></div><strong>InsightForge</strong></Link>
+    <Link className="brand-lockup" href="/research/new" aria-label="MarketScout 首页"><div className="brand-mark"><Radar size={19} /></div><strong>MarketScout</strong></Link>
     <WorkspaceSwitch identity={identity} />
     <Link className="new-run-button" href="/research/new" onClick={() => setLeftOpen(false)}><SquarePen size={17} /> 新建研究</Link>
     <nav className="shell-nav" aria-label="工作台功能">
+      {link("/intelligence", "持续情报", <Radar size={17} />, pathname.startsWith("/intelligence"))}
       {link("/documents", "资料库", <Files size={17} />, pathname.startsWith("/documents"))}
       {link("/knowledge", "知识空间", <Library size={17} />, pathname.startsWith("/knowledge"))}
       {link("/usage", "用量与成本", <BarChart3 size={17} />, pathname === "/usage")}
@@ -67,7 +68,7 @@ export function AppShell({ children, inspector, inspectorOpen, onInspectorOpenCh
   return <div className={`workspace-shell ${inspector && showDesktopInspector ? "with-inspector" : ""}`}>
     <a className="skip-link" href="#workspace-content">跳转到主要内容</a>
     <aside className="shell-sidebar" aria-label="主导航">{sidebar}</aside>
-    <main className="workbench" id="workspace-content"><header className="shell-topbar"><button className="ui-icon shell-menu" onClick={() => { setRightOpen(false); setLeftOpen(true); }} aria-label="打开导航"><Menu size={19} /></button><span>InsightForge <span className="shell-top-caption">/ 研究工作台</span></span><div className="shell-top-actions"><ThemeToggle compact />{inspector && <button className="ui-icon shell-inspector-trigger" onClick={() => { setLeftOpen(false); if (narrow) setRightOpen(true); else { setDesktopCollapsed(showDesktopInspector); setRightOpen(false); } }} aria-label={!narrow && showDesktopInspector ? "收起研究信息" : "打开研究信息"} aria-expanded={narrow ? rightOpen : showDesktopInspector}><PanelRight size={18} /></button>}</div></header>{children}</main>
+    <main className="workbench" id="workspace-content"><header className="shell-topbar"><button className="ui-icon shell-menu" onClick={() => { setRightOpen(false); setLeftOpen(true); }} aria-label="打开导航"><Menu size={19} /></button><span>MarketScout <span className="shell-top-caption">/ 研究工作台</span></span><div className="shell-top-actions"><ThemeToggle compact />{inspector && <button className="ui-icon shell-inspector-trigger" onClick={() => { setLeftOpen(false); if (narrow) setRightOpen(true); else { setDesktopCollapsed(showDesktopInspector); setRightOpen(false); } }} aria-label={!narrow && showDesktopInspector ? "收起研究信息" : "打开研究信息"} aria-expanded={narrow ? rightOpen : showDesktopInspector}><PanelRight size={18} /></button>}</div></header>{children}</main>
     {inspector && showDesktopInspector && <aside className="shell-inspector" aria-label="研究信息">{inspector}</aside>}
     <SurfaceDialog title="导航" open={leftOpen} onOpenChange={setLeftOpen} drawer><div className="shell-drawer-nav">{sidebar}</div></SurfaceDialog>
     {inspector && <SurfaceDialog title="研究信息" open={narrow && rightOpen} onOpenChange={setRightOpen} onCloseAutoFocus={onInspectorCloseAutoFocus} drawer>{inspector}</SurfaceDialog>}

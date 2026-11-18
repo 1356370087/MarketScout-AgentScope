@@ -42,7 +42,7 @@ $env:PYTHONIOENCODING='utf-8'
 
 费用优先采用供应商或 LiteLLM 可核验账单字段。提示词缓存命中不扣减总输入 token；读取、写入字段未报告时保持未知，不显示为确定零。无法确认供应商内部请求次数时保持未知。内容处理复用次数与供应商提示词缓存分别统计。
 
-本次专用 Compose 项目为 `insightforge-efficiency-e2e`，控制台端口 8088，LiteLLM 接口端口 4108。仅启动本项目的必要服务；验证后停止这些容器及浏览器进程，保留数据库卷和审计工件。
+本次专用 Compose 项目为 `marketscout-efficiency-e2e`，控制台端口 8088，LiteLLM 接口端口 4108。仅启动本项目的必要服务；验证后停止这些容器及浏览器进程，保留数据库卷和审计工件。
 
 ## 工件与当前记录
 
@@ -104,4 +104,4 @@ $env:PYTHONIOENCODING='utf-8'
 
 缺少凭据的 Brave、OpenAI 搜索及 Anthropic 搜索仍未完成实网验收；本轮不以 mock 结果替代。
 
-已停止本次 `insightforge-efficiency-e2e` 项目全部容器；核查运行中容器数为 0，PostgreSQL 专项夹具也已关闭。Playwright 浏览器由测试夹具关闭。数据卷、镜像和审计工件保留；未启动或关闭其他项目容器。清理记录为 `output/research-efficiency/cleanup.json`。
+已停止本次 `marketscout-efficiency-e2e` 项目全部容器；核查运行中容器数为 0，PostgreSQL 专项夹具也已关闭。Playwright 浏览器由测试夹具关闭。数据卷、镜像和审计工件保留；未启动或关闭其他项目容器。清理记录为 `output/research-efficiency/cleanup.json`。

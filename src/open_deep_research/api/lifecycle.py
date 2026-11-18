@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Keep the API admission check aligned with the latest business migration. The
 # migration is deployed before the API, so serving against an older schema is
 # unsafe for the task metadata and team lifecycle contracts.
-CURRENT_BUSINESS_SCHEMA_REVISION = "0022_team_task_fields"
+CURRENT_BUSINESS_SCHEMA_REVISION = "0023_continuous_intelligence"
 
 
 class ApplicationLifecycle:
@@ -50,6 +50,7 @@ class ApplicationLifecycle:
         self.sse_shutdown = asyncio.Event()
         self.retention_task: asyncio.Task | None = None
         self.key_reconciler_task: asyncio.Task | None = None
+        self.intelligence_task: asyncio.Task | None = None
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: FastAPI):
@@ -197,6 +198,8 @@ class ApplicationLifecycle:
                 self.retention_task = asyncio.create_task(
                     native_service.retention.loop(configurable)
                 )
+            from open_deep_research.intelligence.coordinator import Coordinator
+            self.intelligence_task = asyncio.create_task(Coordinator(self.get_native_service()).loop())
             if configurable.model_backend == "litellm":
                 key_settings = RunKeySettings.from_env()
                 self.key_reconciler_task = asyncio.create_task(
@@ -214,6 +217,10 @@ class ApplicationLifecycle:
             self.shutting_down.set()
             try:
                 self.sse_shutdown.set()
+                if self.intelligence_task is not None:
+                    self.intelligence_task.cancel()
+                    await asyncio.gather(self.intelligence_task, return_exceptions=True)
+                    self.intelligence_task = None
                 if self.retention_task is not None:
                     self.retention_task.cancel()
                     await asyncio.gather(self.retention_task, return_exceptions=True)

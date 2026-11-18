@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, StatusBadge, SurfaceDialog, Tabs } from "@/components/ui/workspace";
 import { ApprovalCenter, ApprovalTrigger } from "@/features/research/approval-center";
+import { ReviewVersions } from "@/features/research/review-versions";
 import { ReportPublications } from "@/features/research/report-publications";
 import { RunQualityStatus } from "@/components/run-quality-status";
 import { ResearchTeamPanel } from "@/features/research/research-team-panel";
@@ -136,6 +137,7 @@ export function ResearchWorkspace({ runId }: { runId: string }) {
     {(state.connectionState === "reconnecting" || state.connectionState === "error") && <p className="research-connection-notice" role="status">连接中断，保留最后已知状态，正在尝试恢复实时更新。</p>}
     <Tabs label="研究视图" value={view} onChange={setView} items={[{ value: "process", label: "研究进展" }, { value: "team", label: "研究团队" }, { value: "evidence", label: "来源证据" }, { value: "report", label: "报告", disabled: !state.report }, { value: "usage", label: "用量" }]}><div className="research-content">
       <RunQualityStatus state={state} />
+      {state.terminal && (view === "report" || !state.report) && <ReviewVersions key={runId} runId={runId} />}
       {(view === "process" || state.completionStatus === "partial") && <ResearchEfficiencyPanel
         progress={usage.data?.research_progress ?? state.efficiency}
         partial={state.completionStatus === "partial"} reason={state.stopReason} />}

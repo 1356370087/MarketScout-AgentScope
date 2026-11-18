@@ -142,7 +142,7 @@ async def test_stdio_list_call_and_schema_parity():
         ).output == "echo: b"
         # 嵌套约束在调用前校验（pattern/maxLength 来自远端 JSON Schema）。
         schema = build_args_schema(
-            "constrained", _find(descriptors, "constrained").inputSchema
+            "constrained", _find(descriptors, "constrained").input_schema
         )
         with pytest.raises(ValueError, match="MCP JSON Schema"):
             schema.model_validate({"code": "abcd"})
@@ -158,7 +158,7 @@ async def test_stdio_list_call_and_schema_parity():
             retryable=True,
             egress_urls_url=None,
         )
-        assert tool.model_definition["parameters"] is descriptor.inputSchema
+        assert tool.model_definition["parameters"] is descriptor.input_schema
         assert (
             tool.model_definition["parameters"]["properties"]["code"]["pattern"]
             == "^[A-Z]{3}$"
@@ -269,10 +269,9 @@ async def test_transport_mapping_is_narrow():
 
 
 def _mcp_error(code: int, data: dict):
-    from mcp import McpError
-    from mcp.types import ErrorData
+    from mcp import MCPError
 
-    return McpError(ErrorData(code=code, message="err", data=data))
+    return MCPError(code=code, message="err", data=data)
 
 
 async def test_interaction_error_translation_v2_and_legacy():
@@ -461,7 +460,7 @@ async def test_guarded_mcp_transport_preserves_native_sdk_roundtrip(monkeypatch,
 
 
 async def test_guarded_mcp_transport_blocks_rebinding_before_credentials_are_sent(monkeypatch):
-    import httpx
+    import httpx2 as httpx
     from aiohttp import web
     from aiohttp.resolver import ThreadedResolver
 
@@ -558,7 +557,7 @@ def _descriptor(name: str, description: str = "", schema: dict | None = None):
     return McpToolDescriptor(
         name=name,
         description=description,
-        inputSchema=schema or {"type": "object", "properties": {}, "required": []},
+        input_schema=schema or {"type": "object", "properties": {}, "required": []},
     )
 
 
@@ -895,7 +894,7 @@ async def test_mcp_external_schema_reference_rejected_before_dispatch(
         args = {"payload": {}}
     tool = NativeMcpTool(
         SimpleNamespace(),
-        McpToolDescriptor(name="schema_reference_fixture", inputSchema=schema),
+        McpToolDescriptor(name="schema_reference_fixture", input_schema=schema),
         origin=ToolOrigin.MCP,
         effect=ToolEffect.READ_ONLY,
         retryable=False,
@@ -919,7 +918,7 @@ async def test_mcp_external_schema_reference_rejected_before_dispatch(
         assert requests == []
         assert retrievals == []
         dispatch.assert_not_awaited()
-        assert tool.model_definition["parameters"] is tool.descriptor.inputSchema
+        assert tool.model_definition["parameters"] is tool.descriptor.input_schema
     finally:
         server.shutdown()
         server.server_close()
@@ -958,7 +957,7 @@ async def test_mcp_local_schema_references_keep_nested_constraints(
         SimpleNamespace(ensure=ensure),
         McpToolDescriptor(
             name="local_reference_fixture",
-            inputSchema={
+            input_schema={
                 "$schema": draft,
                 "$id": "https://schemas.example.test/local.json",
                 "type": "object",

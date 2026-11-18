@@ -34,7 +34,7 @@ def provider():
         resource=Resource.create(
             {
                 "service.name": cfg.otel_service_name,
-                "service.namespace": "insightforge",
+                "service.namespace": "marketscout",
                 "deployment.environment.name": cfg.langfuse_environment,
             }
         ),
@@ -75,11 +75,11 @@ def start_span(name, *, run_id, task_id, role="unknown"):
     sink = provider()
     if sink is None:
         return trace.INVALID_SPAN
-    return sink.get_tracer("insightforge.agentscope").start_span(
+    return sink.get_tracer("marketscout.agentscope").start_span(
         name,
         attributes={
-            "insightforge.run_id": run_id,
-            "insightforge.task_id": task_id,
+            "marketscout.run_id": run_id,
+            "marketscout.task_id": task_id,
             "gen_ai.agent.name": role,
             "session.id": run_id,
             "langfuse.observation.type": "agent"
@@ -99,7 +99,7 @@ def operation_span(kind, session, role="unknown"):
         task_id=session.task_id.get(),
         role=role or "unknown",
     )
-    span.set_attribute("insightforge.stage", session.stage.get().rsplit(":", 1)[0])
+    span.set_attribute("marketscout.stage", session.stage.get().rsplit(":", 1)[0])
     token = context.attach(trace.set_span_in_context(span))
     try:
         yield span
@@ -160,25 +160,25 @@ async def prometheus_snapshot(store):
 
     registry = CollectorRegistry()
     count = Gauge(
-        "insightforge_native_operations",
+        "marketscout_native_operations",
         "Durable operation count by kind and state.",
         ["kind", "state"],
         registry=registry,
     )
     tokens = Gauge(
-        "insightforge_native_tokens",
+        "marketscout_native_tokens",
         "Settled native tokens including conservative estimates.",
         ["direction"],
         registry=registry,
     )
     runs = Gauge(
-        "insightforge_native_runs",
+        "marketscout_native_runs",
         "Persisted native run count by status.",
         ["status"],
         registry=registry,
     )
     tools = Gauge(
-        "insightforge_native_tools",
+        "marketscout_native_tools",
         "Settled physical tool outcomes; unknown is not success.",
         ["status"],
         registry=registry,
@@ -233,5 +233,5 @@ async def prometheus_snapshot(store):
                 "plan_review_seconds": ("Mean persisted plan review duration in seconds.", "SELECT coalesce(avg(extract(epoch FROM reviewed_at-created_at)),0) FROM research_team_plans WHERE reviewed_at IS NOT NULL"),
             }
             for name, (description, query) in queries.items():
-                Gauge("insightforge_team_" + name, description, registry=registry).set(float(await conn.scalar(text(query))))
+                Gauge("marketscout_team_" + name, description, registry=registry).set(float(await conn.scalar(text(query))))
     return generate_latest(registry)

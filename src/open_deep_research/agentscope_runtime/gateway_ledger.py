@@ -253,6 +253,8 @@ class SQLGatewayLedger:
                     actual["cost_micro_usd"] = math.ceil(cost * 1_000_000)
                 elif outcome.get("requested_model") in self.catalog:
                     actual["cost_micro_usd"] = self.cost(outcome["requested_model"], actual)
+        if request.status == "uncertain" and (request.outcome or {}).get("response_cost_usd") is not None:
+            actual["cost_micro_usd"] = math.ceil(request.outcome["response_cost_usd"] * 1_000_000)
         await session.store.commit_operation(session.lease, key, result, actual=actual)
         return result
 
@@ -322,7 +324,7 @@ def build_gateway_ledger_router(resolve, root_key):
             raise HTTPException(408, "deadline_exceeded") from None
         except BudgetExhausted as exc:
             raise HTTPException(
-                429, "budget_exhausted:" + exc.dimension.value
+                429, exc.to_wire()
             ) from None
 
     @router.post("/budgets/tool-reserve")
@@ -335,7 +337,7 @@ def build_gateway_ledger_router(resolve, root_key):
             raise HTTPException(403, str(exc)) from None
         except BudgetExhausted as exc:
             raise HTTPException(
-                429, "budget_exhausted:" + exc.dimension.value
+                429, exc.to_wire()
             ) from None
         except UnknownOperation:
             raise HTTPException(409, "tool_operation_unknown") from None

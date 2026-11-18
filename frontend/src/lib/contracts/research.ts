@@ -3,7 +3,7 @@ import type { Artifact, PublicationTheme, PublicationJob, ReportReview, ReportRe
 
 export type RunStatus =
   | "pending" | "running" | "awaiting_clarification" | "awaiting_plan_approval"
-  | "awaiting_outline_approval" | "awaiting_fetch_budget_approval" | "awaiting_report_time_extension_approval" | "cancelling" | "completed" | "failed" | "cancelled";
+  | "awaiting_outline_approval" | "awaiting_fetch_budget_approval" | "awaiting_budget_approval" | "awaiting_report_time_extension_approval" | "cancelling" | "completed" | "failed" | "cancelled";
 
 export type ConnectionState = "idle" | "connecting" | "connected" | "reconnecting" | "closed" | "error";
 export type StageId = "preparing" | "planning" | "researching" | "synthesizing" | "writing" | "finalizing";
@@ -87,9 +87,13 @@ export interface ResearchSource {
 
 export interface PendingHumanAction {
   action_id: string;
-  type: "clarification" | "plan_approval" | "outline_approval" | "fetch_budget_approval" | "report_time_extension_approval";
+  type: "clarification" | "plan_approval" | "outline_approval" | "fetch_budget_approval" | "budget_approval" | "report_time_extension_approval";
   payload: { question?: string; content_markdown?: string; research_plan?: string; report_outline?: string;
     version?: number;
+    budget_scope?: "account_month" | "run" | "unknown";
+    available?: number | null;
+    required?: number | null;
+    dimension?: "cost_micro_usd" | "fetch_calls" | "tool_calls" | "model_calls" | "input_tokens" | "output_tokens";
     checkpoint?: string;
     report_step?: string;
     remaining_seconds?: number;

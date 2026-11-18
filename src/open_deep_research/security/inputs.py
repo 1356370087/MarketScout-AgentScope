@@ -71,6 +71,9 @@ LEGACY_SANDBOX_HTTP_CONFIG_KEYS = frozenset(
 )
 PROTECTED_HTTP_METADATA_KEYS = frozenset(
     {
+        "observation_manifest",
+        "automation_identity",
+        "intelligence_item_id",
         "platform_revision_id",
         "profile_revision_id",
         "platform_snapshot",

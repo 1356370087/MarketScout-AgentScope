@@ -8,11 +8,11 @@ pasted into ``.env``. The key never expires; its spend is capped by
 Usage::
 
     uv run --env-file .env python -m open_deep_research.models.mint_service_key \
-        [--alias insightforge-service] [--model if-evaluation-v1] \
+        [--alias marketscout-service] [--model if-evaluation-v1] \
         [--budget-micro-usd 20000000] [--budget-duration 30d]
 
 Connection settings come from ``LITELLM_BASE_URL`` / ``LITELLM_MASTER_KEY``
-(and optionally ``LITELLM_RUN_TEAM_ID``, default ``insightforge-runs``);
+(and optionally ``LITELLM_RUN_TEAM_ID``, default ``marketscout-runs``);
 defaults for budgets come from ``LITELLM_SERVICE_BUDGET_MICRO_USD`` and
 ``LITELLM_SERVICE_BUDGET_DURATION``.
 The default allowlist covers evaluation, document embeddings, and configured
@@ -35,8 +35,8 @@ from open_deep_research.models.credentials import (
     micro_usd_to_usd,
 )
 
-DEFAULT_ALIAS = "insightforge-service"
-DEFAULT_TEAM = "insightforge-runs"
+DEFAULT_ALIAS = "marketscout-service"
+DEFAULT_TEAM = "marketscout-runs"
 
 
 def default_service_models() -> list[str]:

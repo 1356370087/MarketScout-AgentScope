@@ -76,8 +76,8 @@ def _summary(row: asyncpg.Record) -> DocumentSummary:
         page_count=row["page_count"],
         chunk_count=row["chunk_count"],
         ocr_pages=row["ocr_pages"],
-        created_at=_iso(row["created_at"]) or "",
-        updated_at=_iso(row["updated_at"]) or "",
+        created_at=_iso(row.get("create_time", row["created_at"])) or "",
+        updated_at=_iso(row.get("update_time", row["updated_at"])) or "",
         deleted_at=_iso(row["deleted_at"]),
         current_generation_id=(
             str(row["current_generation_id"]) if "current_generation_id" in row.keys() and row["current_generation_id"] else None
@@ -144,6 +144,7 @@ async def create_document(
     settings: DocumentSettings,
     *,
     knowledge_base_id: str | None = None,
+    intelligence_binding: dict[str, Any] | None = None,
 ) -> tuple[DocumentSummary, bool]:
     """Create an ingestion job or return the home base's existing document."""
     owner_id = document_owner_id(owner_id)
@@ -161,6 +162,8 @@ async def create_document(
             staged.sha256,
         )
         if existing:
+            if intelligence_binding:
+                await _bind_intelligence_ingest(connection, str(existing["id"]), intelligence_binding)
             return _summary(existing), True
         usage = await connection.fetchrow(
             """SELECT count(*)::int AS count, coalesce(sum(size_bytes), 0)::bigint AS bytes
@@ -202,6 +205,8 @@ async def create_document(
             "INSERT INTO research_document_jobs (document_id, kind, status) VALUES ($1,'ingest','queued')",
             row["id"],
         )
+        if intelligence_binding:
+            await _bind_intelligence_ingest(connection, str(row["id"]), intelligence_binding)
         await connection.execute(
             """INSERT INTO research_document_operations
                (owner_id, document_id, operation, actor_id, changes)
@@ -212,6 +217,14 @@ async def create_document(
             json.dumps({"version_no": 1, "sha256": staged.sha256}, ensure_ascii=False),
         )
         return _summary(row), False
+
+
+async def _bind_intelligence_ingest(connection, document_id, binding):
+    """Bind before the upload transaction commits, so no worker can bill early."""
+    await connection.execute("""UPDATE research_document_jobs SET intelligence_binding=$2::jsonb
+        WHERE document_id=$1::uuid AND kind='ingest' AND status IN ('queued','failed')
+        AND (intelligence_binding IS NULL OR intelligence_binding->>'plan_id'=$3)""",
+        document_id, json.dumps(binding), binding["plan_id"])
 
 
 async def list_documents(

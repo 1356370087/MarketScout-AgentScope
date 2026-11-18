@@ -1,0 +1,42 @@
+.review-versions {
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  min-width: 0;
+}
+.review-versions p { margin: 0; line-height: 1.6; }
+.review-versions a { color: var(--accent); }
+.review-versions code, .review-versions li { overflow-wrap: anywhere; }
+.review-versions details { min-width: 0; }
+.review-versions summary { cursor: pointer; font-weight: 600; line-height: 1.7; }
+.review-versions details[open] > summary { margin-bottom: 12px; }
+.review-version-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 14px 12px;
+}
+.review-version-fields > label { display: grid; gap: 6px; font-size: 13px; }
+.review-version-fields :is(select, input[type="number"], textarea) {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.review-version-fields textarea { min-height: 64px; resize: vertical; }
+.review-version-fields > :nth-child(n+3) { grid-column: 1 / -1; }
+.review-version-fields > button { justify-self: start; }
+.review-version-fields input[type="number"] { max-width: 220px; }
+.review-version-fields fieldset { display: grid; gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--line); }
+.review-version-fields fieldset label { display: flex; align-items: baseline; gap: 8px; }
+.review-version-fields pre { max-height: 22rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-version-fields p { font-size: 13px; color: var(--muted); }
+.review-version-fields [role="alert"] { color: var(--text); }
+@media (max-width: 600px) {
+  .review-version-fields { grid-template-columns: minmax(0, 1fr); }
+  .review-versions { padding: 14px; }
+}

@@ -1320,12 +1320,12 @@ async def test_disabled_reviewer_keeps_legacy_path_and_does_not_call_review_stag
     assert calls == []
 
 
-def test_report_review_configuration_defaults_are_compatible() -> None:
-    """Reviewer defaults are off, bounded, and fail-open for legacy runs."""
+def test_current_report_review_defaults_are_strict_and_bounded() -> None:
+    """A newly configured run reviews the report and requires a usable verdict."""
     cfg = Configuration()
-    assert cfg.report_review_enabled is False
+    assert cfg.report_review_enabled is True
     assert cfg.report_review_max_revisions == 1
-    assert cfg.report_review_fail_open is True
+    assert cfg.report_review_fail_open is False
     assert 0 <= cfg.report_review_max_revisions <= 3
 
 
@@ -1347,6 +1347,7 @@ def test_v11_freezes_reviewer_configuration_but_v10_does_not() -> None:
     from open_deep_research.configuration import (
         RUN_CONFIG_FROZEN_FIELDS,
         RUN_CONFIG_FROZEN_FIELDS_V10,
+        RUN_CONFIG_FROZEN_FIELDS_V11,
         RUN_CONFIG_SCHEMA_VERSION,
     )
 
@@ -1359,6 +1360,7 @@ def test_v11_freezes_reviewer_configuration_but_v10_does_not() -> None:
         "report_review_max_revisions",
         "report_review_fail_open",
     }
-    assert RUN_CONFIG_SCHEMA_VERSION == 20
+    assert RUN_CONFIG_SCHEMA_VERSION >= 11
+    assert reviewer_fields <= set(RUN_CONFIG_FROZEN_FIELDS_V11)
     assert reviewer_fields <= set(RUN_CONFIG_FROZEN_FIELDS)
     assert reviewer_fields.isdisjoint(set(RUN_CONFIG_FROZEN_FIELDS_V10))
