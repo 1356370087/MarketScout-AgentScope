@@ -1,0 +1,242 @@
+"""Linux/WSL2 local command sandbox used by optional developer tools."""
+
+from __future__ import annotations
+
+from market_scout.platform.runtime import getenv as config_getenv, environment as config_environment
+
+import asyncio
+import os
+import shutil
+import signal
+import sys
+from contextlib import suppress
+from pathlib import Path
+from typing import Any
+
+from market_scout.config_types import RuntimeConfig
+from market_scout.configuration import Configuration
+
+MAX_COMMAND_OUTPUT_BYTES = 1_000_000
+
+
+def task_workspace(config: RuntimeConfig) -> Path:
+    """Resolve the task-owned workspace without accepting a caller path root."""
+    if config_getenv("SANDBOX_TASK_TOKEN"):
+        return Path(
+            config_getenv("MARKETSCOUT_TASK_WORKSPACE_ROOT", "/workspace/work")
+        ).resolve()
+    configurable = Configuration.from_runnable_config(config)
+    metadata = config.get("metadata", {})
+    run_id = str(metadata.get("run_id") or "default")
+    task_id = str(metadata.get("task_id") or "developer")
+    root = (Path(configurable.runs_dir).resolve() / run_id / "workspaces" / task_id).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def safe_workspace_path(config: RuntimeConfig, value: str) -> Path:
+    """Resolve a path below the task workspace and reject existing symlinks."""
+    root = task_workspace(config)
+    # Share the policy boundary's path separators without trimming legal
+    # filename whitespace into a different directory.
+    supplied = Path(value.replace("\\", "/"))
+    if supplied.is_absolute() or ".." in supplied.parts:
+        raise ValueError("sandbox_path_outside_workspace")
+    lexical = root.joinpath(*[part for part in supplied.parts if part not in {"", "."}])
+    cursor = root
+    for part in lexical.relative_to(root).parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("sandbox_path_symlink_denied")
+    candidate = lexical.resolve(strict=False)
+    if root not in candidate.parents and candidate != root:
+        raise ValueError("sandbox_path_outside_workspace")
+    return candidate
+
+
+def developer_tools_enabled(config: RuntimeConfig, permission: str) -> bool:
+    """Require both administrator Profile selection and an RBAC capability."""
+    profile_id = config_getenv("SANDBOX_PROFILE_ID") or str(
+        config.get("configurable", {}).get("sandbox_profile_id") or ""
+    )
+    if profile_id != "developer-workspace":
+        return False
+    auth_user = config.get("configurable", {}).get("langgraph_auth_user") or {}
+    permissions = set(auth_user.get("permissions") or []) if isinstance(auth_user, dict) else set()
+    return permission in permissions
+
+
+class BubblewrapSandboxProvider:
+    """Execute one bounded shell command with inherited OS-level restrictions."""
+
+    @staticmethod
+    async def _stop_process(process) -> None:
+        """Reap a command and its POSIX process group, including background jobs."""
+        with suppress(ProcessLookupError):
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            elif process.returncode is None:
+                process.kill()
+        # Drain pipes even when the original communicate was cancelled.
+        await process.communicate()
+
+    @staticmethod
+    def _build_bubblewrap_argv(
+        *,
+        bwrap: str,
+        workspace: Path,
+        working_dir: Path,
+        command: str,
+    ) -> list[str]:
+        """Build a minimal runtime view without exposing the host root tree."""
+        relative_cwd = working_dir.relative_to(workspace)
+        sandbox_cwd = Path("/workspace").joinpath(relative_cwd).as_posix()
+        return [
+            bwrap,
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--unshare-net",
+            "--ro-bind",
+            "/usr",
+            "/usr",
+            "--ro-bind-try",
+            "/bin",
+            "/bin",
+            "--ro-bind-try",
+            "/sbin",
+            "/sbin",
+            "--ro-bind-try",
+            "/lib",
+            "/lib",
+            "--ro-bind-try",
+            "/lib64",
+            "/lib64",
+            "--dir",
+            "/workspace",
+            "--bind",
+            workspace.as_posix(),
+            "/workspace",
+            "--tmpfs",
+            "/tmp",
+            "--tmpfs",
+            "/run",
+            "--tmpfs",
+            "/home",
+            "--tmpfs",
+            "/root",
+            "--tmpfs",
+            "/mnt",
+            "--dir",
+            "/etc",
+            "--dir",
+            "/etc/ssl",
+            "--ro-bind-try",
+            "/etc/ssl/certs",
+            "/etc/ssl/certs",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--chdir",
+            sandbox_cwd,
+            "/bin/sh",
+            "-lc",
+            command,
+        ]
+
+    async def run(
+        self,
+        command: str,
+        *,
+        config: RuntimeConfig,
+        cwd: str | None = None,
+        timeout_seconds: int = 120,
+    ) -> dict[str, Any]:
+        """Execute a command inside Docker or a host bubblewrap boundary."""
+        workspace = task_workspace(config)
+        working_dir = safe_workspace_path(config, cwd or ".")
+        if not working_dir.is_dir():
+            raise ValueError("sandbox_command_cwd_not_directory")
+        shim = None
+        environment = {
+            "PATH": config_environment.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "LANG": config_environment.get("LANG", "C.UTF-8"),
+            "HOME": "/tmp/sandbox-home",
+            "TMPDIR": "/tmp",
+            "SANDBOX_TASK_TOKEN": config_environment.get("SANDBOX_TASK_TOKEN", ""),
+        }
+        process = None
+        try:
+            if config_getenv("SANDBOX_TASK_TOKEN"):
+                shim = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "market_scout.sandbox.proxy_shim",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=environment,
+                    start_new_session=os.name == "posix",
+                )
+                for _ in range(50):
+                    try:
+                        probe_reader, probe_writer = await asyncio.open_connection(
+                            "127.0.0.1", 3128
+                        )
+                        probe_writer.close()
+                        await probe_writer.wait_closed()
+                        del probe_reader
+                        break
+                    except OSError:
+                        await asyncio.sleep(0.02)
+                else:
+                    raise RuntimeError("sandbox_unavailable:proxy_shim")
+                environment.update(
+                    {
+                        "HTTP_PROXY": "http://127.0.0.1:3128",
+                        "HTTPS_PROXY": "http://127.0.0.1:3128",
+                        "http_proxy": "http://127.0.0.1:3128",
+                        "https_proxy": "http://127.0.0.1:3128",
+                    }
+                )
+                argv = ["/bin/sh", "-lc", command]
+            else:
+                bwrap = shutil.which("bwrap")
+                if bwrap is None:
+                    raise RuntimeError("sandbox_unavailable:bubblewrap")
+                argv = self._build_bubblewrap_argv(
+                    bwrap=bwrap,
+                    workspace=workspace,
+                    working_dir=working_dir,
+                    command=command,
+                )
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=str(working_dir),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=environment,
+                start_new_session=os.name == "posix",
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout_seconds
+            )
+        except TimeoutError:
+            raise TimeoutError("sandbox command timed out") from None
+        finally:
+            try:
+                if process is not None:
+                    await self._stop_process(process)
+            finally:
+                if shim is not None:
+                    await self._stop_process(shim)
+        return {
+            "exit_code": int(process.returncode or 0),
+            "stdout": stdout[:MAX_COMMAND_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+            "stderr": stderr[:MAX_COMMAND_OUTPUT_BYTES].decode("utf-8", errors="replace"),
+            "truncated": len(stdout) > MAX_COMMAND_OUTPUT_BYTES or len(stderr) > MAX_COMMAND_OUTPUT_BYTES,
+        }

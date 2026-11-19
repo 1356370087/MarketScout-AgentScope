@@ -204,7 +204,7 @@ services:
       DOCUMENT_RESEARCH_ENABLED: "true"
       DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
-    command: ["python", "-m", "open_deep_research.knowledge.maintenance"]
+    command: ["python", "-m", "market_scout.knowledge.maintenance"]
     healthcheck:
       disable: true
     volumes:
@@ -230,7 +230,7 @@ services:
       DOCUMENT_RESEARCH_ENABLED: "true"
       DOCUMENT_DATABASE_URL: ${DOCUMENT_DATABASE_URL:?请配置远程文档 PostgreSQL 连接}
       DOCUMENT_STORAGE_DIR: /data/documents
-    command: ["python", "-m", "open_deep_research.intelligence.worker"]
+    command: ["python", "-m", "market_scout.intelligence.worker"]
     volumes:
       - platform-config:/data/platform-config
       - document-data:/data/documents
@@ -422,7 +422,7 @@ services:
   #     RUNS_DIR: /data/runs
   #   volumes:
   #     - research-runs:/data/runs
-  #   command: ["python", "-m", "open_deep_research.memory.maintenance", "daily", "--loop", "--interval-hours", "24"]
+  #   command: ["python", "-m", "market_scout.memory.maintenance", "daily", "--loop", "--interval-hours", "24"]
   #   restart: unless-stopped
 
   # 可观测性栈：默认不启用，`docker compose --profile observability up` 开启。

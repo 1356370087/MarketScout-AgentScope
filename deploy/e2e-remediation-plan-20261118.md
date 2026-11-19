@@ -18,7 +18,7 @@
 
 ### A1　单 Agent 交接被拒后的定向修订
 
-`AdaptiveResearch.run()` 在主任务返回后评估一次交接。当前拒绝分支给完成策略的准入证据为空，且传入 `has_remaining_budget=False`。`outline_approval()` 的快捷判断使用原始 `findings`，只覆盖部分 `complete_partial` 情形。两处合在一起，能产生“任务已结束、有候选、无准入、仍请审批普通大纲”的结果。[主任务交接](../src/open_deep_research/agentscope_runtime/adaptive_research.py) · [交接准入](../src/open_deep_research/agentscope_runtime/research_quality.py) · [研究阶段](../src/open_deep_research/agentscope_runtime/research_stages.py)
+`AdaptiveResearch.run()` 在主任务返回后评估一次交接。当前拒绝分支给完成策略的准入证据为空，且传入 `has_remaining_budget=False`。`outline_approval()` 的快捷判断使用原始 `findings`，只覆盖部分 `complete_partial` 情形。两处合在一起，能产生“任务已结束、有候选、无准入、仍请审批普通大纲”的结果。[主任务交接](../src/market_scout/agentscope_runtime/adaptive_research.py) · [交接准入](../src/market_scout/agentscope_runtime/research_quality.py) · [研究阶段](../src/market_scout/agentscope_runtime/research_stages.py)
 
 计划在主任务写入最终交接前，根据真实剩余额度、停止原因和拒绝明细判断能否修订。对可定位的无依据断言，允许**同一主任务最多一次**用原有证据修订交接，保留原稿、拒绝原因和修订回执。多余断言可删除，关键问题缺证则列出缺口。修订后重新执行现有来源、覆盖和交接门禁。需要新域名时走现有来源审批。大纲和报告统一读取 `admitted_findings`。零准入时直接展示资料不足及原因，有部分准入时只交付通过检查的内容。
 
@@ -28,11 +28,11 @@
 
 ### A2　补齐官方报价发现和引用定位
 
-保留已上线的同页 JSON-LD 报价提取。`extract_document()` 已支持 `text/markdown`，本次剩余问题是发现关联文档，以及保留“套餐标题内含金额、正文是说明或清单”的完整来源位置。[网页提取](../src/open_deep_research/web/extraction.py) · [可引用段落](../src/open_deep_research/web/passages.py) · [网页工具与导航](../src/open_deep_research/agentscope_runtime/web_tools.py)
+保留已上线的同页 JSON-LD 报价提取。`extract_document()` 已支持 `text/markdown`，本次剩余问题是发现关联文档，以及保留“套餐标题内含金额、正文是说明或清单”的完整来源位置。[网页提取](../src/market_scout/web/extraction.py) · [可引用段落](../src/market_scout/web/passages.py) · [网页工具与导航](../src/market_scout/agentscope_runtime/web_tools.py)
 
 计划只在所需字段缺失时，优先使用已读页面公开的替代格式链接，或在已授权域名的官方索引中定向查找一次相关链接。索引只用于发现，目标原文须重新经过来源、重定向和抓取预算检查。仅授权精确 URL 时，按现有规则处理范围外的索引。对含具体报价的 Markdown 标题，保留同一套餐标题与相邻说明的连续片段，以及文档哈希、原文定位和读取时间。工作空间计价单位可由同页总说明或另一条已核实证据支持。保留直接标价、计算值、未核实字段三种口径。
 
-首次补价还记录了三个相同版本的 Skills 各被读取三次。将已加载的技能版本及已尝试的取证方法纳入现有上下文摘要，保留显式回读能力。通过运行回执区分首次加载、复用、实际抓取和新证据。该观察本身不足以断定每次回读都无用。[技能工具](../src/open_deep_research/skills/runtime.py) · [已有进展判断](../src/open_deep_research/agentscope_runtime/efficiency.py)
+首次补价还记录了三个相同版本的 Skills 各被读取三次。将已加载的技能版本及已尝试的取证方法纳入现有上下文摘要，保留显式回读能力。通过运行回执区分首次加载、复用、实际抓取和新证据。该观察本身不足以断定每次回读都无用。[技能工具](../src/market_scout/skills/runtime.py) · [已有进展判断](../src/market_scout/agentscope_runtime/efficiency.py)
 
 **验收用例**
 
@@ -40,7 +40,7 @@
 
 ### A3　明确哪一层预算不足，保护收尾额度
 
-`research_budget_reason()` 已按角色和模型目录估计写作、审阅、修订所需预算，但主要与本次运行账本比较。平台的 `QuotaExceeded` 有月度错误语义，Gateway 目前将其与运行预算一并映射为 `budget_exhausted:<dimension>`。浏览器能显示“模型费用”，却无法据此判定应改运行上限还是账户月度配额。[研究预算估算](../src/open_deep_research/agentscope_runtime/efficiency.py) · [月度配额](../src/open_deep_research/platform/quota.py) · [Gateway 拒绝映射](../src/open_deep_research/agentscope_runtime/gateway_ledger.py) · [审批面板](../frontend/src/features/research/approval-center.tsx)
+`research_budget_reason()` 已按角色和模型目录估计写作、审阅、修订所需预算，但主要与本次运行账本比较。平台的 `QuotaExceeded` 有月度错误语义，Gateway 目前将其与运行预算一并映射为 `budget_exhausted:<dimension>`。浏览器能显示“模型费用”，却无法据此判定应改运行上限还是账户月度配额。[研究预算估算](../src/market_scout/agentscope_runtime/efficiency.py) · [月度配额](../src/market_scout/platform/quota.py) · [Gateway 拒绝映射](../src/market_scout/agentscope_runtime/gateway_ledger.py) · [审批面板](../frontend/src/features/research/approval-center.tsx)
 
 计划沿现有拒绝回执、审批事件、HTTP/SSE 和前端契约传递预算归属、实际可用余额及本次请求的预留额。在受管模式中，将现有收尾估算同单次和账户月度**两者的剩余额度**比较，在边界前停止可选补证。估算仅作决策提示，实际调用仍由现有条件预留裁决。月度不足时展示账户额度及有权限的处理入口。管理员调整后复查原操作，单次额度充足时无需虚增单次额度。继续支持用户拒绝增额并接收部分报告。
 
@@ -50,7 +50,7 @@
 
 ### A4　取消期间的费用预留可追踪、可对账
 
-月度预留与原生操作登记分步完成。运行对账要求匹配已提交的模型回执及精确的上游调用标记，服务费用对账则排除了 `run:` 类操作。本次 0.269076 美元恰好缺少可匹配记录。**先做故障注入，再按确证的分支修补**，历史个案继续保留未知状态。[预留与运行账本](../src/open_deep_research/agentscope_runtime/recovery_store.py) · [运行对账](../src/open_deep_research/agentscope_runtime/spend_reconciliation.py) · [服务对账](../src/open_deep_research/platform/reconciliation.py) · [本次未决项审计](../.runs/single-skills-e2e-20261117/price-review/platform-unknown-charge-audit.json)
+月度预留与原生操作登记分步完成。运行对账要求匹配已提交的模型回执及精确的上游调用标记，服务费用对账则排除了 `run:` 类操作。本次 0.269076 美元恰好缺少可匹配记录。**先做故障注入，再按确证的分支修补**，历史个案继续保留未知状态。[预留与运行账本](../src/market_scout/agentscope_runtime/recovery_store.py) · [运行对账](../src/market_scout/agentscope_runtime/spend_reconciliation.py) · [服务对账](../src/market_scout/platform/reconciliation.py) · [本次未决项审计](../.runs/single-skills-e2e-20261117/price-review/platform-unknown-charge-audit.json)
 
 计划复用现有操作 ID，把运行、预留与派发凭据关联起来，区分本次新建的预留和重放时命中的已有预留。费用页面分别列示已结算、在途、未知预留。只有明确未派发的凭据才能释放对应预留，唯一匹配的可信账单可以更正金额。语义结果仍未知时继续隔离。复核任务也走相同的所有者配额和账单归集，避免人工相加多套账本。
 
@@ -62,9 +62,9 @@
 
 ### B1　让报告审阅拿到它能验证的信息
 
-现有 Reviewer 已将过程要求与正文覆盖评分分开。终稿仍有 7 项过程记录只能部分核验，包括是否直接读取原文、页数上限和 Skills 顺序。计划从同一运行的 SQL 回执生成精简的执行摘要，记录任务 ID、已完成的 Skill 及顺序、网页最终 URL、实际抓取数、读取时间和缓存复用。界面分别展示运行事实和正文审阅。缺少回执、跨运行借用材料或账本不完整时明确显示“不可核实”。读取时间与网页发布日期分别记录。[报告运行端口](../src/open_deep_research/agentscope_runtime/report.py) · [审阅输入与评分](../src/open_deep_research/report/reviewer.py)
+现有 Reviewer 已将过程要求与正文覆盖评分分开。终稿仍有 7 项过程记录只能部分核验，包括是否直接读取原文、页数上限和 Skills 顺序。计划从同一运行的 SQL 回执生成精简的执行摘要，记录任务 ID、已完成的 Skill 及顺序、网页最终 URL、实际抓取数、读取时间和缓存复用。界面分别展示运行事实和正文审阅。缺少回执、跨运行借用材料或账本不完整时明确显示“不可核实”。读取时间与网页发布日期分别记录。[报告运行端口](../src/market_scout/agentscope_runtime/report.py) · [审阅输入与评分](../src/market_scout/report/reviewer.py)
 
-首稿超出 1,200 字上限，表头落在列表中，因而占用了一次付费修订。对任务明确要求的篇幅和对比表，拟在送审前复用现有 Markdown/Canonical 解析结果，按正文可见字符计数，排除链接目的地址、语法标记和文末来源清单，并验证表头和数据行能渲染。把能确定的问题一次反馈给已有修订步骤，沿用当前修订次数上限。[报告编排](../src/open_deep_research/report/orchestrator.py) · [Canonical 解析](../src/open_deep_research/report/canonical.py)
+首稿超出 1,200 字上限，表头落在列表中，因而占用了一次付费修订。对任务明确要求的篇幅和对比表，拟在送审前复用现有 Markdown/Canonical 解析结果，按正文可见字符计数，排除链接目的地址、语法标记和文末来源清单，并验证表头和数据行能渲染。把能确定的问题一次反馈给已有修订步骤，沿用当前修订次数上限。[报告编排](../src/market_scout/report/orchestrator.py) · [Canonical 解析](../src/market_scout/report/canonical.py)
 
 **验收用例**
 
@@ -72,7 +72,7 @@ SQL 显示一项主任务、三项 Skills、九次抓取时，刷新后可追溯
 
 ### B2　提供应用内的“基于该草稿重新复核”入口
 
-**此项已随 B 批获准实施。** 现有接口能列出并按 SHA-256 读取归档草稿。`resume` 服务于原检查点，发布 Worker 消费运行已交付的正文。本次只能用独立脚本组织材料、申请限额密钥和调用审阅器。[归档草稿接口](../src/open_deep_research/api/research_router.py) · [发布接口](../src/open_deep_research/api/publications.py) · [报告工作区](../frontend/src/features/research/research-workspace.tsx)
+**此项已随 B 批获准实施。** 现有接口能列出并按 SHA-256 读取归档草稿。`resume` 服务于原检查点，发布 Worker 消费运行已交付的正文。本次只能用独立脚本组织材料、申请限额密钥和调用审阅器。[归档草稿接口](../src/market_scout/api/research_router.py) · [发布接口](../src/market_scout/api/publications.py) · [报告工作区](../frontend/src/features/research/research-workspace.tsx)
 
 计划从用户有权限的草稿版本发起**独立复核任务**，记录父运行 ID、基础草稿哈希、待审正文哈希、证据清单及其版本、审阅配置指纹和费用授权。服务端复用原准入证据。补充材料须走正常取证、范围验证和准入，拒绝的旧交接不能整包继承。仅有原网页范围内的局部更新时，只补对应字段。复用 `review_report`、现有租约心跳、模型计账与发布 Worker，把新回执和导出挂到新版本，保留父运行的原结果。若需要新增持久化结构，使用增量迁移并验证旧运行可读。
 

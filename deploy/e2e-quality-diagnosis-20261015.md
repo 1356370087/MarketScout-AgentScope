@@ -6,7 +6,7 @@
 
 ## 1. 已复现：中文主张与英文摘录的词汇匹配误删正确证据
 
-位置：`src/open_deep_research/web/pipeline.py` 的 `_complete_model_evidence()`，尤其是词汇交集比例必须达到 0.5 的条件。`NativeEvidenceExtractor` 此前已经验证摘录存在于对应网页 chunk 中，但合并阶段又用词面重合率判断模型主张与摘录是否匹配。
+位置：`src/market_scout/web/pipeline.py` 的 `_complete_model_evidence()`，尤其是词汇交集比例必须达到 0.5 的条件。`NativeEvidenceExtractor` 此前已经验证摘录存在于对应网页 chunk 中，但合并阶段又用词面重合率判断模型主张与摘录是否匹配。
 
 本轮 8 批模型提取共返回 51 条记录，经过该条件只保留 9 条，过滤 42 条。51 是批次记录数，包含重复来源或重复证据，不代表 51 个独立事实；42 条也不能全部直接认定为误删。44 条中文主张中仅 3 条保留，7 条英文主张中保留 6 条。
 

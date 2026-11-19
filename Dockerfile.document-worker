@@ -21,4 +21,4 @@ RUN groupadd --system --gid 10001 marketscout \
     && chown marketscout:marketscout /data/documents /data/platform-config
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 USER marketscout:marketscout
-CMD ["python", "-m", "open_deep_research.documents.worker"]
+CMD ["python", "-m", "market_scout.documents.worker"]

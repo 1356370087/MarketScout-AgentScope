@@ -62,8 +62,8 @@ OSS 记忆后端通过配置中的 `memory` 对象管理。模型或嵌入提供
 非容器沙箱组件可以使用以下入口加载待应用版本：
 
 ```bash
-uv run python -m open_deep_research.platform.component_runner --component sandbox-controller
-uv run python -m open_deep_research.platform.component_runner --component sandbox-gateway
+uv run python -m market_scout.platform.component_runner --component sandbox-controller
+uv run python -m market_scout.platform.component_runner --component sandbox-gateway
 ```
 
 需要指定版本时增加 `--revision 配置版本编号`。这些入口使用已发布的配置产物，不提供网页端任意命令执行。
@@ -91,7 +91,7 @@ uv run python -m open_deep_research.platform.component_runner --component sandbo
 ```bash
 uv run pytest tests/platform
 uv run pytest tests/as_runtime/test_model_accounting.py tests/as_runtime/test_recovery.py
-uv run python -m open_deep_research.migration_check --check all
+uv run python -m market_scout.migration_check --check all
 ```
 
 `tests/platform/test_postgres.py` 仅在设置 `PLATFORM_TEST_DATABASE_URL` 后连接专用测试库；`tests/platform/test_litellm.py` 使用专用 `PLATFORM_TEST_PROXY_URL` 验证控制接口，不调用真实模型。前端继续执行 lint、类型检查、单元测试、构建及对应 E2E。

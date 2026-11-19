@@ -8,7 +8,7 @@ explicit JWT keys, a database URL and (when registration is open) SMTP; the
 from __future__ import annotations
 
 import os
-from open_deep_research.platform.runtime import getenv as config_getenv, environment as config_environment
+from market_scout.platform.runtime import getenv as config_getenv, environment as config_environment
 from dataclasses import dataclass, field
 from typing import Literal, cast
 

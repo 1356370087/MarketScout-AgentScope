@@ -213,7 +213,7 @@ Python 命令使用仓库 `.venv/Scripts/python.exe`，并设置 `PYTHONPATH=src
 ```powershell
 .venv/Scripts/python.exe .runs/report-metadata-verification-20261017/run_regression.py
 .venv/Scripts/python.exe .runs/report-metadata-verification-20261017/check_types.py
-.venv/Scripts/python.exe -m open_deep_research.migration_check --check all
+.venv/Scripts/python.exe -m market_scout.migration_check --check all
 git diff --check
 
 docker compose -p marketscout-compare-20261016 --env-file .runs/report-metadata-verification-20261017/deployment.env -f docker-compose.yaml -f deploy/compose.web-e2e.yaml -f .runs/report-metadata-verification-20261017/compose.yaml --profile sandbox --profile sandbox-build build api sandbox-gateway sandbox-controller publisher-worker sandbox-worker-image

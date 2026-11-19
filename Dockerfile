@@ -21,4 +21,4 @@ EXPOSE 2024
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:2024/healthz', timeout=3)"
 USER marketscout:marketscout
-CMD ["uvicorn", "open_deep_research.server:app", "--host", "0.0.0.0", "--port", "2024", "--timeout-graceful-shutdown", "30"]
+CMD ["uvicorn", "market_scout.server:app", "--host", "0.0.0.0", "--port", "2024", "--timeout-graceful-shutdown", "30"]

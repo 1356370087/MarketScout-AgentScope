@@ -1,0 +1,301 @@
+"""First-party source discovery, verification and versioned user decisions."""
+
+import json
+import re
+from contextlib import nullcontext
+from types import SimpleNamespace
+from urllib.parse import urljoin, urlsplit
+
+from agentscope.message import SystemMsg, UserMsg
+from pydantic import BaseModel, Field
+
+from market_scout.documents.contracts import SourceSelection, normalize_source_url
+from market_scout.quality.context import CONTEXT_RULES, research_context_xml
+from market_scout.quality.planning import source_intent_from_user
+
+
+class RelatedWebsite(BaseModel):
+    """A first-party page's explicit relationship to another linked website."""
+
+    url: str
+    relationship_quote: str = Field(description=(
+        "Exact contiguous PAGE quote containing the hyperlink that identifies this as "
+        "the entity's documentation, source repository, maintainer or product. "
+        "A search snippet, bare external URL or model explanation is not proof."))
+
+
+class SourceVerification(BaseModel):
+    """Quotes and observed links substantiate a first-party ownership judgment."""
+
+    entity_quote: str = Field(default="", description="One exact contiguous substring copied from the PAGE identifying this entity. No surrounding quotation marks, summaries, explanations or stitched excerpts.")
+    ownership_quote: str = Field(default="", description="One exact contiguous substring copied from the PAGE indicating first-party branding, ownership, maintainership or official documentation. No paraphrase. Empty when unsupported.")
+    documentation_urls: list[str] = Field(default_factory=list, max_length=4)
+    competing_websites: list[str] = Field(default_factory=list, max_length=3,
+        description="Only plausible alternative official identities for the SAME named entity; its acknowledged maintainer, documentation site or product is not a competing identity.")
+    related_websites: list[RelatedWebsite] = Field(default_factory=list, max_length=6,
+        description="Associated official documentation, source repositories or maintainers explicitly linked by this PAGE; keep them separate from genuinely competing identities.")
+    reason: str = ""
+
+
+def observed_links(content, website):
+    """Resolve page hyperlinks without promoting links to approved evidence."""
+    links = re.findall(r"https?://[^\s<>\])\"']+|(?<=\]\()[^\s)]+", content)
+    result = []
+    for link in links:
+        try:
+            result.append(normalize_source_url(urljoin(website, link)))
+        except ValueError:
+            continue
+    return list(dict.fromkeys(result))
+
+
+def website_entrypoint(url):
+    """Implicit entity discovery starts at its website, not a docs-only subtree."""
+    parsed = urlsplit(normalize_source_url(url))
+    if (parsed.hostname not in {"github.com", "gitlab.com", "bitbucket.org"}
+            and parsed.path.strip("/").split("/")[0].casefold() in {"docs", "doc", "documentation"}):
+        return parsed._replace(path="/", query="", fragment="").geturl()
+    return parsed.geturl()
+
+
+def unread_directory_links(page, gaps, progress, config):
+    """Rank links visible in a governed directory read against unresolved facts."""
+    from .search_providers import source_allowed
+    from market_scout.documents.contracts import source_url_identity
+    from market_scout.quality.planning import research_terms
+    query = research_terms(" ".join(str(gap.get(key) or "") for gap in gaps for key in ("reason", "next_query")))
+    visited = {source_url_identity(url) for read in progress.get("web_reads", {}).values()
+               for doc in read.get("reads", []) for url in (doc.get("url"), doc.get("requested_url")) if url}
+    visited.add(source_url_identity(page["url"]))
+    scores = {}
+    for label, target in re.findall(r"\[([^\]\n]+)\]\(([^\s)]+)\)", page["markdown"]):
+        try:
+            url = normalize_source_url(urljoin(page["url"], target.strip("<>")))
+        except ValueError:
+            continue
+        if source_url_identity(url) in visited or not source_allowed(url, config):
+            continue
+        score = len(query.intersection(research_terms(label + " " + urlsplit(url).path.replace("-", " "))))
+        if score:
+            scores[url] = max(scores.get(url, 0), score)
+    return sorted(scores, key=scores.__getitem__, reverse=True)[:4]
+
+
+def research_entities(original, entities, requirements, providers):
+    """A provider named only in execution rules is not a research subject."""
+    from market_scout.quality.planning import _comparison_subjects
+    # Normalize this phrasing only for source discovery; do not rewrite the
+    # user's accepted requirements or multiply the research task scopes.
+    comparison_text = re.sub(r"对(?=[^。；;\n!?]{1,160}(?:竞品研究|竞品分析|对标分析))", "对比", original)
+    compared = set(_comparison_subjects({0: comparison_text}, entities))
+    subject_text = original.casefold()
+    for requirement in requirements:
+        if requirement.get("kind") == "process":
+            subject_text = subject_text.replace(requirement.get("text", "").casefold(), "")
+    provider_names = {str(name).casefold() for name in providers}
+    return [entity for entity in entities if entity.name.casefold() in original.casefold()
+            and (not compared or entity.name in compared)
+            and (entity.name.casefold() not in provider_names or entity.name.casefold() in subject_text)][:4]
+
+
+def verified_entry(entity, website, content, verdict, *, discovered_urls=None):
+    """Require quoted page text and actual links rather than a confidence number."""
+    website = normalize_source_url(website)
+    links = observed_links(content, website)
+    docs = []
+    for url in verdict.documentation_urls:
+        try:
+            normalized = normalize_source_url(url)
+        except ValueError:
+            continue
+        if normalized in links:
+            docs.append(normalized)
+    related = []
+    for candidate in verdict.related_websites:
+        try:
+            normalized = normalize_source_url(candidate.url)
+        except ValueError:
+            continue
+        quote = candidate.relationship_quote
+        if (quote and quote in content and normalized in links
+                and normalized in observed_links(quote, website)):
+            related.append({"url": normalized, "relationship_quote": quote})
+    associated = {website, *docs, *(row["url"] for row in related)}
+    competing = []
+    for candidate in verdict.competing_websites:
+        try:
+            normalized = normalize_source_url(candidate)
+        except ValueError:
+            competing.append(candidate)
+            continue
+        if normalized not in associated:
+            competing.append(normalized)
+    quotes = verdict.entity_quote and verdict.ownership_quote
+    confirmed = bool(quotes and verdict.entity_quote in content and verdict.ownership_quote in content
+                     and entity.casefold() in verdict.entity_quote.casefold() and docs
+                     and not competing)
+    if discovered_urls is not None:
+        confirmed = confirmed and any(urlsplit(url).hostname == urlsplit(website).hostname for url in discovered_urls)
+    relevant_discoveries = [url for url in (discovered_urls or []) if urlsplit(url).hostname == urlsplit(website).hostname]
+    return {"entity": entity, "website": website, "documentation_urls": docs,
+            "domain": urlsplit(website).hostname, "status": "verified" if confirmed else "needs_confirmation",
+            "discovery_basis": "configured-provider search and proposed website",
+            "discovered_urls": relevant_discoveries,
+            "verification_basis": {"entity_quote": verdict.entity_quote, "ownership_quote": verdict.ownership_quote,
+                                   "observed_documentation_links": docs, "reason": verdict.reason},
+            "competing_websites": competing, "related_websites": related}
+
+
+def apply_source_plan(contract, plan, original_selection):
+    """Bind confirmed first-party ownership without broadening explicit selection."""
+    from copy import deepcopy
+
+    contract = deepcopy(contract)
+    contract["source_plan"] = plan
+    # Admission remains separate from ownership: explicit URL/domain choices win.
+    contract["source_selection"] = original_selection
+    return contract
+
+
+class SourcePlanner:
+    """Preparation uses run-owned native models and governed search/fetch calls."""
+
+    def __init__(self, models, config_provider, tools_for, *, dispatcher, local_zones, run_id):
+        self.models, self.config_provider, self.tools_for = models, config_provider, tools_for
+        self.dispatcher, self.local_zones, self.run_id = dispatcher, local_zones, run_id
+
+    async def prepare(self, state, brief):
+        from market_scout.agentscope_runtime.recovery_store import digest
+        from market_scout.agentscope_runtime.tools import prepare_toolkit
+        from market_scout.tools.governance import AgentRole
+
+        intent = source_intent_from_user(state.messages)
+        original = "\n".join(m.get_text_content() for m in state.messages if m.role == "user")
+        quote = brief.source_directive.strip()
+        if intent == "unrestricted" and quote and quote in original and re.search(r"(?:使用|采用|来自|依据|只能|全部|所有|sources?|documents?).{0,80}(?:官网|官方|official)", quote, re.IGNORECASE):
+            intent = brief.source_intent
+        config = self.config_provider()
+        selection = state.coverage_contract.get("source_selection") or config.get("metadata", {}).get("source_selection", {"mode": "web", "sources": []})
+        explicit = SourceSelection.model_validate(selection)
+        if not explicit.web_enabled:
+            return None
+        if intent == "unrestricted" and explicit.sources:
+            intent = "explicit"
+        from market_scout.evidence import compile_source_scope
+        scope = compile_source_scope(state.coverage_contract)
+        if not explicit.sources and scope.explicit_url_only:
+            selection = SourceSelection.model_validate({"mode": "specific", "sources": [
+                {"type": "url", "url": url} for url in sorted(scope.allowed_urls)]}).model_dump(mode="json")
+            explicit = SourceSelection.model_validate(selection)
+            if intent == "unrestricted":
+                intent = "explicit"
+        if intent == "unrestricted":
+            return None
+        version = state.application.get("source_plan", {}).get("version", 0) + 1
+        if explicit.sources:
+            state.application["approved_source_selection"] = selection
+            state.coverage_contract["source_selection"] = selection
+            return {"version": version, "intent": intent, "entries": [], "explicit": True,
+                    "status": "user_specified", "selection": selection}
+        prior = state.application.get("source_plan")
+        if prior and prior.get("status") in {"confirmed", "automatic"}:
+            return prior
+        original = "\n".join(m.get_text_content() for m in state.messages if m.role == "user")
+        from market_scout.configuration import Configuration
+        entities = research_entities(original, brief.entities, state.coverage_contract.get("requirements", []),
+            [provider.value for provider in Configuration.from_runnable_config(config).resolved_search_providers])
+        recovery = self.models.recovery
+        exclusions = [r for r in state.coverage_contract.get("requirements", [])
+                      if re.search(r"(?:禁止|不得|排除|不要|exclude|never).{0,80}https?://", r["text"], re.IGNORECASE)]
+        preparation_contract = {"source_selection": selection, "requirements": exclusions}
+        state.application["source_preparation"] = {"active": True, "task_id": "source-planning", "selection": selection,
+                                                    "contract": preparation_contract}
+        if recovery:
+            recovery.snapshot = state
+            await recovery.save(state)
+        publisher = config.get("_event_publisher")
+        if publisher:
+            for event in ("created", "started"):
+                await publisher.publish("research.task." + event, stage="planning", payload={
+                    "task_id": "source-planning", "title": "官网来源准备与归属核验", "mode": "sync", "status": "pending" if event == "created" else "running"},
+                    dedupe_key=f"source-planning:{version}:{event}")
+        def scoped():
+            return {**self.config_provider(), "metadata": {**self.config_provider().get("metadata", {}),
+                    "task_id": "source-planning", "source_selection": selection, "coverage_contract": preparation_contract}}
+        tools = await self.tools_for(SimpleNamespace(task_id="source-planning"))
+        toolkit = await prepare_toolkit([t for t in tools if t.name in {"source_discovery", "fetch_url"}],
+            role=AgentRole.RESEARCHER, config_provider=scoped, run_id=self.run_id,
+            task_id="source-planning", local_zones=self.local_zones, dispatcher=self.dispatcher)
+        toolkit.journal = recovery
+        outcomes = []
+        async def observe(name, call_id, result):
+            outcomes.append(result.result.output if result.result else {})
+        toolkit.result_observer = observe
+        async def call(name, args):
+            cid = digest(["source-plan", version, name, args])
+            with recovery.task("source-planning") if recovery else nullcontext():
+                result = await toolkit.call_domain_tool(name, args, cid)
+            if result.metadata.get("error_type"):
+                return ""
+            return outcomes[-1] if outcomes else ""
+        entries = []
+        for entity in entities:
+            discoveries = await call("source_discovery", {"queries": [entity.name + " official website documentation"]})
+            try:
+                hits = json.loads(discoveries)["candidates"]
+            except (ValueError, TypeError, KeyError):
+                hits = []
+            hits = [h for h in hits if entity.name.casefold() in " ".join(str(h.get(k, "")) for k in ("title", "snippet", "canonical_url")).casefold()]
+            proposed = entity.website
+            if not proposed:
+                try:
+                    proposed = hits[0]["canonical_url"] if hits else ""
+                except (ValueError, TypeError, KeyError):
+                    proposed = ""
+            if not proposed:
+                entries.append({"entity": entity.name, "status": "needs_confirmation", "website": "", "documentation_urls": [], "reason": "未发现可核验官网"})
+                continue
+            try:
+                proposed = website_entrypoint(proposed)
+            except ValueError:
+                entries.append({"entity": entity.name, "status": "needs_confirmation", "website": "", "documentation_urls": [], "reason": "候选官网地址无效"})
+                continue
+            raw = await call("fetch_url", {"url": proposed, "mode": "markdown", "max_chars": 16000,
+                "objective": f"核验 {entity.name} 官网归属及链接到的官方文档；准备资料不能作为报告证据"})
+            content = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+            try:
+                page = json.loads(content)
+                content = page.get("markdown", content) if isinstance(page, dict) else content
+            except ValueError:
+                pass
+            verdict = await self.models.structured("supervisor", "", SourceVerification, {"task_id": "source-planning"},
+                messages=[
+                    SystemMsg("system", CONTEXT_RULES +
+                        "Verify ownership of the proposed website from the supplied PAGE text. Quote verbatim evidence of entity and ownership; list only documentation links literally present in the page. "
+                        "Put the entity's linked documentation, source repository, licensing/legal page, maintainer or product in related_websites with the exact hyperlink-containing PAGE quote. "
+                        "Use the user's requirements to include the official source entrypoints needed to answer them; a documentation subtree alone may omit licensing and repository material. "
+                        "Competing websites mean alternative identities for the SAME name, not different URLs belonging to that entity. Search snippets are hints, not proof. "
+                        "Competing plausible official identities require confirmation. Missing evidence means empty fields."),
+                    UserMsg("user", research_context_xml(state.coverage_contract, payload={"entity": entity.name, "website": proposed, "discoveries": hits,
+                        "observed_links": observed_links(content, proposed), "page": content}))],
+                purpose="source_ownership_verification")
+            entries.append(verified_entry(entity.name, proposed, content, verdict,
+                discovered_urls=[h["canonical_url"] for h in hits if h.get("canonical_url")]))
+        state.application["source_preparation"]["active"] = False
+        if recovery:
+            from market_scout.configuration import Configuration
+            from market_scout.sandbox.approvals import SecurityApprovalStore
+            expired = SecurityApprovalStore(self.run_id, runs_dir=Configuration.from_runnable_config(config).runs_dir).expire_task(
+                "source-planning", fence_token=recovery.lease.fence)
+            if publisher:
+                for item in expired:
+                    await publisher.publish("security.approval.resolved", stage="planning", payload={
+                        "approval_id": item.approval_id, "task_id": item.task_id, "kind": item.kind,
+                        "capability": item.capability, "decision": "deny", "status": "expired", "version": item.version},
+                        dedupe_key=f"source-planning-expired:{item.approval_id}:{item.version}")
+        if publisher:
+            await publisher.publish("research.task.completed", stage="planning", payload={"task_id": "source-planning", "status": "completed"},
+                dedupe_key=f"source-planning:{version}:completed")
+        return {"version": version, "intent": intent, "entries": entries, "explicit": False,
+                "status": "verified" if entries and all(e["status"] == "verified" for e in entries) else "needs_confirmation",
+                "selection": selection}

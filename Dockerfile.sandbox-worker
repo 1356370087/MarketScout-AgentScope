@@ -10,4 +10,4 @@ RUN addgroup --gid 65532 sandbox && \
     adduser --uid 65532 --gid 65532 --disabled-password --gecos "" sandbox
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER 65532:65532
-CMD ["python", "-m", "open_deep_research.sandbox.worker"]
+CMD ["python", "-m", "market_scout.sandbox.worker"]

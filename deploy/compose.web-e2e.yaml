@@ -10,7 +10,7 @@ services:
     environment:
       AS_DATABASE_URL: ${AS_DATABASE_URL:?请配置远程 AgentScope PostgreSQL 连接}
       AS_STORAGE_AUTO_CREATE: "false"
-    command: ["python", "-c", "import asyncio; from open_deep_research.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
+    command: ["python", "-c", "import asyncio; from market_scout.agentscope_runtime.storage import run_storage_migrations; asyncio.run(run_storage_migrations())"]
     depends_on:
       document-migrate:
         condition: service_completed_successfully

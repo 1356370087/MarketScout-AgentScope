@@ -62,7 +62,7 @@ docker compose ps -a
 uv sync --frozen
 $env:PYTHONPATH = 'src;.'
 uv run --env-file .env alembic upgrade head
-uv run --env-file .env uvicorn open_deep_research.server:app --reload --host 127.0.0.1 --port 2024
+uv run --env-file .env uvicorn market_scout.server:app --reload --host 127.0.0.1 --port 2024
 ```
 
 Linux 和 macOS 使用 `export PYTHONPATH=src:.`。业务迁移和 Gateway 所需的框架存储迁移分别执行，后者的命令见 Web 部署说明。
@@ -81,19 +81,19 @@ pnpm --dir frontend dev
 
 | 入口 | 用途 |
 | --- | --- |
-| [AgentScope 运行时](src/open_deep_research/agentscope_runtime/) | 研究 Pipeline、Agent、Skills 装配、SQL 恢复与模型调用计账。 |
-| [质量契约](src/open_deep_research/quality/) 与 [报告](src/open_deep_research/report/) | 按研究要求核对覆盖，验证证据与引用，审阅、归档并发布报告。 |
-| [文档](src/open_deep_research/documents/) 与 [知识库](src/open_deep_research/knowledge/) | 摄取资料、发布版本、限定检索范围，支持仅文档或混合来源研究。 |
-| [前端业务模块](frontend/src/features/) 与 [API](src/open_deep_research/api/) | 创建研究、查看 SSE 事件、处理审批、浏览证据与报告。 |
+| [AgentScope 运行时](src/market_scout/agentscope_runtime/) | 研究 Pipeline、Agent、Skills 装配、SQL 恢复与模型调用计账。 |
+| [质量契约](src/market_scout/quality/) 与 [报告](src/market_scout/report/) | 按研究要求核对覆盖，验证证据与引用，审阅、归档并发布报告。 |
+| [文档](src/market_scout/documents/) 与 [知识库](src/market_scout/knowledge/) | 摄取资料、发布版本、限定检索范围，支持仅文档或混合来源研究。 |
+| [前端业务模块](frontend/src/features/) 与 [API](src/market_scout/api/) | 创建研究、查看 SSE 事件、处理审批、浏览证据与报告。 |
 
 在已配置 `PYTHONPATH` 的终端中，可以运行以下检查。
 
 ```powershell
-uv run python -m open_deep_research.migration_check --check all
+uv run python -m market_scout.migration_check --check all
 uv run pytest tests/as_runtime/test_competitor_remediation.py
 pnpm --dir frontend test
 ```
 
-免费评估可用固定的正负参考产物验证评分器。真实模型试验需要单独配置模型凭据和预算，实网试验还需部署相应服务。数据库集成测试使用独立验收库。[Agent Evals 用法](src/open_deep_research/evaluation/README.md) · [开发与验证约定](AGENTS.md)
+免费评估可用固定的正负参考产物验证评分器。真实模型试验需要单独配置模型凭据和预算，实网试验还需部署相应服务。数据库集成测试使用独立验收库。[Agent Evals 用法](src/market_scout/evaluation/README.md) · [开发与验证约定](AGENTS.md)
 
 项目采用 [MIT 许可证](LICENSE)。

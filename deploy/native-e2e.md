@@ -14,7 +14,7 @@
 
 测试使用真实 BFF 请求创建四类研究，浏览器执行审批并检查报告刷新，核验原生 engine、引用、用量、发布和下载。未完成任务在 finally 取消。E2E 需要真实模型费用，默认不自动启用。
 
-运行中续期 Run Key 和 Gateway 注册；模型每次请求取当前任务令牌。暂停结束后封禁本执行段 Key，恢复时按 SQL 已用及预留量申请剩余额度。后台按准确 run/operation 标签核对迟到代理账单；多笔代理重试或缺失账单保留未决，不能冒充上游逐次账单核验已通过。管理员也可执行 `python -m open_deep_research.agentscope_runtime.spend_reconciliation RUN_ID OWNER_ID` 补核对。未知执行结果不会因账单存在而自动重放。
+运行中续期 Run Key 和 Gateway 注册；模型每次请求取当前任务令牌。暂停结束后封禁本执行段 Key，恢复时按 SQL 已用及预留量申请剩余额度。后台按准确 run/operation 标签核对迟到代理账单；多笔代理重试或缺失账单保留未决，不能冒充上游逐次账单核验已通过。管理员也可执行 `python -m market_scout.agentscope_runtime.spend_reconciliation RUN_ID OWNER_ID` 补核对。未知执行结果不会因账单存在而自动重放。
 
 故障验收使用 `tests/as_runtime/test_deployment_fault_matrix.py` 和 `test_team_container.py` 的真实 PG/容器测试，模型仍为确定性夹具。真实供应商未知结果、跨主机网络分区和 API/Gateway 同故障必须另留实验记录；上述测试通过不能替代这些证据。
 

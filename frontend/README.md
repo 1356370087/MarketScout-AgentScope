@@ -5,7 +5,7 @@
 先在仓库根目录启动 FastAPI：
 
 ```powershell
-uvicorn open_deep_research.server:app --reload --host 127.0.0.1 --port 2024
+uvicorn market_scout.server:app --reload --host 127.0.0.1 --port 2024
 ```
 
 再启动前端：

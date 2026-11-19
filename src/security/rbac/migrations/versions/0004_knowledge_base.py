@@ -41,7 +41,7 @@ def upgrade() -> None:
             "local-document tables. The knowledge-base upgrade intentionally "
             "refuses to migrate them; stop the document worker, verify no "
             "active research uses the test material, then run "
-            "`uv run python -m open_deep_research.documents.cleanup --execute` "
+            "`uv run python -m market_scout.documents.cleanup --execute` "
             "and retry this migration."
         )
 

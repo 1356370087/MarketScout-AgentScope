@@ -120,10 +120,10 @@ immediately if another maintenance process already owns it.
 
 Sandbox V7 never injects provider credentials into Worker containers. Build
 `sandbox-worker-image`, run
-`python -m open_deep_research.sandbox.pin_image`, then set
+`python -m market_scout.sandbox.pin_image`, then set
 `SANDBOX_ENABLED=true`, `ENABLE_ASYNC_RESEARCH=true`, an immutable policy image
 digest, and a shared `SANDBOX_ROOT_SIGNING_KEY`, then start the Compose
-`sandbox` profile. Run `python -m open_deep_research.sandbox.doctor` before
+`sandbox` profile. Run `python -m market_scout.sandbox.doctor` before
 admitting traffic.
 
 ### E2E domain pre-approval

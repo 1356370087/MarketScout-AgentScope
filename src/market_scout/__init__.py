@@ -1,0 +1,1 @@
+"""MarketScout package."""

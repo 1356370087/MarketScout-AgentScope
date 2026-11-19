@@ -1,0 +1,3 @@
+"""Deprecated path; canonical location is ``market_scout.events.task_activity``."""
+
+from market_scout.events.task_activity import *  # noqa: F401,F403

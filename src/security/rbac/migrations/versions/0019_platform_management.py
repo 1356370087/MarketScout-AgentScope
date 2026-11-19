@@ -9,7 +9,7 @@ branch_labels = depends_on = None
 
 
 def upgrade():
-    from open_deep_research.platform.schema import metadata, state
+    from market_scout.platform.schema import metadata, state
     from security.rbac.platform_permissions import CATALOG, ADMIN_GRANTS, DEVELOPER_GRANTS
     bind = op.get_bind()
     metadata.create_all(bind)
@@ -28,7 +28,7 @@ def upgrade():
 
 
 def downgrade():
-    from open_deep_research.platform.schema import metadata
+    from market_scout.platform.schema import metadata
     bind = op.get_bind()
     bind.execute(sa.text("DELETE FROM iam_role_permissions WHERE permission_id IN (SELECT id FROM iam_permissions WHERE domain='platform')"))
     bind.execute(sa.text("DELETE FROM iam_permissions WHERE domain='platform'"))

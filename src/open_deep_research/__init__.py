@@ -1,1 +1,0 @@
-"""Open Deep Research package."""

@@ -28,7 +28,7 @@ docker compose -f docker-compose.yaml -f deploy/compose.web-e2e.yaml --profile s
 需要文档摄取、独立知识问答或离线 Judge 时，应在这套项目的 LiteLLM 数据库中签发 Service Key。配置生效后，在 API 容器内运行铸造入口，使其读取相同数据库、模型部署版本和代理地址：
 
 ```powershell
-docker compose -f docker-compose.yaml -f deploy/compose.web-e2e.yaml exec -T api python -m open_deep_research.models.mint_service_key
+docker compose -f docker-compose.yaml -f deploy/compose.web-e2e.yaml exec -T api python -m market_scout.models.mint_service_key
 ```
 
 默认允许列表包含评估和嵌入模型，以及当前配置的资料元数据、知识问答和重排模型；默认预算为每 30 天 20 美元。将生成的密钥录入后台，绑定 `LITELLM_SERVICE_KEY`，发布新配置并核对 Worker 应用状态。命令输出包含秘密，不应写入验收日志或版本控制。虚拟密钥随 LiteLLM 数据库存储，不能假定其他独立验收项目中已登记同一密钥；更改铸造配置也不会修改已有密钥的额度。
