@@ -5,6 +5,7 @@ import json
 from uuid import NAMESPACE_URL, uuid5
 
 import asyncpg
+from security.rbac.schema_contract import BUSINESS_SEARCH_PATH
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.app.storage import AgentData, AgentRecord, SessionConfig
 
@@ -37,6 +38,7 @@ class NativeTeamHost:
             min_size=1,
             max_size=10,
             command_timeout=10,
+            server_settings={"search_path": BUSINESS_SEARCH_PATH},
         )
         try:
             async with pool.acquire() as db:

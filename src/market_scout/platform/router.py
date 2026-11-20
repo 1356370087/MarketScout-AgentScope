@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy import select, update, insert, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from security.rbac import Principal, require_active_user
+from market_scout.research_time import business_time_fields
 from . import schema as s
 from .contracts import (BootstrapRequest, ConfigurationDocument, DraftRequest, UpdateDraft, PublishRequest,
     PreviewRequest, PreferencesRequest, CredentialRequest, CredentialReplacement, ImportRequest,
@@ -98,17 +99,18 @@ async def catalog(user=Depends(real_user)):
 
 @router.get("/status")
 async def status(user=Depends(real_user)):
-    return await get_store().state()
+    return business_time_fields(await get_store().state())
 
 
 @router.get("/configurations")
 async def configurations(user=Depends(real_user)):
-    return {"items": await get_store().list_revisions(user)}
+    rows = await get_store().list_revisions(user)
+    return {"items": [business_time_fields(row, "published_at") for row in rows]}
 
 
 @router.post("/configurations", status_code=201)
 async def create_configuration(body: DraftRequest, user=Depends(real_user)):
-    return await get_store().create_draft(user, body)
+    return business_time_fields(await get_store().create_draft(user, body), "published_at")
 
 
 @router.get("/configurations/{identity}")
@@ -116,12 +118,12 @@ async def configuration(identity: str, user=Depends(real_user)):
     row = await get_store().revision(identity, user)
     if row["scope"] == "global":
         require(user, "platform.config.read")
-    return row
+    return business_time_fields(row, "published_at")
 
 
 @router.put("/configurations/{identity}")
 async def update_configuration(identity: str, body: UpdateDraft, user=Depends(real_user)):
-    return await get_store().update_draft(user, identity, body)
+    return business_time_fields(await get_store().update_draft(user, identity, body), "published_at")
 
 
 @router.post("/configurations/{identity}/validate")
@@ -164,7 +166,8 @@ async def publish_configuration(identity: str, body: PublishRequest, user=Depend
     applications = await apply_revision(store, row)
     if all(item["status"] == "applied" for item in applications):
         row = await store.activate(user, identity)
-    return {**row, "applications": applications}
+    return {**business_time_fields(row, "published_at"),
+            "applications": [business_time_fields(item) for item in applications]}
 
 
 @router.post("/configurations/{identity}/check-application")
@@ -178,7 +181,8 @@ async def check_application(identity: str, user=Depends(real_user)):
     applications = await apply_revision(store, row)
     if all(item["status"] == "applied" for item in applications):
         row = await store.activate(user, identity)
-    return {**row, "applications": applications}
+    return {**business_time_fields(row, "published_at"),
+            "applications": [business_time_fields(item) for item in applications]}
 
 
 @router.get("/configurations/{identity}/applications")
@@ -186,7 +190,7 @@ async def configuration_applications(identity: str, user=Depends(real_user)):
     store = get_store()
     await store.revision(identity, user)
     async with store.engine.connect() as conn:
-        return {"items": [dict(row) for row in (await conn.execute(select(s.applications).where(s.applications.c.revision_id == identity))).mappings()]}
+        return {"items": [business_time_fields(row) for row in (await conn.execute(select(s.applications).where(s.applications.c.revision_id == identity))).mappings()]}
 
 
 @router.post("/configurations/{identity}/copy", status_code=201)
@@ -197,8 +201,9 @@ async def copy_configuration(identity: str, user=Depends(real_user)):
     document = ConfigurationDocument.model_validate(row["document"])
     if scope == "personal":
         document = ConfigurationDocument(runtime={k: v for k, v in document.runtime.items() if document.policy.get(k) and document.policy[k].editable})
-    return await store.create_draft(user, DraftRequest(name=row["name"] + " · 副本", scope=scope,
+    draft = await store.create_draft(user, DraftRequest(name=row["name"] + " · 副本", scope=scope,
         base_revision=identity, document=document))
+    return business_time_fields(draft, "published_at")
 
 
 @router.post("/configurations/{identity}/rollback")
@@ -270,7 +275,7 @@ async def import_configuration(body: ImportRequest, user=Depends(real_user)):
                 document["quotas"]["max_run_cost_micro_usd"] = int(budget)
         draft = await store.create_draft(user, DraftRequest(name=body.name, scope=body.scope,
             document=ConfigurationDocument.model_validate(document)), conn=conn)
-    return {**draft, "import_report": report}
+    return {**business_time_fields(draft, "published_at"), "import_report": report}
 
 
 @router.post("/configuration-preview")
@@ -284,7 +289,7 @@ async def preview_configuration(body: PreviewRequest, user=Depends(real_user)):
 
 @router.get("/preferences")
 async def preferences(user=Depends(real_user)):
-    return await get_store().preferences(user.user_id)
+    return business_time_fields(await get_store().preferences(user.user_id))
 
 
 @router.put("/preferences")
@@ -363,7 +368,7 @@ async def user_quotas(owner_id: str, user=Depends(real_user)):
     store = get_store()
     async with store.engine.connect() as conn:
         override = (await conn.execute(select(s.quotas).where(s.quotas.c.owner_id == owner_id))).mappings().one_or_none()
-    return {"effective": await store.limits(owner_id), "override": dict(override) if override else None}
+    return {"effective": await store.limits(owner_id), "override": business_time_fields(override) if override else None}
 
 
 @router.put("/quotas/{owner_id}")
@@ -386,7 +391,7 @@ async def audit(limit: int = 100, user=Depends(real_user)):
     require(user, "platform.audit.read")
     async with get_store().engine.connect() as conn:
         rows = (await conn.execute(select(s.audit).order_by(s.audit.c.create_time.desc()).limit(min(max(1, limit), 500)))).mappings()
-        return {"items": [dict(row) for row in rows]}
+        return {"items": [business_time_fields(row) for row in rows]}
 
 
 @router.get("/overview")
@@ -421,7 +426,7 @@ async def usage(user=Depends(real_user)):
             (s.months.c.reserved - unknown).label("in_flight")).order_by(
             s.months.c.period.desc(), s.months.c.owner_id).limit(500))).mappings()
         pending = await conn.scalar(select(func.count()).select_from(s.charges).where(s.charges.c.status == "unknown"))
-        return {"items": [dict(row) for row in rows], "unknown_operations": pending, "currency": "USD", "unit": "micro_usd", "timezone": "Asia/Shanghai"}
+        return {"items": [business_time_fields(row) for row in rows], "unknown_operations": pending, "currency": "USD", "unit": "micro_usd", "timezone": "Asia/Shanghai"}
 
 
 @router.post("/usage/reconcile")

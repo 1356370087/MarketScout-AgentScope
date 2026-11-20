@@ -218,7 +218,7 @@ class WebAdapter(SourceAdapter):
                     """UPDATE knowledge_sync_sources
                           SET etag=$2, last_modified=$3, content_hash=$4,
                               last_success_at=now(),
-                              next_run_at=$5, consecutive_failures=0, updated_at=now()
+                              next_run_at=$5, consecutive_failures=0, update_time=now()
                         WHERE id=$1::uuid""",
                     source_id,
                     snapshot.etag,
@@ -232,7 +232,7 @@ class WebAdapter(SourceAdapter):
                 interval = REFRESH_INTERVALS.get(mode or "daily")
                 await connection.execute(
                     """UPDATE knowledge_sync_sources
-                          SET last_success_at=now(), consecutive_failures=0, updated_at=now(), next_run_at=$2
+                          SET last_success_at=now(), consecutive_failures=0, update_time=now(), next_run_at=$2
                         WHERE id=$1::uuid""",
                     source_id,
                     datetime.now(timezone.utc) + interval if interval else None,
@@ -248,7 +248,7 @@ class WebAdapter(SourceAdapter):
                 await connection.execute(
                     """UPDATE knowledge_sync_sources
                           SET consecutive_failures=consecutive_failures+1,
-                              next_run_at=now() + make_interval(secs => $2), updated_at=now()
+                              next_run_at=now() + make_interval(secs => $2), update_time=now()
                         WHERE id=$1::uuid""",
                     source_id,
                     backoff,

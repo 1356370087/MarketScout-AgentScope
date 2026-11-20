@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+from security.rbac.schema_contract import BUSINESS_SEARCH_PATH
 
 from market_scout.agentscope_runtime.settings import ASRuntimeSettings
 
@@ -44,7 +45,7 @@ def build_engine_kwargs(settings: ASRuntimeSettings) -> dict[str, Any]:
     return {
         "pool_pre_ping": True,
         "connect_args": {
-            "server_settings": {"search_path": f"{settings.database_schema},public"},
+            "server_settings": {"search_path": f"{settings.database_schema},{BUSINESS_SEARCH_PATH}"},
         },
     }
 

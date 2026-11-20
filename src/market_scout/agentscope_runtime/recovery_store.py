@@ -167,7 +167,13 @@ class RecoveryStore:
 
     async def create_tables(self):
         async with self.engine.begin() as conn:
-            await conn.run_sync(self.meta.create_all)
+            if conn.dialect.name == "postgresql":
+                from .row_identity import prepare_runtime_row_ids
+                # The ledger's public receipts and queries use its business keys.
+                # PostgreSQL supplies the physical row ID independently on insert.
+                await conn.run_sync(prepare_runtime_row_ids, self.meta.tables, self.meta.create_all)
+            else:
+                await conn.run_sync(self.meta.create_all)
 
     async def research_progress(self, lease, patch=None):
         """Share research facts under the same run fence as operation receipts."""

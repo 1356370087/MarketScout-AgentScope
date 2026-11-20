@@ -72,7 +72,7 @@ async def set_target(
         row = await c.fetchrow(
             """INSERT INTO knowledge_health_targets(knowledge_base_id,company,period,topic,min_documents,max_age_days,created_by)
             VALUES($1,$2,$3,$4,$5,$6,$7::uuid) ON CONFLICT(knowledge_base_id,company,period,topic)
-            DO UPDATE SET min_documents=EXCLUDED.min_documents,max_age_days=EXCLUDED.max_age_days,updated_at=now() RETURNING id""",
+            DO UPDATE SET min_documents=EXCLUDED.min_documents,max_age_days=EXCLUDED.max_age_days,update_time=now() RETURNING id""",
             kb_id,
             body.company,
             body.period,

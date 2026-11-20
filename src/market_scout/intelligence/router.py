@@ -10,6 +10,7 @@ from security.rbac.permissions import DOCUMENT_READ_OWN, DOCUMENT_WRITE_OWN, RES
 from market_scout.knowledge import authz
 from .contracts import PlanCreate, PlanUpdate, VersionedCommand, Activate, ItemAction, ItemReview, IntelligenceError
 from .settings import settings
+from market_scout.research_time import business_time, business_time_fields
 from .store import Store, record, encode, enqueue, previous_command, save_command, readable_bases
 from market_scout.documents.identity import document_owner_id
 
@@ -84,13 +85,14 @@ async def options(principal=read):
 @router.get("/plans")
 async def plans(workspace_id: UUID | None = None, principal=read):
     with errors():
-        return {"items": await Store().list_plans(principal.user_id, str(workspace_id) if workspace_id else None)}
+        rows = await Store().list_plans(principal.user_id, str(workspace_id) if workspace_id else None)
+        return {"items": [business_time_fields(row, "last_dispatched_at") for row in rows]}
 
 
 @router.post("/plans", status_code=201)
 async def create_plan(body: PlanCreate, principal=write):
     with errors():
-        return await Store().create(principal.user_id, body)
+        return business_time_fields(await Store().create(principal.user_id, body), "last_dispatched_at")
 
 
 @router.get("/plans/{plan_id}")
@@ -99,34 +101,35 @@ async def plan(plan_id: UUID, principal=read):
         store = Store()
         value = await store.plan(str(plan_id), principal.user_id)
         value["capabilities"] = await capabilities(value, principal)
-        value["sources"] = await store.history(str(plan_id), principal.user_id, "sources")
+        sources = await store.history(str(plan_id), principal.user_id, "sources")
+        value["sources"] = [business_time_fields(row, "next_run_at", "last_checked_at") for row in sources]
         pool = await store.pool()
         value["budget_periods"] = [record(row) for row in await pool.fetch("SELECT period,reserved,settled FROM intelligence_budget_periods WHERE plan_id=$1::uuid ORDER BY period DESC LIMIT 12", str(plan_id))]
-        return value
+        return business_time_fields(value, "last_dispatched_at")
 
 
 @router.patch("/plans/{plan_id}")
 async def update_plan(plan_id: UUID, body: PlanUpdate, principal=write):
     with errors():
-        return await Store().update(principal.user_id, str(plan_id), body)
+        return business_time_fields(await Store().update(principal.user_id, str(plan_id), body), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/activate")
 async def activate(plan_id: UUID, body: Activate, principal=write):
     with errors():
-        return await Store().activate(principal, str(plan_id), body)
+        return business_time_fields(await Store().activate(principal, str(plan_id), body), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/pause")
 async def pause(plan_id: UUID, body: VersionedCommand, principal=write):
     with errors():
-        return await Store().control(principal.user_id, str(plan_id), body, "pause")
+        return business_time_fields(await Store().control(principal.user_id, str(plan_id), body, "pause"), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/archive")
 async def archive(plan_id: UUID, body: VersionedCommand, principal=write):
     with errors():
-        return await Store().control(principal.user_id, str(plan_id), body, "archive")
+        return business_time_fields(await Store().control(principal.user_id, str(plan_id), body, "archive"), "last_dispatched_at")
 
 
 class Transfer(VersionedCommand):
@@ -149,14 +152,14 @@ async def manual_request(plan_id: UUID, body: ManualRequest, principal=write):
         async with pool.acquire() as c, c.transaction():
             prior = await previous_command(c, principal.user_id, key, payload)
             if prior is not None:
-                return prior
+                return business_time_fields(prior)
             version = await c.fetchval("UPDATE intelligence_plans SET version=version+1 WHERE id=$1::uuid AND version=$2 RETURNING version", str(plan_id), body.expected_version)
             if version is None:
                 raise IntelligenceError("version_conflict", current_version=plan["version"])
             item = record(await c.fetchrow("""INSERT INTO intelligence_items(plan_id,authorization_id,owner_id,question,status,manual,reason,created_at)
                 VALUES($1::uuid,$2::uuid,$3::uuid,$4,'queued',true,'人工复核请求',$5) RETURNING *""",
                 str(plan_id), plan["authorization_id"], plan["owner_id"], body.question, principal.user_id))
-            return await save_command(c, principal.user_id, key, payload, item)
+            return business_time_fields(await save_command(c, principal.user_id, key, payload, item))
 
 
 class BaselineUpdate(VersionedCommand):
@@ -191,19 +194,19 @@ async def link_baseline(plan_id: UUID, body: BaselineUpdate, principal=write):
 @router.post("/plans/{plan_id}/transfer")
 async def transfer(plan_id: UUID, body: Transfer, principal=write):
     with errors():
-        return await Store().control(principal.user_id, str(plan_id), body, "transfer", new_owner=str(body.new_owner_id))
+        return business_time_fields(await Store().control(principal.user_id, str(plan_id), body, "transfer", new_owner=str(body.new_owner_id)), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/authorizations")
 async def authorize(plan_id: UUID, body: Activate, principal=write):
     with errors():
-        return await Store().activate(principal, str(plan_id), body)
+        return business_time_fields(await Store().activate(principal, str(plan_id), body), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/authorizations/revoke")
 async def revoke(plan_id: UUID, body: VersionedCommand, principal=write):
     with errors():
-        return await Store().control(principal.user_id, str(plan_id), body, "revoke")
+        return business_time_fields(await Store().control(principal.user_id, str(plan_id), body, "revoke"), "last_dispatched_at")
 
 
 @router.post("/plans/{plan_id}/check")
@@ -223,19 +226,22 @@ async def reconcile_budget(plan_id: UUID, request: Request, principal=write):
 @router.get("/plans/{plan_id}/events")
 async def events(plan_id: UUID, principal=read):
     with errors():
-        return {"items": await Store().history(str(plan_id), principal.user_id, "events")}
+        rows = await Store().history(str(plan_id), principal.user_id, "events")
+        return {"items": [business_time_fields(row, "available_at") for row in rows]}
 
 
 @router.get("/plans/{plan_id}/decisions")
 async def decisions(plan_id: UUID, principal=read):
     with errors():
-        return {"items": await Store().history(str(plan_id), principal.user_id, "decisions")}
+        rows = await Store().history(str(plan_id), principal.user_id, "decisions")
+        return {"items": [business_time_fields(row) for row in rows]}
 
 
 @router.get("/plans/{plan_id}/authorizations")
 async def authorizations(plan_id: UUID, principal=read):
     with errors():
-        return {"items": await Store().history(str(plan_id), principal.user_id, "authorizations")}
+        rows = await Store().history(str(plan_id), principal.user_id, "authorizations")
+        return {"items": [business_time_fields(row, "expires_at", "revoked_at") for row in rows]}
 
 
 @router.get("/items")
@@ -245,7 +251,7 @@ async def items(plan_id: UUID | None = None, workspace_id: UUID | None = None, p
         for row in rows:
             row.pop("run_request", None)
             row["result"] = public_result(row["result"])
-        return {"items": rows}
+        return {"items": [business_time_fields(row) for row in rows]}
 
 
 @router.get("/items/{item_id}")
@@ -257,7 +263,7 @@ async def item(item_id: UUID, principal=read):
         # public progress and authorized artifacts are shared with the team.
         value.pop("run_request", None)
         value["result"] = public_result(value["result"])
-        return value
+        return business_time_fields(value)
 
 
 @router.post("/items/{item_id}/actions")
@@ -318,7 +324,7 @@ async def snapshot(snapshot_id: UUID, offset: int = Query(default=0, ge=0), limi
         document = read_document(value)
         end = min(len(document.markdown), offset + limit)
         value.pop("artifact", None)
-        return {**value, "content": document.markdown[offset:end], "next_offset": end if end < len(document.markdown) else None}
+        return {**business_time_fields(value, "observed_at"), "content": document.markdown[offset:end], "next_offset": end if end < len(document.markdown) else None}
 
 
 @router.get("/items/{item_id}/runs")
@@ -327,7 +333,7 @@ async def item_runs(item_id: UUID, principal=read):
         store = Store()
         await store.item(str(item_id), principal.user_id)
         pool = await store.pool()
-        return {"items": [record(row) for row in await pool.fetch(
+        return {"items": [business_time_fields(record(row)) for row in await pool.fetch(
             """SELECT run_id,purpose,create_time,jsonb_build_object('runtime_status',result->'runtime_status',
                 'quality_status',result->'quality_status','summary',left(result->>'report',500)) AS result
                 FROM intelligence_item_runs WHERE item_id=$1::uuid ORDER BY create_time DESC LIMIT 50""", str(item_id))]}
@@ -343,13 +349,14 @@ async def item_run(item_id: UUID, run_id: str, principal=read):
         if not row:
             raise IntelligenceError("intelligence_run_not_found", 404)
         row["result"] = public_result(row["result"])
-        return row
+        return business_time_fields(row)
 
 
 @router.get("/inbox")
 async def inbox(workspace_id: UUID | None = None, principal=read):
     with errors():
-        return {"items": await Store().inbox(principal.user_id, str(workspace_id) if workspace_id else None)}
+        rows = await Store().inbox(principal.user_id, str(workspace_id) if workspace_id else None)
+        return {"items": [business_time_fields(row, "read_at") for row in rows]}
 
 
 @router.post("/inbox/{notification_id}/read")
@@ -389,5 +396,5 @@ async def health(principal=read):
     deliveries = [dict(row) for row in await pool.fetch(f"""SELECT n.delivery_status,count(*)::int AS count FROM intelligence_notifications n
         JOIN intelligence_plans p ON p.id=n.plan_id WHERE n.recipient_id=$1::uuid AND p.knowledge_base_id IN ({readable_bases('$1')}) GROUP BY 1""", principal.user_id)]
     return {"jobs": jobs, "timing": dict(timing), "unhealthy_sources": sources,
-            "worker_last_seen": heartbeat.isoformat() if heartbeat else None,
+            "worker_last_seen": business_time(heartbeat) if heartbeat else None,
             "metrics": record(metrics), "decisions": decisions, "quality": quality, "deliveries": deliveries}

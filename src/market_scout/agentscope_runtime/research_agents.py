@@ -1037,7 +1037,8 @@ class Supervisor:
             ids = (synthesis_ids if synthesis_ids is not None else
                    validate_requirement_ids(canonicalize_requirement_ids(requested_ids, coverage),
                                             coverage, required=bool(requested_ids)))
-            if synthesis_ids is None and bounded and fixed_urls and len(fixed_urls) <= 5 and len(available_ids) <= 3:
+            # Teams binds each member to the facts explicitly assigned by the Lead.
+            if not teams_mode and bounded and fixed_urls and len(fixed_urls) <= 5 and len(available_ids) <= 3:
                 process = " ".join(r.text for r in coverage.requirements if r.kind == "process")
                 if not re.search(r"(?:并行|多名|多个|两个).{0,24}(?:研究员|研究任务|智能体)|parallel|multiple researchers", process, re.IGNORECASE):
                     ids = available_ids
@@ -1060,8 +1061,6 @@ class Supervisor:
                     if remaining
                     else []
                 )
-            if not coverage.single_research_task and len(ids) > 3:
-                raise ValueError("a research task may own at most three requirements")
             assignment = ResearchAssignment(
                 research_topic=input.research_topic, requirement_ids=ids
             )
@@ -1460,7 +1459,8 @@ class Supervisor:
         from market_scout.quality.contract import coverage_bound_input_schema
         topic_schema = (create_model("ResearchScopeInput", __base__=_ScopedTopic,
             scope_id=(Literal[tuple(scopes_by_id)], _ScopedTopic.model_fields["scope_id"]))
-            if use_scopes else coverage_bound_input_schema(TaskCreateInput if teams_mode else _Topic, coverage))
+            if use_scopes else coverage_bound_input_schema(TaskCreateInput if teams_mode else _Topic, coverage,
+                                                          allow_synthesis=teams_mode))
         tools = [
             _control_tool(
                 "TaskCreate" if cfg.enable_async_research else "ConductResearch",
@@ -1507,7 +1507,7 @@ class Supervisor:
                     "团队默认执行方式为 " + cfg.team_execution_mode + "，启动成员可覆盖。"
                     'TaskCreate 创建时同时传 owner（派发的成员 ID，自主认领填空字符串 ""）与 blockedBy（已有 task_id 数组，无依赖填 []）。不要先创建再派发或补依赖，空闲成员可能立即领取。替换依赖时在同一次 TaskUpdate 中同时传 removeBlockedBy 和 addBlockedBy，避免中间解除阻塞。'
                     "每项任务明确指定其事实范围对应的完整 requirement_ids（含哈希）；普通研究任务最多三个且来自同一维度，可按 delegation_scopes 选择 ID 组。"
-                    "比较任务必须为每个对象安排相应研究，同一需求 ID 可由不同对象的任务共同承担。不要把所有工作排给同一个成员而闲置其他成员。"
+                    "比较任务须按产品分配 task_requirement_choices 中 subject 对应的事实 ID；有 subject 的 ID 只属于该产品。不要把所有工作排给同一个成员而闲置其他成员。"
                     "成员计划请求必须由你阅读 objective/steps/sources/budget/acceptance_criteria 后实质审核，"
                     "通过 SendMessage 的 plan_approval_response 回复 owner，携带 task_id/request_id/version/approve/feedback；不得自动批准。"
                     "message 必须是 JSON 对象，绝不能把控制对象 JSON 序列化成字符串；字符串即使看起来像 JSON 也只是文本。计划响应不得添加 content 字段。"
@@ -1516,7 +1516,7 @@ class Supervisor:
                     "需要新建补证任务并 TaskUpdate 修改尚未开始的下游依赖。"
                     "补证任务不能依赖被拒绝的原任务，否则永远无法领取；在描述中引用原任务，blockedBy 只列质量可接纳的前置。将汇总的旧依赖原子替换为补证任务，不能仅追加补证而保留失败阻塞。"
                     "通过 ListAgents/SendMessage 直接沟通，纯文本回复不会自动发给成员。"
-                    "用户要求汇总任务时，创建带 blockedBy 的任务并复用前置任务的事实 requirement_ids；"
+                    "用户要求汇总任务时，创建带 blockedBy 的任务并复用前置任务的事实 requirement_ids，可以超过普通任务的三项上限；"
                     "这些事实已获接纳仍可汇总。汇总成员使用 TaskGet 读取前置研究工件，避免重复外部研究。"
                     "WaitForTeamEvents 等待变化；不要在任务进行中提前结束。所有任务终结且所有提议处理后调用 ResearchComplete，"
                     "它将关闭成员并检查团队收尾。\n{tool_guidance}"

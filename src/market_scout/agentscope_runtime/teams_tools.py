@@ -132,7 +132,7 @@ def dependency_synthesis_ids(input, tasks, coverage):
     ids = canonicalize_requirement_ids(input.requirement_ids, coverage)
     if not ids or not set(ids).issubset(predecessor_ids):
         return None
-    return validate_requirement_ids(ids, coverage, required=True, allow_cross_dimension=True)
+    return validate_requirement_ids(ids, coverage, required=True, allow_cross_dimension=True, max_items=len(predecessor_ids))
 
 
 class SendMessageTool:

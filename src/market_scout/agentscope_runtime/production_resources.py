@@ -5,9 +5,12 @@ control-plane workers; they must never execute sandbox-local shell/file tools.
 """
 
 import asyncio
+import os
 import time
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from pathlib import Path
 
+import yaml
 from pydantic import SecretStr
 
 from market_scout.agentscope_runtime.gateway import SandboxBinding
@@ -45,25 +48,37 @@ from market_scout.sandbox.schema import policy_digest, resolve_profile
 from market_scout.tools.base import ToolExecutionZone
 
 
-def allowed_models(config):
+def _router_fallback_models():
+    from market_scout.platform import runtime as platform_runtime
+
+    if platform_runtime.enabled():
+        from market_scout.platform.components import model_aliases
+        document = (platform_runtime.snapshot() or {}).get("document", {})
+        aliases = model_aliases(document)
+        router = document.get("litellm", {})
+    else:
+        default_path = Path(__file__).resolve().parents[3] / "config" / "litellm.yaml"
+        path = Path(os.getenv("LITELLM_CONFIG_PATH") or default_path)
+        router = yaml.safe_load(path.read_text(encoding="utf-8-sig"))
+        aliases = {}
+    settings = router.get("litellm_settings", {})
+    return {
+        aliases.get(target, target)
+        for field in ("fallbacks", "context_window_fallbacks")
+        for mapping in settings.get(field, [])
+        for targets in mapping.values()
+        for target in targets
+    }
+
+
+def allowed_models(config, *, frozen_chat_models=None):
     values = {
         getattr(config, field) or getattr(config, fallback)
         for field, fallback, _ in ROLES.values()
     }
     values.update(model for chain in config.model_fallbacks.values() for model in chain)
     values.add(config.report_review_model or config.quality_evaluation_model)
-    from market_scout.platform import runtime as platform_runtime
-    if platform_runtime.enabled():
-        from market_scout.platform.components import model_aliases
-        document = (platform_runtime.snapshot() or {}).get("document", {})
-        aliases = model_aliases(document)
-        settings = document.get("litellm", {}).get("litellm_settings", {})
-        for field in ("fallbacks", "context_window_fallbacks"):
-            for mapping in settings.get(field, []):
-                for targets in mapping.values():
-                    values.update(aliases.get(target, target) for target in targets)
-    else:
-        values.add("if-fallback-v1")
+    values.update(_router_fallback_models() if frozen_chat_models is None else frozen_chat_models)
     for provider in config.resolved_search_providers:
         if provider.value in {"openai", "anthropic"}:
             try:
@@ -142,14 +157,18 @@ def production_resources(runs_dir, *, launcher_factory=None, worker_task_id=None
             name: ModelCatalogEntry.model_validate(value)
             for name, value in run_config.get("model_catalog_snapshot").items()
         }
-        names = allowed_models(cfg)
-        validate_model_catalog(catalog, names, budget_enabled=True)
         # Retrieval runs use their own Run Key for embeddings inside Gateway.
         # Embeddings are not chat candidates and have no chat output-token cap.
         from market_scout.documents.contracts import selection_from_config
+        embedding_model = None
         if selection_from_config(config).documents_enabled:
             from market_scout.documents.settings import get_document_settings
-            names = sorted({*names, get_document_settings().embedding_model})
+            embedding_model = get_document_settings().embedding_model
+        # A worker or resumed run uses its admitted routes even after the proxy policy changes.
+        names = allowed_models(cfg, frozen_chat_models=catalog.keys() - {embedding_model})
+        validate_model_catalog(catalog, names, budget_enabled=True)
+        if embedding_model:
+            names = sorted({*names, embedding_model})
         run_id, fence = recovery.lease.run_id, recovery.lease.fence
         issuer = CapabilityTokenIssuer.from_root_key(cfg.sandbox_root_signing_key or "")
         bundle, profile_id, profile = resolve_profile(cfg)

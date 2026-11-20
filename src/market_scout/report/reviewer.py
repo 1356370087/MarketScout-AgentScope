@@ -864,13 +864,13 @@ def _safe_candidate_citations(
     protocol_errors: list[str],
     evidence_references: Mapping[str, str] | None = None,
     allow_internal_ids: bool = False,
+    draft_targets: Sequence[str] = (),
 ) -> list[ReportCitationReview]:
     """Validate citation audit IDs and targets against accepted evidence.
 
-    A citation row is useful only when it has a concrete target and at least one
-    accepted evidence binding.  The target is also checked against the source
-    represented by those evidence IDs; merely pointing at *some* allowlisted
-    URL is not sufficient when the cited evidence supports a different source.
+    Positive findings must bind the cited source to accepted evidence.
+    A negative finding can identify a real draft citation without a supporting
+    evidence ID and require correction of the corresponding claim.
     """
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
@@ -878,7 +878,7 @@ def _safe_candidate_citations(
     result: list[ReportCitationReview] = []
     for raw in value[:200]:
         if isinstance(raw, ReportCitationReview):
-            raw = raw.model_dump(mode="json")
+            raw = raw.model_dump(mode="json", exclude_unset=True)
         if not isinstance(raw, Mapping):
             continue
         try:
@@ -887,6 +887,15 @@ def _safe_candidate_citations(
             continue
         issue_count = len(issues)
         ids = list(dict.fromkeys(str(item) for item in citation.evidence_ids if str(item).strip()))
+        target = str(citation.citation_target or "").strip()
+        if raw.get("supported") is False and not ids and citation.claim.strip() and target in draft_targets:
+            # An audit can faithfully identify a real draft citation for which
+            # no supporting evidence exists. The draft needs a revision.
+            issues.append(_issue("citation_correctness", "critical",
+                "The audited draft citation has no supporting evidence for its claim.",
+                citation_target=target, revision_instruction="Remove the unsupported claim or cite an accepted supporting source."))
+            result.append(citation)
+            continue
         if not ids:
             issues.append(
                 _issue(
@@ -910,7 +919,6 @@ def _safe_candidate_citations(
             )
             citation.supported = False
             ids = [item for item in ids if item in valid_evidence_ids]
-        target = str(citation.citation_target or "").strip()
         identity = _canonical_reference(target)
         identities = [identity] if identity else []
         number_match = re.fullmatch(
@@ -1265,6 +1273,7 @@ def _normalize_candidate(
             allow_internal_ids=config.get("metadata", {}).get("quality_policy_version", QUALITY_POLICY_VERSION) == "quality-gate-v6",
             numbered_references=numbered_references,
             protocol_errors=deterministic_failures,
+            draft_targets=payload.get("citation_targets", ()),
         )
         if model_error is None
         else []
@@ -2020,6 +2029,7 @@ def _sanitize_revision_links(
     # Import lazily to avoid the orchestrator -> reviewer import cycle.
     from .orchestrator import (
         _assert_fenced_urls_allowlisted,
+        _remap_numbered_citations,
         _rewrite_links_to_allowlist,
         _transform_markdown_prose,
     )
@@ -2075,6 +2085,12 @@ def _sanitize_revision_links(
     ):
         # This transformation happens before the next Reviewer pass so the
         # exact Markdown later published by ``finalize_report`` is audited.
+        try:
+            cleaned = _remap_numbered_citations(cleaned, accepted_sources)
+        except ValueError:
+            # A revision may cite newly accepted evidence absent from the old
+            # catalogue. Keep the author's checked numbering for the Reviewer.
+            return cleaned
         cleaned = replace_sources_section(
             cleaned,
             render_references(accepted_sources, reference_style),

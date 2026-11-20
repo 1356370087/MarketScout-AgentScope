@@ -13,6 +13,8 @@ import json
 import uuid
 from typing import Any
 
+from market_scout.research_time import business_time
+
 from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
 
@@ -112,7 +114,7 @@ async def create_page(
             actor_id,
         )
         await connection.execute(
-            "UPDATE knowledge_pages SET current_revision_id=$2, updated_at=now() WHERE id=$1::uuid",
+            "UPDATE knowledge_pages SET current_revision_id=$2, update_time=now() WHERE id=$1::uuid",
             page_id,
             revision_id,
         )
@@ -194,7 +196,7 @@ async def save_draft(
             actor_id,
         )
         await connection.execute(
-            "UPDATE knowledge_pages SET current_revision_id=$2, updated_at=now() WHERE id=$1::uuid",
+            "UPDATE knowledge_pages SET current_revision_id=$2, update_time=now() WHERE id=$1::uuid",
             page_id,
             revision_id,
         )
@@ -318,7 +320,7 @@ async def get_page(
         history = []
         if include_history:
             history_rows = await connection.fetch(
-                """SELECT id, revision_number, status, create_time AS created_at, published_at
+                """SELECT id, revision_number, status, create_time, published_at
                      FROM knowledge_page_revisions
                     WHERE page_id=$1::uuid AND ($2 OR status='published') ORDER BY revision_number DESC LIMIT 20""",
                 page_id,
@@ -328,7 +330,7 @@ async def get_page(
                 {
                     "revision_number": int(r["revision_number"]),
                     "status": r["status"],
-                    "created_at": r["created_at"].isoformat(),
+                    "created_at": business_time(r["create_time"]),
                 }
                 for r in history_rows
             ]

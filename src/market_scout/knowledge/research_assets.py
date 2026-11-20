@@ -28,7 +28,7 @@ async def freeze_assets(owner_id, selection, documents):
     pool = await get_document_pool()
     async with pool.acquire() as c:
         facts = await c.fetch(
-            f"""SELECT a.id,a.updated_at FROM knowledge_fact_assertions a
+            f"""SELECT a.id,a.update_time FROM knowledge_fact_assertions a
             WHERE a.status='published' AND a.knowledge_base_id IN ({readable_bases_sql('$1')})
               AND ($3::text IS NULL OR a.published_at<=($3::text::date::timestamp AT TIME ZONE 'UTC'))
               AND ($4::text IS NULL OR ((a.valid_from IS NULL OR a.valid_from<=$4::text::date)
@@ -52,7 +52,7 @@ async def freeze_assets(owner_id, selection, documents):
                 AND NOT ((x.citation_type='document' AND x.generation_id=ANY($2::uuid[]))
                       OR (x.citation_type='fact' AND x.fact_assertion_id=ANY($3::uuid[]))))
             ORDER BY r.id LIMIT 50""", owner, generations, ids, cutoff)
-    return {"facts": [{"id": str(row["id"]), "updated_at": row["updated_at"].isoformat()} for row in facts],
+    return {"facts": [{"id": str(row["id"]), "updated_at": row["update_time"].isoformat()} for row in facts],
             "wiki": [{"id": str(row["id"]), "page_id": str(row["page_id"])} for row in pages]}
 
 
@@ -73,7 +73,7 @@ async def read_assets(owner_id, manifest, kind, query):
                 WHERE a.id=ANY($1::uuid[]) AND a.status='published'
                   AND a.knowledge_base_id IN ({readable_bases_sql('$2')}) ORDER BY a.id""", ids, owner)
             stamps = {item["id"]: item["updated_at"] for item in scope}
-            rows = [row for row in rows if row["updated_at"].isoformat() == stamps[str(row["id"])]]
+            rows = [row for row in rows if row["update_time"].isoformat() == stamps[str(row["id"])]]
             rows = [row for row in rows if not query or query.casefold() in
                     f"{row['entity_name']} {row['metric']} {row['value_text']}".casefold()][:12]
             evidence_rows = await c.fetch(
@@ -118,13 +118,13 @@ async def read_assets(owner_id, manifest, kind, query):
             fact_ids = [str(item["fact_assertion_id"]) for item in citations if item["fact_assertion_id"]]
             if fact_ids:
                 fact_sources = await c.fetch(
-                    f"""SELECT e.generation_id,a.id,a.updated_at FROM knowledge_fact_evidence e
+                    f"""SELECT e.generation_id,a.id,a.update_time FROM knowledge_fact_evidence e
                     JOIN knowledge_fact_assertions a ON a.id=e.assertion_id
                     WHERE a.id=ANY($1::uuid[]) AND a.status='published'
                       AND a.knowledge_base_id IN ({readable_bases_sql('$2')})""", fact_ids, owner)
                 stamps = {item["id"]: item["updated_at"] for item in manifest["assets"]["facts"]}
                 if {str(item["id"]) for item in fact_sources} != set(fact_ids) or any(
-                    item["updated_at"].isoformat() != stamps.get(str(item["id"])) for item in fact_sources
+                    item["update_time"].isoformat() != stamps.get(str(item["id"])) for item in fact_sources
                 ):
                     continue
                 referenced.update(str(item["generation_id"]) for item in fact_sources)

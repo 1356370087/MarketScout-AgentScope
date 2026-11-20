@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
+from market_scout.research_time import business_time, business_time_fields
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -133,8 +135,8 @@ async def search_profiles(
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         rows = await connection.fetch(
-            """SELECT version, parameters, is_default, note, created_at
-                 FROM knowledge_search_profiles ORDER BY created_at DESC"""
+            """SELECT version, parameters, is_default, note, create_time
+                 FROM knowledge_search_profiles ORDER BY create_time DESC"""
         )
     from market_scout.documents.retrieval import locator_dict
     from market_scout.documents.settings import get_document_settings
@@ -147,7 +149,7 @@ async def search_profiles(
                 "parameters": locator_dict(row["parameters"]),
                 "is_default": row["is_default"],
                 "note": row["note"],
-                "created_at": row["created_at"].isoformat(),
+                "created_at": business_time(row["create_time"]),
             }
             for row in rows
         ]
@@ -177,10 +179,10 @@ async def list_saved_searches(
     async with pool.acquire() as connection:
         rows = await connection.fetch(
             """SELECT * FROM knowledge_saved_searches
-                WHERE owner_id=$1::uuid ORDER BY updated_at DESC""",
+                WHERE owner_id=$1::uuid ORDER BY update_time DESC""",
             document_owner_id(user.user_id),
         )
-    return {"items": [dict(row) | {"id": str(row["id"])} for row in rows]}
+    return {"items": [business_time_fields(row) | {"id": str(row["id"])} for row in rows]}
 
 
 @router.post("/saved-searches", status_code=201)
@@ -202,7 +204,7 @@ async def save_search(
                ON CONFLICT (owner_id, name) DO UPDATE SET
                  query_text=excluded.query_text, scope=excluded.scope,
                  filters=excluded.filters, version_mode=excluded.version_mode,
-                 updated_at=now()
+                 update_time=now()
                RETURNING id""",
             document_owner_id(user.user_id),
             body.name,
@@ -290,8 +292,8 @@ async def evaluations(
                 "set_id": str(row["set_id"]),
                 "profile_version": row["profile_version"],
                 "metrics": locator_dict(row["metrics"]),
-                "started_at": row["started_at"].isoformat(),
-                "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+                "started_at": business_time(row["started_at"]),
+                "finished_at": business_time(row["finished_at"]) if row["finished_at"] else None,
             }
             for row in runs
         ],

@@ -1,5 +1,6 @@
 "use client";
 
+import { formatBusinessTime } from "@/lib/business-time";
 import Link from "next/link";
 import { ChoiceGroup, SearchSelect, SurfaceDialog } from "@/components/ui/workspace";
 import { KnowledgeNav } from "./knowledge-nav";
@@ -81,7 +82,7 @@ export default function HealthPage() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12, margin: "20px 0" }}>
         {(Object.keys(labels) as Kind[]).map(k => <button key={k} aria-pressed={kind === k} onClick={() => filter(() => setKind(kind === k ? "" : k))} style={{ padding: 20, textAlign: "left", border: "1px solid var(--line)", borderRadius: 12 }}><span>{labels[k]}</span><strong style={{ display: "block", fontSize: 32 }}>{data.counts[k]}</strong></button>)}
       </div>
-      <p>更新时间：{new Date(data.generated_at).toLocaleString()}。缺失主题按已配置目标计算，仅有效的已发布资料计入覆盖；检索记录仅展示本人，服务异常不计为业务缺口。</p>
+      <p>更新时间：{formatBusinessTime(data.generated_at)}。缺失主题按已配置目标计算，仅有效的已发布资料计入覆盖；检索记录仅展示本人，服务异常不计为业务缺口。</p>
       <h2>竞品与期间概览</h2>
       <div style={{ overflowX: "auto" }}><table style={{ width: "100%", textAlign: "left", borderSpacing: 12 }}><thead><tr><th>竞品</th><th>期间</th>{Object.values(labels).map(v => <th key={v}>{v}</th>)}</tr></thead><tbody>{data.groups.map(g => <tr key={`${g.company}/${g.period}`}><td><button onClick={() => filter(() => { setCompany(g.company); setPeriod(g.period); })}>{g.company}</button></td><td>{g.period}</td>{(Object.keys(labels) as Kind[]).map(k => <td key={k}>{g[k]}</td>)}</tr>)}</tbody></table></div>
       {!data.groups.length && <p>此范围暂无已标注资料或覆盖目标。</p>}

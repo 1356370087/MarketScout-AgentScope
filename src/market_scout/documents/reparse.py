@@ -172,7 +172,7 @@ async def queue_scoped_reparse(
             )
         await connection.execute(
             """UPDATE research_documents
-               SET status='queued', failure_code=NULL, updated_at=now()
+               SET status='queued', failure_code=NULL, update_time=now()
              WHERE id=$1::uuid""",
             document_id,
         )
@@ -346,7 +346,7 @@ async def execute_scoped_reparse(
 
         await connection.execute(
             """UPDATE research_document_generations
-               SET status='pending_review', reparse_scope=NULL, updated_at=now(),
+               SET status='pending_review', reparse_scope=NULL, update_time=now(),
                    quality_report=quality_report || $2::jsonb
                 WHERE id=$1::uuid""",
             str(generation["id"]),
@@ -357,7 +357,7 @@ async def execute_scoped_reparse(
         )
         await connection.execute(
             """UPDATE research_documents
-               SET status='ready', failure_code=NULL, updated_at=now(),
+               SET status='ready', failure_code=NULL, update_time=now(),
                    chunk_count=(SELECT count(*) FROM research_document_segments
                                  WHERE generation_id=$1::uuid)
              WHERE id=$2::uuid""",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from market_scout.research_time import business_time
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -322,7 +324,7 @@ async def list_audit_events(
             detail=event.detail,
             ip_address=event.ip_address,
             created_at=event.created_at or "",
-            create_time=event.create_time.isoformat(),
+            create_time=business_time(event.create_time),
         )
         for event in result.scalars().all()
     ]

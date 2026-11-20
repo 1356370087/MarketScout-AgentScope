@@ -8,6 +8,7 @@ import asyncio
 import os
 
 import asyncpg
+from security.rbac.schema_contract import BUSINESS_SEARCH_PATH
 
 from market_scout.tasks.rocketmq_transport import RocketMQTransport
 from market_scout.tasks.team_service import TeamService
@@ -38,6 +39,7 @@ class TeamRuntime:
             self.pool = await asyncpg.create_pool(
                 dsn.replace("postgresql+asyncpg://", "postgresql://", 1),
                 min_size=1, max_size=10, command_timeout=10,
+                server_settings={"search_path": BUSINESS_SEARCH_PATH},
             )
             try:
                 async with self.pool.acquire() as db:

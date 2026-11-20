@@ -59,7 +59,7 @@ from .runtime import AIMessage, RunnableConfig, get_trace_recorder
 _FENCE_LINE_RE = re.compile(
     r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>[^\r\n]*)"
 )
-_URL_RE = re.compile(r"https?://[^\s)\]}>]+")
+_URL_RE = re.compile(r"(?<=<)https?://[^<>\s]+(?=>)|https?://[^\s)\]}>]+")
 _REPORT_MISSING_CITATIONS = "report_missing_verifiable_citations"
 _REPORT_DISALLOWED_CODE_URL = "report_disallowed_fenced_code_url"
 _REPORT_UNRESOLVED_CITATIONS = "report_unresolved_citations"

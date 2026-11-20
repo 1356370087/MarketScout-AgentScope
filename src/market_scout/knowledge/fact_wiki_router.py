@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from market_scout.research_time import business_time, business_time_fields
+
 from market_scout.platform.runtime import getenv as config_getenv
 
 import asyncio
@@ -349,11 +351,11 @@ async def list_wiki_pages(
             """SELECT p.id, p.title, p.template, p.entity_name,
                       (SELECT pr.status FROM knowledge_page_revisions pr
                         WHERE pr.id=p.current_revision_id) AS status,
-                      p.updated_at
+                      p.update_time
                 FROM knowledge_pages p
                 WHERE p.knowledge_base_id=$1::uuid
                   AND (p.published_revision_id IS NOT NULL OR p.created_by=$2::uuid OR $3)
-                ORDER BY p.updated_at DESC""",
+                ORDER BY p.update_time DESC""",
             knowledge_base_id,
             document_owner_id(user.user_id),
             authz.CAP_REVIEW
@@ -367,7 +369,7 @@ async def list_wiki_pages(
                 "template": row["template"],
                 "entity_name": row["entity_name"],
                 "status": row["status"],
-                "updated_at": row["updated_at"].isoformat(),
+                "updated_at": business_time(row["update_time"]),
             }
             for row in rows
         ]
@@ -578,8 +580,8 @@ async def fact_detail(
             row["data_period"],
         )
     return {
-        "assertion": dict(row),
-        "evidence": [dict(e) for e in evidence],
+        "assertion": business_time_fields(row, "published_at"),
+        "evidence": [business_time_fields(e) for e in evidence],
         "alternatives": [dict(e) for e in conflicts],
     }
 
@@ -623,7 +625,7 @@ async def wiki_revision(
         )
     if not row:
         raise HTTPException(404, "revision_not_found")
-    return dict(row)
+    return business_time_fields(row, "published_at")
 
 
 @router.post("/knowledge-bases/{knowledge_base_id}/exports", status_code=202)
@@ -741,11 +743,11 @@ async def transfer_jobs(
     pool = await get_document_pool()
     async with pool.acquire() as c:
         rows = await c.fetch(
-            "SELECT id,kind,status,attempts,error,result,created_at FROM knowledge_jobs WHERE knowledge_base_id=$1::uuid AND actor_id=$2::uuid ORDER BY created_at DESC LIMIT 100",
+            "SELECT id,kind,status,attempts,error,result,create_time AS created_at FROM knowledge_jobs WHERE knowledge_base_id=$1::uuid AND actor_id=$2::uuid ORDER BY create_time DESC LIMIT 100",
             knowledge_base_id,
             document_owner_id(user.user_id),
         )
-    return {"items": [{**dict(r), "result": json.loads(r["result"])} for r in rows]}
+    return {"items": [{**business_time_fields(r, "created_at"), "result": json.loads(r["result"])} for r in rows]}
 
 
 @router.get("/knowledge-bases/{knowledge_base_id}/exports/{job_id}/download")

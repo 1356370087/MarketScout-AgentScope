@@ -8,6 +8,8 @@ from sqlalchemy import select, update, insert, or_, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from market_scout.research_time import business_time_fields
+
 from . import schema as s
 from .contracts import ConfigurationDocument
 from .crypto import CredentialCipher
@@ -237,7 +239,7 @@ class PlatformStore:
                 model["_platform_policy"] = routing_policy
             changed = await conn.execute(update(s.revisions).where(s.revisions.c.id == identity,
                 s.revisions.c.status == "draft", s.revisions.c.version == request.expected_version)
-                .values(status="pending", document=published, fingerprint=fingerprint(published), published_at=now(), base_revision=state["active_revision"], version=s.revisions.c.version + 1))
+                .values(status="pending", document=published, fingerprint=fingerprint(published), published_at=audit_now(), base_revision=state["active_revision"], version=s.revisions.c.version + 1))
             if changed.rowcount != 1:
                 raise PlatformError("configuration_version_conflict", 409)
             previous = await self.active(conn) if state["active_revision"] else None
@@ -294,7 +296,7 @@ class PlatformStore:
 
     @staticmethod
     def public_credential(row):
-        return {k: v for k, v in row.items() if k not in {"ciphertext", "key_id"}}
+        return business_time_fields({k: v for k, v in row.items() if k not in {"ciphertext", "key_id"}})
 
     async def create_credential(self, principal, request, *, conn=None):
         check_scope(principal, request.scope, credentials=True)

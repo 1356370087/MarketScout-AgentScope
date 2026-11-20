@@ -12,7 +12,13 @@ def upgrade():
     from market_scout.platform.schema import metadata, state
     from security.rbac.platform_permissions import CATALOG, ADMIN_GRANTS, DEVELOPER_GRANTS
     bind = op.get_bind()
-    metadata.create_all(bind)
+    # This revision introduced a varchar publication time. Keep its original DDL on a
+    # fresh install even when the runtime metadata uses the native timestamp from 0025.
+    historical = sa.MetaData()
+    for table in metadata.tables.values():
+        table.to_metadata(historical)
+    historical.tables["platform_revisions"].c.published_at.type = sa.String(40)
+    historical.create_all(bind)
     bind.execute(state.insert().values(id=1, initialized=False, generation=0))
     for code, name in CATALOG.items():
         bind.execute(sa.text("""INSERT INTO iam_permissions(code,name,description,domain,created_at)

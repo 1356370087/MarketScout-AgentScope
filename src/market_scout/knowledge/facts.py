@@ -17,6 +17,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
+from market_scout.research_time import business_time
+
 from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
 from market_scout.documents.retrieval import locator_dict
@@ -295,7 +297,7 @@ async def reject_assertion(
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
             """UPDATE knowledge_fact_assertions
-                  SET status='rejected', review_note=$2, reviewed_by=$3::uuid, updated_at=now()
+                  SET status='rejected', review_note=$2, reviewed_by=$3::uuid, update_time=now()
                 WHERE id=$1::uuid AND status IN ('draft','pending_review')
              RETURNING id""",
             assertion_id,
@@ -365,7 +367,7 @@ async def list_assertions(
                   FROM knowledge_fact_assertions a
                   JOIN knowledge_fact_keys k ON k.id=a.fact_key_id
                  WHERE {where}
-                 ORDER BY a.created_at DESC LIMIT {limit}""",
+                 ORDER BY a.create_time DESC LIMIT {limit}""",
             *args,
         )
     return [
@@ -395,7 +397,7 @@ async def list_assertions(
             if row["supersedes_id"]
             else None,
             "evidence_count": int(row["evidence_count"]),
-            "created_at": row["created_at"].isoformat(),
+            "created_at": business_time(row["create_time"]),
         }
         for row in rows
     ]

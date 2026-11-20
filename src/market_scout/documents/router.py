@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from market_scout.research_time import business_time
+
 from security.rbac.dependencies import require_permissions
 from security.rbac.permissions import DOCUMENT_READ_OWN, DOCUMENT_WRITE_OWN
 from security.rbac.principal import Principal
@@ -521,5 +523,5 @@ async def delete_document_route(
     return {
         "id": str(row["id"]),
         "status": "trashed",
-        "purge_after": row["purge_after"].isoformat() if row["purge_after"] else None,
+        "purge_after": business_time(row["purge_after"]) if row["purge_after"] else None,
     }

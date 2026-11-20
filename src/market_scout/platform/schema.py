@@ -41,7 +41,7 @@ revisions = Table("platform_revisions", metadata,
     Column("fingerprint", String(64), nullable=False),
     Column("base_revision", String(36)),
     Column("created_by", String(36), nullable=False),
-    Column("published_at", String(40)),
+    Column("published_at", DateTime(timezone=True)),
     *_audit_columns(),
     UniqueConstraint("profile_id", "number"))
 

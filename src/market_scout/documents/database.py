@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 import asyncpg
+from security.rbac.schema_contract import BUSINESS_SEARCH_PATH
 
 from .settings import get_document_settings
 
@@ -61,7 +62,8 @@ async def get_document_pool() -> asyncpg.Pool:
             _pool = None
         if _pool is None:
             _pool = await asyncpg.create_pool(
-                dsn, min_size=1, max_size=10, command_timeout=60
+                dsn, min_size=1, max_size=10, command_timeout=60,
+                server_settings={"search_path": BUSINESS_SEARCH_PATH},
             )
             _pool_dsn = dsn
     return _pool

@@ -222,7 +222,7 @@ def compile_planned_requirements(messages, atoms, *, brief="", atomic=False, ent
             # An explicitly named subject narrows its own clause; otherwise the
             # comparison's named subjects each retain a separate obligation.
             context = parent.text if parent else text
-            subjects = [name for name in comparison_subjects if name.casefold() in context.casefold()] or comparison_subjects
+            subjects = _mentioned_subjects(context, comparison_subjects) or comparison_subjects
         for subject in subjects or [None]:
             n = len(requirements) + 1
             requirements.append(CoverageRequirement(
@@ -363,15 +363,23 @@ def _fully_quoted(text, start, rows, *, marker_pattern=r"[（(]\d{1,2}[）)]"):
 def _comparison_subjects(original, entities):
     """Bind subjects only from an explicit comparison in the original input."""
     names = [row.name if hasattr(row, "name") else row["name"] for row in entities]
+    # The extracted name may omit 的 between a product and its deployment form.
+    # Always keep the spelling and qualifiers found in the user's roster.
+    patterns = [r"\s*(?:的\s*)?".join(re.escape(part) for part in name.split())
+                for name in sorted(names, key=len, reverse=True) if name.strip()]
+    if len(patterns) < 2:
+        return []
+    entity = "(?:" + "|".join(patterns) + ")"
+    separator = r"(?:[、,，]\s*(?:以及|与|和|及|\band\b)?|以及|与|和|及|\band\b)"
+    roster = rf"{entity}(?:\s*{separator}\s*{entity})+"
+    comparison = re.compile(
+        r"(?:比较|对比|对照|\bcompare\b|\bcomparison of\b)[^。；;\n!?]{1,240}"
+        rf"|{roster}\s*(?:之间)?(?:的)?\s*(?:(?:竞品|竞争|选型)(?:深度)?(?:研究|分析)|对比|比较|对照)", re.I,
+    )
     for content in original.values():
-        for match in re.finditer(r"(?:比较|对比|对照|\bcompare\b|\bcomparison of\b)[^。；;\n!?]{1,240}", content, re.IGNORECASE):
+        for match in comparison.finditer(content):
             found = []
-            for name in names:
-                if not name.strip():
-                    continue
-                # 提取器可能省略产品名与部署形态间的“的”。只容忍这一语法
-                # 差异，并返回用户原文；不把模型的别名或外部实体补进比较范围。
-                pattern = r"\s*(?:的\s*)?".join(re.escape(part) for part in name.split())
+            for pattern in patterns:
                 subject = re.search(pattern, match.group(), re.IGNORECASE)
                 if subject is not None:
                     found.append((subject.start(), subject.group()))
@@ -379,6 +387,19 @@ def _comparison_subjects(original, entities):
             if len(found) >= 2:
                 return list(dict.fromkeys(name for _, name in found))
     return []
+
+
+def _mentioned_subjects(text, subjects):
+    """Recognize an unambiguous first-word shorthand within the original roster."""
+    first_words = [name.split()[0].casefold() for name in subjects]
+    mentioned = []
+    for name, short in zip(subjects, first_words):
+        if name.casefold() in text.casefold() or (
+            first_words.count(short) == 1 and short != name.casefold()
+            and re.search(rf"(?<![\w-]){re.escape(short)}(?![\w-])", text, re.I | re.ASCII)
+        ):
+            mentioned.append(name)
+    return mentioned
 
 
 def unique_evidence(records):

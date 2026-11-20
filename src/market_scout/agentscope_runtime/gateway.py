@@ -350,6 +350,8 @@ class SandboxChatModel(ChatModelBase):
         return StructuredResponse(content=outcome.search_result, usage=self._usage(outcome), metadata=self._metadata(outcome))
 
     async def generate_structured_output(self, messages, structured_model, **kwargs):
+        from market_scout.agentscope_runtime.runtime_limits import structured_attempt_budget
+
         schema = (
             structured_model.model_json_schema()
             if isinstance(structured_model, type)
@@ -359,7 +361,13 @@ class SandboxChatModel(ChatModelBase):
         json_repair = False
         json_supported = True
         last_format_error = None
-        for attempt in range(max(1, self.structured_attempts)):
+        attempts = max(1, self.structured_attempts)
+        remaining = structured_attempt_budget.get()
+        if remaining is not None:
+            # A semantic repair may already have spent an attempt. Surface the
+            # final response's validation error when the shared allowance ends.
+            attempts = min(attempts, max(1, remaining[0]))
+        for attempt in range(attempts):
             try:
                 outcome = await self._request(messages, structured_schema=schema,
                     **{**kwargs, "tool_choice": "none" if json_repair else None})
@@ -368,7 +376,7 @@ class SandboxChatModel(ChatModelBase):
                 # A definite 400 may use the remaining original attempt budget;
                 # transport/unknown outcomes must never trigger another dispatch.
                 if json_repair and not exc.uncertain and exc.code == "invalid_request":
-                    if attempt + 1 >= self.structured_attempts:
+                    if attempt + 1 >= attempts:
                         raise last_format_error from exc
                     json_repair = json_supported = False
                     messages.append(UserMsg("user",
@@ -405,7 +413,7 @@ class SandboxChatModel(ChatModelBase):
                 break
             except (json.JSONDecodeError, jsonschema.ValidationError, ValidationError, GatewayCallError) as exc:
                 last_format_error = exc
-                if attempt + 1 >= self.structured_attempts:
+                if attempt + 1 >= attempts:
                     raise
                 # 格式修复发生在持久化逻辑调用内；每次物理请求仍经 Gateway
                 # 领取独立操作 ID 并计账，不将缺失字段伪造成合法评分。

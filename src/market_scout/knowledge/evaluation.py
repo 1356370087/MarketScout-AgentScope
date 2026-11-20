@@ -15,6 +15,8 @@ import time
 from typing import Any
 from uuid import uuid4
 
+from market_scout.research_time import business_time
+
 from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
 
@@ -185,15 +187,15 @@ async def list_eval_sets() -> list[dict[str, Any]]:
     pool = await get_document_pool()
     async with pool.acquire() as connection:
         rows = await connection.fetch(
-            """SELECT id, name, jsonb_array_length(items) AS item_count, created_at
-                 FROM knowledge_eval_sets ORDER BY created_at DESC"""
+            """SELECT id, name, jsonb_array_length(items) AS item_count, create_time
+                 FROM knowledge_eval_sets ORDER BY create_time DESC"""
         )
     return [
         {
             "id": str(row["id"]),
             "name": row["name"],
             "item_count": int(row["item_count"]),
-            "created_at": row["created_at"].isoformat(),
+            "created_at": business_time(row["create_time"]),
         }
         for row in rows
     ]

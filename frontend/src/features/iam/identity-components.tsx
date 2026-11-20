@@ -1,5 +1,6 @@
 "use client";
 
+import { formatBusinessTime } from "@/lib/business-time";
 import { Check, Eye, EyeOff, MonitorSmartphone, Trash2 } from "lucide-react";
 import { useState, type InputHTMLAttributes } from "react";
 import { Disclosure, StructuredContent } from "@/components/ui/insight";
@@ -12,7 +13,7 @@ export function PasswordField({ label, hint, ...props }: InputHTMLAttributes<HTM
 }
 
 export function SessionCard({ item, busy, onRevoke }: { item: Record<string, unknown>; busy: boolean; onRevoke: (id: string) => void }) {
-  return <article className="identity-session"><span className="identity-session-icon"><MonitorSmartphone size={19} /></span><div><b>{String(item.user_agent || "未知客户端")}</b><span>{String(item.ip_address || "未知地址")} · {new Date(String(item.last_activity_at)).toLocaleString("zh-CN")}</span></div><span className={`session-state ${item.is_current ? "current" : ""}`}>{item.is_revoked ? "已撤销" : item.is_current ? "当前会话" : "有效"}</span>{!item.is_current && !item.is_revoked && <button type="button" disabled={busy} onClick={() => onRevoke(String(item.id))} aria-label="撤销会话"><Trash2 size={15} /></button>}</article>;
+  return <article className="identity-session"><span className="identity-session-icon"><MonitorSmartphone size={19} /></span><div><b>{String(item.user_agent || "未知客户端")}</b><span>{String(item.ip_address || "未知地址")} · {formatBusinessTime(String(item.last_activity_at))}</span></div><span className={`session-state ${item.is_current ? "current" : ""}`}>{item.is_revoked ? "已撤销" : item.is_current ? "当前会话" : "有效"}</span>{!item.is_current && !item.is_revoked && <button type="button" disabled={busy} onClick={() => onRevoke(String(item.id))} aria-label="撤销会话"><Trash2 size={15} /></button>}</article>;
 }
 
 export function PermissionMatrix({ roles, permissions }: { roles: Role[]; permissions: Permission[] }) {
@@ -20,5 +21,5 @@ export function PermissionMatrix({ roles, permissions }: { roles: Role[]; permis
 }
 
 export function AuditItem({ event }: { event: Audit }) {
-  return <article className="identity-audit"><header><b>{event.action}</b><time>{new Date(event.create_time).toLocaleString("zh-CN")}</time></header><p>{event.actor_email || "系统"}{event.target_user_id && ` · 成员 ${event.target_user_id}`}</p>{event.detail && Object.keys(event.detail).length > 0 && <Disclosure title="变更详情"><StructuredContent value={event.detail} /></Disclosure>}</article>;
+  return <article className="identity-audit"><header><b>{event.action}</b><time>{formatBusinessTime(event.create_time)}</time></header><p>{event.actor_email || "系统"}{event.target_user_id && ` · 成员 ${event.target_user_id}`}</p>{event.detail && Object.keys(event.detail).length > 0 && <Disclosure title="变更详情"><StructuredContent value={event.detail} /></Disclosure>}</article>;
 }

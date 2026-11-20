@@ -109,6 +109,8 @@ services:
       SANDBOX_ROOT_SIGNING_KEY: ${SANDBOX_ROOT_SIGNING_KEY:-}
       MODEL_BACKEND: ${MODEL_BACKEND:-litellm}
       LITELLM_BASE_URL: http://litellm-proxy:4000/v1
+      # 显式配置模式下，API 读取与 Proxy 相同的静态路由文件，为新运行冻结回退模型。
+      LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/app/config/litellm.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
       LITELLM_SERVICE_KEY: ${LITELLM_SERVICE_KEY:-}
       LITELLM_RUN_TEAM_ID: ${LITELLM_RUN_TEAM_ID:-marketscout-runs}

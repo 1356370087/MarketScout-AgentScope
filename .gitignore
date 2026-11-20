@@ -154,7 +154,6 @@ cython_debug/
 
 # 本地 IDE 和 Agent 工具配置与说明
 /.idea/
-/.agent/
 /.agents/
 /.claude/
 AGENTS.md

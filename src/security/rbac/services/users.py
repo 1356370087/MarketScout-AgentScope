@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from market_scout.research_time import business_time
+
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,11 +48,11 @@ def _to_view(user: User, role_codes: tuple[str, ...]) -> UserView:
         email=user.email,
         display_name=user.display_name,
         status=user.status,
-        email_verified_at=verified.isoformat() if verified else None,
+        email_verified_at=business_time(verified) if verified else None,
         authz_version=int(user.authz_version),
         role_codes=role_codes,
         created_at=user.created_at or "",
-        create_time=user.create_time.isoformat(),
+        create_time=business_time(user.create_time),
     )
 
 

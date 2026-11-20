@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from market_scout.research_time import business_time
+
 from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
 
@@ -86,7 +88,7 @@ async def get_batch(actor_id: str, batch_id: str) -> dict[str, Any] | None:
         "total": int(batch["total_items"]),
         "completed": int(batch["completed_count"]),
         "failed": int(batch["failed_count"]),
-        "created_at": batch["created_at"].isoformat(),
+        "created_at": business_time(batch["create_time"]),
         "items": [
             {
                 "document_id": str(item["document_id"]),
@@ -121,7 +123,7 @@ async def cancel_batch(actor_id: str, batch_id: str) -> dict[str, str]:
         )
         await connection.execute(
             """UPDATE knowledge_batches
-                  SET status='cancelled', updated_at=now()
+                  SET status='cancelled', update_time=now()
                 WHERE id=$1::uuid""",
             batch_id,
         )
@@ -153,7 +155,7 @@ async def retry_failed(actor_id: str, batch_id: str) -> dict[str, Any]:
             return {"batch_id": batch_id, "status": "no_failed_items"}
         await connection.execute(
             """UPDATE knowledge_batches
-                  SET status='pending', failed_count=0, updated_at=now()
+                  SET status='pending', failed_count=0, update_time=now()
                 WHERE id=$1::uuid""",
             batch_id,
         )
@@ -189,7 +191,7 @@ async def _execute_owned_batch(actor_id: str, batch_id: str, pool) -> dict[str, 
 
     async with pool.acquire() as connection:
         batch = await connection.fetchrow(
-            """UPDATE knowledge_batches SET status='running', updated_at=now()
+            """UPDATE knowledge_batches SET status='running', update_time=now()
                 WHERE id=$1::uuid AND created_by=$2::uuid AND status IN ('pending','running')
                 RETURNING *""",
             batch_id,
@@ -270,7 +272,7 @@ async def _execute_owned_batch(actor_id: str, batch_id: str, pool) -> dict[str, 
                   SET status=CASE WHEN status='cancelled' THEN status ELSE 'completed' END,
                       completed_count=(SELECT count(*) FROM knowledge_batch_items i WHERE i.batch_id=b.id AND i.status='succeeded'),
                       failed_count=(SELECT count(*) FROM knowledge_batch_items i WHERE i.batch_id=b.id AND i.status='failed'),
-                      updated_at=now()
+                      update_time=now()
                 WHERE id=$1::uuid""",
             batch_id,
         )

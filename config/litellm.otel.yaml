@@ -1,8 +1,10 @@
 model_list:
+  # 以下 GPT-6.2 Sol 主路由采用 OpenAI 公布的输入、输出上限及标准短上下文价格（美元/Token）。
+  # 参考 https://developers.openai.com/api/docs/models/gpt-6.2-sol，内网转发费用以提供商账单为准。
   # Supervisor：研究规划与任务调度
   - model_name: if-supervisor-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: high
@@ -10,8 +12,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -20,7 +21,7 @@ model_list:
   # Researcher：信息检索、分析与复杂推理
   - model_name: if-research-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: high
@@ -28,8 +29,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 8
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -38,7 +38,7 @@ model_list:
   # 摘要与长文内容归纳
   - model_name: if-summarization-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: low
@@ -46,8 +46,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 8
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -56,7 +55,7 @@ model_list:
   # 历史会话/消息摘要
   - model_name: if-message-summary-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: low
@@ -64,8 +63,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 8
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -74,7 +72,7 @@ model_list:
   # Web 检索结果重排（LLM 重排，不是专用 reranker API）
   - model_name: if-web-rerank-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: low
@@ -82,8 +80,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 8
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -92,7 +89,7 @@ model_list:
   # 网页证据抽取、结构化整理
   - model_name: if-web-evidence-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: low
@@ -100,8 +97,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 8
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -110,7 +106,7 @@ model_list:
   # 上下文压缩（建议应用侧额外做事实/引用保真校验）
   - model_name: if-compression-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: medium
@@ -118,8 +114,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -128,7 +123,7 @@ model_list:
   # 最终研究报告生成
   - model_name: if-final-report-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: high
@@ -136,8 +131,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -146,7 +140,7 @@ model_list:
   # 内容质量检查
   - model_name: if-quality-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: high
@@ -154,8 +148,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -164,7 +157,7 @@ model_list:
   # 最终报告复核
   - model_name: if-report-review-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: high
@@ -172,8 +165,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -182,7 +174,7 @@ model_list:
   # 离线/批量评估
   - model_name: if-evaluation-v2
     litellm_params:
-      model: openai/gpt-6.1-sol
+      model: openai/gpt-6.2-sol
       api_base: os.environ/OPENAI_BASE_URL
       api_key: os.environ/OPENAI_API_KEY
       reasoning_effort: medium
@@ -190,8 +182,7 @@ model_list:
       allowed_openai_params: ["reasoning_effort"]
       max_parallel_requests: 4
     model_info:
-      base_model: openai/gpt-6.1-sol
-      # Token 上限及 USD/token 目录价格来自当前 LiteLLM；内网转发的实际账单以提供商为准。
+      base_model: openai/gpt-6.2-sol
       max_input_tokens: 922000
       max_output_tokens: 128000
       input_cost_per_token: 2e-06
@@ -250,7 +241,7 @@ litellm_settings:
   require_auth_for_metrics_endpoint: false
   num_retries: 2
   request_timeout: 180
-  # 出错时由 GPT-6.1 Sol 主链路回退至 DeepSeek，须事先验证 tool/structured output 兼容性。
+  # 出错时由 GPT-6.2 Sol 主链路回退至 DeepSeek，须事先验证 tool/structured output 兼容性。
   fallbacks:
     - if-supervisor-v2: [if-fallback-v2]
     - if-research-v2: [if-fallback-v2]

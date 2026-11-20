@@ -48,10 +48,10 @@ async def run_one():
     pool = await get_document_pool()
     async with pool.acquire() as c:
         row = await c.fetchrow("""UPDATE knowledge_jobs SET status='running',attempts=attempts+1,
-            lease_until=now()+interval '10 minutes',updated_at=now()
+            lease_until=now()+interval '10 minutes',update_time=now()
             WHERE id=(SELECT id FROM knowledge_jobs WHERE
                 (status='queued' AND available_at<=now()) OR (status='running' AND lease_until<now())
-                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *""")
+                ORDER BY create_time FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *""")
     if not row:
         return False
     payload = (
@@ -110,7 +110,7 @@ async def run_one():
             raise ValueError("unknown_knowledge_job")
         async with pool.acquire() as c:
             await c.execute(
-                "UPDATE knowledge_jobs SET status='completed',result=$3::jsonb,error=NULL,updated_at=now() WHERE id=$1::uuid AND attempts=$2",
+                "UPDATE knowledge_jobs SET status='completed',result=$3::jsonb,error=NULL,update_time=now() WHERE id=$1::uuid AND attempts=$2",
                 job_id,
                 attempt,
                 json.dumps(result, default=str),
@@ -122,7 +122,7 @@ async def run_one():
         async with pool.acquire() as c:
             await c.execute(
                 """UPDATE knowledge_jobs SET status=$3,error=$4,
-                available_at=now()+interval '30 seconds',updated_at=now() WHERE id=$1::uuid AND attempts=$2""",
+                available_at=now()+interval '30 seconds',update_time=now() WHERE id=$1::uuid AND attempts=$2""",
                 job_id,
                 attempt,
                 "failed"

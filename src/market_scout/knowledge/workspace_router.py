@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from market_scout.research_time import business_time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -88,7 +90,7 @@ async def list_workspaces(
                  FROM knowledge_workspaces w
                  JOIN knowledge_workspace_members m ON m.workspace_id=w.id
                 WHERE m.user_id=$1::uuid AND w.status='active'
-                ORDER BY w.kind DESC, w.created_at""",
+                ORDER BY w.kind DESC, w.create_time""",
             user.user_id,
         )
     return {
@@ -150,14 +152,14 @@ async def list_workspace_members(
     pool = await _workspace_pool()
     async with pool.acquire() as connection:
         rows = await connection.fetch(
-            """SELECT user_id, role, created_at FROM knowledge_workspace_members
-                WHERE workspace_id=$1::uuid ORDER BY created_at""",
+            """SELECT user_id, role, create_time FROM knowledge_workspace_members
+                WHERE workspace_id=$1::uuid ORDER BY create_time""",
             workspace_id,
         )
     return {
         "items": [
             {"user_id": str(row["user_id"]), "role": row["role"],
-             "created_at": row["created_at"].isoformat()}
+             "created_at": business_time(row["create_time"])}
             for row in rows
         ]
     }
@@ -308,14 +310,14 @@ async def list_base_members(
     pool = await _workspace_pool()
     async with pool.acquire() as connection:
         rows = await connection.fetch(
-            """SELECT user_id, role, created_at FROM knowledge_base_members
-                WHERE knowledge_base_id=$1::uuid ORDER BY created_at""",
+            """SELECT user_id, role, create_time FROM knowledge_base_members
+                WHERE knowledge_base_id=$1::uuid ORDER BY create_time""",
             knowledge_base_id,
         )
     return {
         "items": [
             {"user_id": str(row["user_id"]), "role": row["role"],
-             "created_at": row["created_at"].isoformat()}
+             "created_at": business_time(row["create_time"])}
             for row in rows
         ]
     }
@@ -375,7 +377,7 @@ async def set_base_visibility(
     pool = await _workspace_pool()
     async with pool.acquire() as connection:
         await connection.execute(
-            "UPDATE knowledge_bases SET visibility=$2, updated_at=now() WHERE id=$1::uuid",
+            "UPDATE knowledge_bases SET visibility=$2, update_time=now() WHERE id=$1::uuid",
             knowledge_base_id,
             body.visibility,
         )

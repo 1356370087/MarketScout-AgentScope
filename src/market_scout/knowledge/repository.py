@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from market_scout.research_time import business_time
+
 import asyncpg
 
 from market_scout.documents.database import get_document_pool
@@ -22,7 +24,7 @@ class KnowledgeConflictError(RuntimeError):
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    return business_time(value) if value else None
 
 
 def _kb_view(row: dict[str, Any]) -> KnowledgeBaseView:
@@ -33,8 +35,8 @@ def _kb_view(row: dict[str, Any]) -> KnowledgeBaseView:
         archived=row["archived_at"] is not None,
         collection_count=int(row["collection_count"]),
         document_count=int(row["document_count"]),
-        created_at=_iso(row["created_at"]) or "",
-        updated_at=_iso(row["updated_at"]) or "",
+        created_at=_iso(row["create_time"]) or "",
+        updated_at=_iso(row["update_time"]) or "",
         archived_at=_iso(row["archived_at"]),
     )
 
@@ -46,8 +48,8 @@ def _collection_view(row: dict[str, Any]) -> KnowledgeCollectionView:
         name=row["name"],
         description=row["description"],
         document_count=int(row["document_count"]),
-        created_at=_iso(row["created_at"]) or "",
-        updated_at=_iso(row["updated_at"]) or "",
+        created_at=_iso(row["create_time"]) or "",
+        updated_at=_iso(row["update_time"]) or "",
     )
 
 
@@ -141,7 +143,7 @@ async def list_knowledge_bases(
         rows = await connection.fetch(
             f"""SELECT kb.*, {_KB_COUNTS} FROM knowledge_bases kb
                 WHERE kb.owner_id=$1::uuid{filter_clause}
-                ORDER BY kb.archived_at IS NOT NULL, kb.updated_at DESC, kb.id""",
+                ORDER BY kb.archived_at IS NOT NULL, kb.update_time DESC, kb.id""",
             *args,
         )
     return [_kb_view(dict(row)) for row in rows]
@@ -177,7 +179,7 @@ async def update_knowledge_base(
                 """UPDATE knowledge_bases kb SET
                      name=coalesce($3, kb.name),
                      description=coalesce($4, kb.description),
-                     updated_at=now()
+                     update_time=now()
                  WHERE kb.id=$1::uuid AND kb.owner_id=$2::uuid
                  RETURNING kb.id""",
                 kb_id,
@@ -201,7 +203,7 @@ async def set_knowledge_base_archived(
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
             """UPDATE knowledge_bases kb SET
-                 archived_at=CASE WHEN $3 THEN now() ELSE NULL END, updated_at=now()
+                 archived_at=CASE WHEN $3 THEN now() ELSE NULL END, update_time=now()
                WHERE kb.id=$1::uuid AND kb.owner_id=$2::uuid
                RETURNING kb.id""",
             kb_id,
@@ -253,7 +255,7 @@ async def list_collections(
                             WHERE l.collection_id=c.id) AS document_count
                  FROM knowledge_collections c
                 WHERE c.knowledge_base_id=$1::uuid
-                ORDER BY c.created_at, c.id""",
+                ORDER BY c.create_time, c.id""",
             kb_id,
         )
     return [_collection_view(dict(row)) for row in rows]
@@ -276,7 +278,7 @@ async def update_collection(
                 """UPDATE knowledge_collections c SET
                      name=coalesce($4, c.name),
                      description=coalesce($5, c.description),
-                     updated_at=now()
+                     update_time=now()
                  FROM knowledge_bases kb
                 WHERE c.id=$1::uuid AND c.knowledge_base_id=$2::uuid
                   AND kb.id=c.knowledge_base_id AND kb.owner_id=$3::uuid

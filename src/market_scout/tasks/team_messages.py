@@ -79,7 +79,9 @@ class SendMessageInput(MessageBody):
     message: StructuredMessage | str = Field(
         description=(
             "普通讨论传纯文本字符串。计划审批等控制消息必须传对象，不得 JSON.stringify。"
-            '例如 {"type":"plan_approval_response","task_id":"任务ID",'
+            '共享证据时使用 {"type":"evidence_share","task_id":"当前任务ID",'
+            '"content":"关键发现及来源 URL","artifact_refs":["证据ID"]}。'
+            '回复计划审批时使用 {"type":"plan_approval_response","task_id":"任务ID",'
             '"request_id":"请求事件ID","version":1,"approve":false,"feedback":"修改理由"}。'
             "字符串只会投递为聊天文本，不能批准或驳回计划。"
         ),

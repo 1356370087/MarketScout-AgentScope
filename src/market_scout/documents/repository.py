@@ -7,6 +7,8 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+from market_scout.research_time import business_time
+
 import asyncpg
 
 from market_scout.knowledge.authz import document_read_sql
@@ -61,7 +63,7 @@ async def insert_first_version_and_generation(
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    return business_time(value) if value else None
 
 
 def _summary(row: asyncpg.Record) -> DocumentSummary:
@@ -76,8 +78,8 @@ def _summary(row: asyncpg.Record) -> DocumentSummary:
         page_count=row["page_count"],
         chunk_count=row["chunk_count"],
         ocr_pages=row["ocr_pages"],
-        created_at=_iso(row.get("create_time", row["created_at"])) or "",
-        updated_at=_iso(row.get("update_time", row["updated_at"])) or "",
+        created_at=_iso(row.get("create_time", row.get("created_at"))) or "",
+        updated_at=_iso(row.get("update_time", row.get("updated_at"))) or "",
         deleted_at=_iso(row["deleted_at"]),
         current_generation_id=(
             str(row["current_generation_id"]) if "current_generation_id" in row.keys() and row["current_generation_id"] else None
@@ -116,7 +118,7 @@ async def _home_knowledge_base(
     if kb_id is None:
         kb_id = await connection.fetchval(
             """SELECT kb.id FROM knowledge_bases kb
-                WHERE kb.workspace_id=$1::uuid ORDER BY kb.created_at, kb.id LIMIT 1""",
+                WHERE kb.workspace_id=$1::uuid ORDER BY kb.create_time, kb.id LIMIT 1""",
             workspace_id,
         )
         if kb_id is None:
@@ -157,7 +159,7 @@ async def create_document(
         existing = await connection.fetchrow(
             """SELECT * FROM research_documents
                WHERE home_knowledge_base_id=$1::uuid AND sha256=$2 AND deleted_at IS NULL
-               ORDER BY created_at DESC LIMIT 1""",
+               ORDER BY create_time DESC LIMIT 1""",
             home_kb_id,
             staged.sha256,
         )
@@ -253,7 +255,7 @@ async def list_documents(
         )
         args.extend([limit, offset])
         rows = await connection.fetch(
-            f"SELECT * FROM research_documents WHERE {where} ORDER BY updated_at DESC, id DESC LIMIT ${len(args) - 1} OFFSET ${len(args)}",
+            f"SELECT * FROM research_documents WHERE {where} ORDER BY update_time DESC, id DESC LIMIT ${len(args) - 1} OFFSET ${len(args)}",
             *args,
         )
     return [_summary(row) for row in rows], int(total)
@@ -334,7 +336,7 @@ async def retry_document(owner_id: str, document_id: str) -> DocumentSummary | N
     pool = await get_document_pool()
     async with pool.acquire() as connection, connection.transaction():
         row = await connection.fetchrow(
-            """UPDATE research_documents SET status='queued', failure_code=NULL, updated_at=now()
+            """UPDATE research_documents SET status='queued', failure_code=NULL, update_time=now()
                WHERE id=$1::uuid AND owner_id=$2::uuid AND deleted_at IS NULL AND status='failed'
                AND NOT EXISTS(
                  SELECT 1 FROM research_document_jobs j
@@ -371,7 +373,7 @@ async def soft_delete_document(
         row = await connection.fetchrow(
             """UPDATE research_documents
                   SET status='trashed', deleted_at=now(), deleted_by=$2::uuid,
-                      purge_after=now() + make_interval(days => 30), updated_at=now()
+                      purge_after=now() + make_interval(days => 30), update_time=now()
                 WHERE id=$1::uuid AND owner_id=$2::uuid AND deleted_at IS NULL
              RETURNING *""",
             document_id,
@@ -482,14 +484,14 @@ async def claim_job(worker_id: str, lease_seconds: int) -> asyncpg.Record | None
             """SELECT * FROM research_document_jobs
                WHERE (status='queued' AND available_at<=now())
                   OR (status='running' AND lease_expires_at<now())
-               ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1"""
+               ORDER BY create_time FOR UPDATE SKIP LOCKED LIMIT 1"""
         )
         if not row:
             return None
         claimed = await connection.fetchrow(
             """UPDATE research_document_jobs
                SET status='running', worker_id=$2, attempts=attempts+1,
-                   lease_expires_at=now()+make_interval(secs=>$3), updated_at=now()
+                   lease_expires_at=now()+make_interval(secs=>$3), update_time=now()
                WHERE id=$1 RETURNING *""",
             row["id"],
             worker_id,
@@ -497,7 +499,7 @@ async def claim_job(worker_id: str, lease_seconds: int) -> asyncpg.Record | None
         )
         if claimed["kind"] in {"ingest", "reindex"}:
             await connection.execute(
-                """UPDATE research_documents SET status='processing',updated_at=now()
+                """UPDATE research_documents SET status='processing',update_time=now()
                    WHERE id=$1 AND deleted_at IS NULL""",
                 claimed["document_id"],
             )
@@ -523,7 +525,7 @@ async def renew_job_lease(
     async with pool.acquire() as connection:
         result = await connection.execute(
             """UPDATE research_document_jobs
-               SET lease_expires_at=now()+make_interval(secs=>$3), updated_at=now()
+               SET lease_expires_at=now()+make_interval(secs=>$3), update_time=now()
                WHERE id=$1::uuid AND status='running' AND worker_id=$2""",
             job_id,
             worker_id,
@@ -538,7 +540,7 @@ async def record_job_upstream_task(job_id: str, worker_id: str, task_id: str) ->
     async with pool.acquire() as connection:
         result = await connection.execute(
             """UPDATE research_document_jobs
-               SET upstream_task_id=$3, updated_at=now()
+               SET upstream_task_id=$3, update_time=now()
                 WHERE id=$1::uuid AND status='running' AND worker_id=$2""",
             job_id,
             worker_id,
@@ -562,7 +564,7 @@ async def complete_job(job_id: str, worker_id: str) -> bool:
     async with pool.acquire() as connection:
         result = await connection.execute(
             """UPDATE research_document_jobs
-               SET status='completed', lease_expires_at=NULL, updated_at=now()
+               SET status='completed', lease_expires_at=NULL, update_time=now()
                WHERE id=$1::uuid AND status='running' AND worker_id=$2""",
             job_id,
             worker_id,
@@ -583,7 +585,7 @@ async def fail_job(
     async with pool.acquire() as connection, connection.transaction():
         document_id = await connection.fetchval(
             """UPDATE research_document_jobs SET status=$2, error_code=$3,
-               available_at=now()+make_interval(secs=>$4), lease_expires_at=NULL, updated_at=now()
+               available_at=now()+make_interval(secs=>$4), lease_expires_at=NULL, update_time=now()
                WHERE id=$1::uuid AND status='running' AND worker_id=$5
                RETURNING document_id""",
             job["id"],
@@ -595,7 +597,7 @@ async def fail_job(
         if document_id is None:
             return False
         await connection.execute(
-            """UPDATE research_documents SET status=$2, failure_code=$3, updated_at=now()
+            """UPDATE research_documents SET status=$2, failure_code=$3, update_time=now()
                WHERE id=$1::uuid""",
             document_id,
             "failed" if exhausted else "queued",

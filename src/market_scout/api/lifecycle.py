@@ -22,13 +22,14 @@ from market_scout.models.credentials import RunKeySettings
 from market_scout.models.key_reconciler import run_key_reconciler_loop
 from security.rbac import shutdown_rbac, startup_checks
 from security.rbac.app_extension import StartupError, assert_schema_current
+from security.rbac.schema_contract import BUSINESS_SCHEMA_HEAD
 
 logger = logging.getLogger(__name__)
 
 # Keep the API admission check aligned with the latest business migration. The
 # migration is deployed before the API, so serving against an older schema is
 # unsafe for the task metadata and team lifecycle contracts.
-CURRENT_BUSINESS_SCHEMA_REVISION = "0023_continuous_intelligence"
+CURRENT_BUSINESS_SCHEMA_REVISION = BUSINESS_SCHEMA_HEAD
 
 
 class ApplicationLifecycle:

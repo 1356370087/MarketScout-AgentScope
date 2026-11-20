@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from .settings import get_settings
+from .schema_contract import BUSINESS_SEARCH_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,11 @@ def _build_engine(database_url: str) -> AsyncEngine:
     Forces ``pool_pre_ping`` so dead connections (e.g. after a DB restart) are
     detected before use rather than surfacing as request errors.
     """
-    return create_async_engine(database_url, pool_pre_ping=True, future=True)
+    connect_args = (
+        {"server_settings": {"search_path": BUSINESS_SEARCH_PATH}}
+        if database_url.startswith("postgresql+asyncpg:") else {}
+    )
+    return create_async_engine(database_url, pool_pre_ping=True, future=True, connect_args=connect_args)
 
 
 def get_engine() -> AsyncEngine:

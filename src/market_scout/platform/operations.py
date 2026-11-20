@@ -4,6 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from sqlalchemy import select, func, insert
+from market_scout.research_time import business_time_fields
 from .store import get_store, PlatformError
 from . import schema as s
 
@@ -34,14 +35,14 @@ async def list_operations(app):
             receipt = json.loads(path.read_text(encoding="utf-8"))
             timestamp = receipt.get("time")
             knowledge.update(last_seen=timestamp, ready=bool(timestamp) and (datetime.now(timezone.utc) - datetime.fromisoformat(timestamp)).total_seconds() < 90)
-    result["workers"]["knowledge"] = knowledge
+    result["workers"]["knowledge"] = business_time_fields(knowledge, "last_seen")
     if get_document_settings().configured:
         pool = await get_document_pool()
         async with pool.acquire() as conn:
-            result["documents"] = [dict(row) for row in await conn.fetch(
-                "SELECT id,owner_id,status,created_at FROM research_documents WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 200")]
-            result["knowledge_jobs"] = [dict(row) for row in await conn.fetch(
-                "SELECT id,actor_id AS owner_id,status,kind,attempts,lease_until,updated_at FROM knowledge_jobs ORDER BY updated_at DESC LIMIT 200")]
+            result["documents"] = [business_time_fields(row, "created_at") for row in await conn.fetch(
+                "SELECT id,owner_id,status,create_time AS created_at FROM research_documents WHERE deleted_at IS NULL ORDER BY create_time DESC LIMIT 200")]
+            result["knowledge_jobs"] = [business_time_fields(row, "updated_at", "lease_until") for row in await conn.fetch(
+                "SELECT id,actor_id AS owner_id,status,kind,attempts,lease_until,update_time AS updated_at FROM knowledge_jobs ORDER BY update_time DESC LIMIT 200")]
     if service:
         from market_scout.report.publication_store import PublicationJobStore
         for row in runs:
@@ -61,7 +62,7 @@ async def overview(app):
         total = (await conn.execute(select(func.coalesce(func.sum(s.months.c.settled), 0),
                                           func.coalesce(func.sum(s.months.c.reserved), 0)))).one()
     operations = await list_operations(app)
-    return {"configuration": state, "pending_releases": pending, "cost_micro_usd": total[0],
+    return {"configuration": business_time_fields(state), "pending_releases": pending, "cost_micro_usd": total[0],
             "reserved_micro_usd": total[1], "run_count": len(operations["runs"]),
             "workers": operations["workers"], "runtime_error": getattr(app.state, "platform_runtime_error", None),
             "history_import": getattr(app.state, "platform_history_import", None)}

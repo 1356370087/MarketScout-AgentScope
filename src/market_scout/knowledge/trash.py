@@ -16,6 +16,7 @@ from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
 from market_scout.documents.settings import get_document_settings
 from market_scout.documents.storage import delete_storage_key
+from market_scout.research_time import business_time
 
 RETENTION_DAYS = 30
 _TRASH_STATUS = "trashed"
@@ -42,7 +43,7 @@ async def trash_document(
             f"""UPDATE research_documents
                    SET status='{_TRASH_STATUS}', deleted_at=now(), deleted_by=$2::uuid,
                        purge_after=now() + make_interval(days => {RETENTION_DAYS}),
-                       updated_at=now()
+                       update_time=now()
                  WHERE id=$1::uuid AND deleted_at IS NULL
                 RETURNING id, deleted_at, purge_after""",
             document_id,
@@ -52,8 +53,8 @@ async def trash_document(
         return None
     return {
         "id": str(row["id"]),
-        "deleted_at": row["deleted_at"].isoformat(),
-        "purge_after": row["purge_after"].isoformat(),
+        "deleted_at": business_time(row["deleted_at"]),
+        "purge_after": business_time(row["purge_after"]),
     }
 
 
@@ -71,7 +72,7 @@ async def restore_document(actor_id: str, document_id: str) -> dict[str, Any] | 
         row = await connection.fetchrow(
             """UPDATE research_documents
                   SET status='ready', deleted_at=NULL, deleted_by=NULL,
-                      purge_after=NULL, updated_at=now()
+                      purge_after=NULL, update_time=now()
                 WHERE id=$1::uuid AND status='trashed'
              RETURNING *""",
             document_id,
@@ -85,7 +86,7 @@ async def restore_document(actor_id: str, document_id: str) -> dict[str, Any] | 
         )
         if not current:
             row = await connection.fetchrow(
-                """UPDATE research_documents SET status='ready', updated_at=now()
+                """UPDATE research_documents SET status='ready', update_time=now()
                  WHERE id=$1::uuid RETURNING *""",
                 document_id,
             )
@@ -119,9 +120,9 @@ async def list_trash(
             {
                 "id": str(row["id"]),
                 "filename": row["filename"],
-                "deleted_at": row["deleted_at"].isoformat(),
+                "deleted_at": business_time(row["deleted_at"]),
                 "deleted_by": str(row["deleted_by"]) if row["deleted_by"] else None,
-                "purge_after": row["purge_after"].isoformat(),
+                "purge_after": business_time(row["purge_after"]),
             }
             for row in rows
         ],
@@ -180,14 +181,14 @@ async def purge_due_documents(actor_id: str | None = None) -> list[str]:
                 if references:
                     await connection.execute(
                         """UPDATE research_documents
-                              SET status='retained', updated_at=now()
+                              SET status='retained', update_time=now()
                             WHERE id=$1::uuid AND status='trashed'""",
                         document_id,
                     )
                     continue
                 flipped = await connection.fetchval(
                     """UPDATE research_documents
-                          SET status='deleting', updated_at=now()
+                          SET status='deleting', update_time=now()
                         WHERE id=$1::uuid AND status='trashed'
                      RETURNING id""",
                     document_id,

@@ -210,12 +210,7 @@ class NativeRuns:
                 from market_scout.platform.quota import runway
                 if (await runway(owner))["available"] == 0:
                     raise RecoveryConflict("monthly_quota_exhausted")
-            # The submitter can always impose a lower ceiling on this child.
-            effective = Configuration.from_runnable_config(prepared).max_run_cost_micro_usd
-            requested_cap = derivation["max_cost_micro_usd"]
-            authorized = min(effective, requested_cap) if effective is not None else requested_cap
-            prepared["configurable"] = {**prepared.get("configurable", {}), "max_run_cost_micro_usd": authorized}
-        config = RunConfig.compile(prepared)
+        config = RunConfig.compile(prepared, cost_ceiling_micro_usd=derivation["max_cost_micro_usd"] if derivation else None)
         if derivation:
             cap = config.get("max_run_cost_micro_usd")
             if (not cap or cap > derivation["max_cost_micro_usd"] or not config.get("report_review_enabled")

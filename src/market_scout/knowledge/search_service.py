@@ -110,7 +110,7 @@ async def load_profile(version: str | None) -> dict[str, Any]:
         else:
             row = await connection.fetchrow(
                 """SELECT version,parameters FROM knowledge_search_profiles
-                    WHERE is_default ORDER BY created_at DESC LIMIT 1"""
+                    WHERE is_default ORDER BY create_time DESC LIMIT 1"""
             )
     if version and not row:
         raise SearchScopeError("knowledge_profile_not_found")

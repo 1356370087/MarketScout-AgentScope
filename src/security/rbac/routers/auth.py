@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from market_scout.research_time import business_time
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -260,8 +262,8 @@ async def list_sessions(
         SessionItem(
             id=str(session.id),
             created_at=session.created_at or "",
-            create_time=session.create_time.isoformat(),
-            last_activity_at=session.last_activity_at.isoformat(),
+            create_time=business_time(session.create_time),
+            last_activity_at=business_time(session.last_activity_at),
             user_agent=session.user_agent,
             ip_address=session.ip_address,
             is_current=(str(session.id) == principal.session_id),

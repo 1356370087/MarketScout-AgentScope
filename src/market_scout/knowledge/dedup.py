@@ -123,7 +123,7 @@ async def find_duplicates(
                  FROM knowledge_content_fingerprints f
                  JOIN research_documents d ON d.id = f.document_id
                 WHERE f.document_id <> $1 AND d.deleted_at IS NULL
-                ORDER BY f.document_id, f.created_at DESC""",
+                ORDER BY f.document_id, f.create_time DESC""",
             document_id,
         )
     results: list[dict[str, Any]] = []
@@ -230,7 +230,7 @@ async def list_relations(
                   JOIN research_documents d ON d.id = r.left_document_id
                                          AND d.home_knowledge_base_id = $1::uuid
                  WHERE 1=1 {filter_clause}
-                 ORDER BY r.created_at DESC LIMIT $2""",
+                 ORDER BY r.create_time DESC LIMIT $2""",
             knowledge_base_id,
             limit,
         )

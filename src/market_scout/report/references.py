@@ -12,17 +12,23 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from itertools import chain
 from typing import List, Sequence
 from urllib.parse import parse_qsl, urlparse
 
 from .models import SourceRef
 from .profiles import ReferenceStyle
 
-# [Title](URL)
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s\)]+|/documents/[^\s\)]+)\)")
+# CommonMark source labels may contain escaped punctuation. Angle-delimited
+# destinations also preserve parentheses in URLs.
+_LABEL_ESCAPE_RE = re.compile(r"([\\`*{}\[\]()<>#+\-.!_|>])")
+_LINK = (r"\[(?P<title>(?:\\.|[^\\\]\n])+)\]\("
+         r"(?:<(?P<delimited>(?:https?://|/documents/)[^<>\n]+)>|(?P<plain>(?:https?://|/documents/)[^\s)]+))\)")
+_MD_LINK_RE = re.compile(_LINK)
+_NUMBERED_LINK_RE = re.compile(r"^[ \t]*\[(?P<number>\d+)\][ \t]+" + _LINK + r"[ \t]*$", re.MULTILINE)
 # "[1] Title: URL" or "Title: URL" list lines (the ### Sources format prompts emit)
 _SOURCE_LINE_RE = re.compile(
-    r"^\s*(?:\[\d+\]\s*)?(?P<title>[^:\[\]\n]+?)\s*:\s*(?P<url>https?://\S+)\s*$",
+    r"^\s*(?:\[\d+\]\s*)?(?P<title>[^:\[\]\n]+?)\s*:\s*<?(?P<url>https?://[^<>\s]+)>?\s*$",
     re.MULTILINE,
 )
 # "--- SOURCE n: Title ---\nURL: ..." blocks baked into findings by the search tools
@@ -30,21 +36,53 @@ _SOURCE_BLOCK_RE = re.compile(
     r"---\s*SOURCE\s*\d+\s*:\s*(?P<title>.+?)\s*---\s*\n\s*URL:\s*(?P<url>\S+)",
     re.IGNORECASE,
 )
-_BARE_URL_RE = re.compile(r"https?://[^\s\)\]\.]+(?:\.[^\s\)\]\.]+)*")
+_BARE_URL_RE = re.compile(r"https?://[^\s\)\]<>\.]+(?:\.[^\s\)\]<>\.]+)*")
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
 _NUMBERED_SOURCE_RE = re.compile(
     r"^\s*(?:[-*]\s*)?\[(?P<number>\d+)\]:?[^\n]*?"
     r"(?P<url>https?://[^\s)\]>]+|/documents/[^\s)\]>]+)",
     re.MULTILINE,
 )
+# Older numbered catalogues used the fetch URL as its own missing title.
+# Match only the repeated identical URL, preserving real path punctuation.
+_URL_AS_TITLE_RE = re.compile(
+    r"^([ \t]*(?:[-*][ \t]+)?\[\d+\][ \t]+)(https?://\S+):[ \t]+\2[ \t]*$", re.MULTILINE
+)
+
+
+def _ordered_source_entries(markdown: str):
+    """Use CommonMark's displayed list numbers only inside an actual source catalogue."""
+    if not re.search(r"(?m)^ {0,3}\d{1,9}[.)][ \t]+", markdown):
+        return
+    from markdown_it import MarkdownIt
+
+    parser = MarkdownIt("commonmark")
+    for start, end in source_sections(markdown):
+        number = None
+        for token in parser.parse(markdown[start:end]):
+            if token.type == "ordered_list_open" and token.level == 0:
+                number = int(token.attrGet("start") or 1)
+            elif token.type == "ordered_list_close" and token.level == 0:
+                number = None
+            elif number is not None and token.type == "list_item_close" and token.level == 1:
+                number += 1
+            elif number is not None and token.type == "inline" and token.level == 3:
+                links = [child.attrGet("href") for child in (token.children or []) if child.type == "link_open"]
+                targets = links or [ref.url for ref in parse_sources_from_text(token.content)]
+                for target in targets:
+                    if target:
+                        yield str(number), target
 
 
 def numbered_source_urls(markdown: str) -> dict[str, str]:
-    """Recover explicit citation numbers without relying on source-list order."""
+    """Recover explicit markers and numbered catalogue entries before reordering sources."""
     sources: dict[str, str] = {}
-    for match in _NUMBERED_SOURCE_RE.finditer(markdown):
-        number = str(int(match.group("number")))
-        url = _safe_reference_url(match.group("url"))
+    linked = ((str(int(m["number"])), m["delimited"] or m["plain"]) for m in _NUMBERED_LINK_RE.finditer(markdown))
+    remaining = _NUMBERED_LINK_RE.sub("", markdown)
+    numbered = _NUMBERED_SOURCE_RE.finditer(_URL_AS_TITLE_RE.sub(r"\1Source: \2", remaining))
+    explicit = ((str(int(match["number"])), match["url"]) for match in numbered)
+    for number, target in chain(linked, explicit, _ordered_source_entries(markdown)):
+        url = _safe_reference_url(target)
         if number in sources and sources[number] != url:
             raise ValueError("report_ambiguous_citation_number")
         sources[number] = url
@@ -52,7 +90,10 @@ def numbered_source_urls(markdown: str) -> dict[str, str]:
 
 
 def _safe_reference_url(value: str) -> str:
-    candidate = (value or "").strip().rstrip(".,;)")
+    candidate = (value or "").strip().rstrip(".,;")
+    if candidate.endswith(")"):
+        unmatched = max(0, candidate.count(")") - candidate.count("("))
+        candidate = candidate[:max(len(candidate.rstrip(")")), len(candidate) - unmatched)]
     if (
         not candidate
         or len(candidate) > 4096
@@ -108,6 +149,7 @@ def parse_sources_from_text(text: str) -> List[SourceRef]:
     """
     if not text:
         return []
+    text = _URL_AS_TITLE_RE.sub(r"\1Source: \2", text)
     seen: dict[str, SourceRef] = {}
 
     def _add(title: str, url: str) -> None:
@@ -118,10 +160,10 @@ def parse_sources_from_text(text: str) -> List[SourceRef]:
     for m in _SOURCE_BLOCK_RE.finditer(text):
         _add(m.group("title"), m.group("url"))
     for m in _MD_LINK_RE.finditer(text):
-        _add(m.group(1), m.group(2))
+        _add(re.sub(r"\\([^\w\s])", r"\1", m["title"]), m["delimited"] or m["plain"])
     for m in _SOURCE_LINE_RE.finditer(text):
         _add(m.group("title"), m.group("url"))
-    for url in _BARE_URL_RE.findall(text):
+    for url in _BARE_URL_RE.findall(_MD_LINK_RE.sub("", text)):
         _add("", url)
     return list(seen.values())
 
@@ -165,9 +207,13 @@ def render_references(sources: Sequence, style: ReferenceStyle) -> str:
     if style == ReferenceStyle.BIBTEX_LIKE:
         return "\n\n".join(_to_bibtex(r, i) for i, r in enumerate(refs, 1))
     # default: numbered
-    return "\n".join(
-        f"[{i}] {r.title or 'Source'}: {r.url}" for i, r in enumerate(refs, 1)
-    )
+    lines = []
+    for i, ref in enumerate(refs, 1):
+        title = ref.title if ref.title and ref.title != ref.url else "Source"
+        label = _LABEL_ESCAPE_RE.sub(r"\\\1", title)
+        destination = ref.url.replace("\\", "%5C").replace("<", "%3C").replace(">", "%3E")
+        lines.append(f"[{i}] [{label}](<{destination}>)")
+    return "\n".join(lines)
 
 
 def normalize_source_counts(markdown: str, sources: Sequence, source_plan: dict) -> str:
@@ -202,7 +248,7 @@ def _to_bibtex(ref: SourceRef, idx: int) -> str:
 
 
 _REFERENCE_TITLE = (r"(?:sources?|references?(?:\s+(?:and|&)\s+further\s+reading)?|"
-                    r"further\s+reading|来源|参考(?:资料|文献|来源)(?:与延伸阅读)?)")
+                    r"further\s+reading|来源|出处|参考(?:资料|文献|来源)(?:与延伸阅读)?)")
 
 
 def is_sources_heading(value: str) -> bool:

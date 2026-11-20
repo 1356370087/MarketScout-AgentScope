@@ -38,7 +38,7 @@ def canonicalize_requirement_ids(values, contract):
     return result
 
 
-def validate_requirement_ids(values, contract, *, required, allow_cross_dimension=False):
+def validate_requirement_ids(values, contract, *, required, allow_cross_dimension=False, max_items=MAX_REQUIREMENTS_PER_RESEARCH_TASK):
     """Keep one delegation within its factual, atomic requirement scope."""
     normalized = list(dict.fromkeys(values))
     known = set(contract.requirement_ids()) if contract is not None else set(normalized)
@@ -49,8 +49,8 @@ def validate_requirement_ids(values, contract, *, required, allow_cross_dimensio
         return list(contract.delegable_requirement_ids())
     delegable = set(contract.delegable_requirement_ids()) if contract is not None else known
     selected = [value for value in normalized if value in delegable]
-    if len(selected) > MAX_REQUIREMENTS_PER_RESEARCH_TASK:
-        raise ValueError(f"too_many_coverage_requirement_ids:{MAX_REQUIREMENTS_PER_RESEARCH_TASK}")
+    if len(selected) > max_items:
+        raise ValueError(f"too_many_coverage_requirement_ids:{max_items}")
     dimensions = {item.dimension_id for item in contract.requirements
                   if item.requirement_id in selected and item.dimension_id} if contract is not None else set()
     if len(dimensions) > 1 and not allow_cross_dimension:
@@ -60,7 +60,7 @@ def validate_requirement_ids(values, contract, *, required, allow_cross_dimensio
     return selected
 
 
-def coverage_bound_input_schema(base_schema, contract):
+def coverage_bound_input_schema(base_schema, contract, *, allow_synthesis=False):
     """Advertise factual IDs and task bounds without replacing runtime validation."""
     from copy import deepcopy
 
@@ -70,7 +70,7 @@ def coverage_bound_input_schema(base_schema, contract):
     field = deepcopy(base_schema.model_fields["requirement_ids"])
     field.json_schema_extra = {
         "items": {"type": "string", "enum": ids},
-        "maxItems": len(ids) if contract.single_research_task else MAX_REQUIREMENTS_PER_RESEARCH_TASK,
+        "maxItems": len(ids) if contract.single_research_task or allow_synthesis else MAX_REQUIREMENTS_PER_RESEARCH_TASK,
     }
     return create_model(base_schema.__name__, __base__=base_schema, requirement_ids=(list[str], field))
 

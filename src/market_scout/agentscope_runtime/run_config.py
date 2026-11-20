@@ -43,7 +43,7 @@ class RunConfig:
     _contract_json: str = field(repr=False)
 
     @classmethod
-    def compile(cls, external: dict[str, Any] | None = None) -> RunConfig:
+    def compile(cls, external: dict[str, Any] | None = None, *, cost_ceiling_micro_usd: int | None = None) -> RunConfig:
         external = external or {}
         # 目录只保存已定义的能力/价格字段，不接受管理 API 回传的凭据扩展。
         configurable = dict(external.get("configurable", {}))
@@ -56,6 +56,13 @@ class RunConfig:
             }
         external = {**external, "configurable": configurable}
         contract = freeze_run_config(external)
+        # The caller may narrow the resolved deployment or platform budget
+        # before hashing the contract for a new child run.
+        if cost_ceiling_micro_usd is not None:
+            configured_cap = contract["configurable"]["max_run_cost_micro_usd"]
+            contract["configurable"]["max_run_cost_micro_usd"] = (
+                min(configured_cap, cost_ceiling_micro_usd) if configured_cap is not None else cost_ceiling_micro_usd
+            )
         if contract["configurable"].get("model_catalog_snapshot"):
             from market_scout.models.catalog import ModelCatalogEntry
 
@@ -63,9 +70,8 @@ class RunConfig:
                 k: ModelCatalogEntry.model_validate(v).model_dump(mode="json")
                 for k, v in contract["configurable"]["model_catalog_snapshot"].items()
             }
-            contract["metadata"]["run_config_fingerprint"] = run_config_fingerprint(
-                contract
-            )
+        if cost_ceiling_micro_usd is not None or contract["configurable"].get("model_catalog_snapshot"):
+            contract["metadata"]["run_config_fingerprint"] = run_config_fingerprint(contract)
         values = Configuration.from_runnable_config(contract).model_dump(mode="json")
         for key, value in frozen_run_config_values(contract).items():
             if key.endswith("base_url") and value:

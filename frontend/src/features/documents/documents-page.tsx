@@ -1,5 +1,6 @@
 "use client";
 
+import { formatBusinessTime } from "@/lib/business-time";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Download, FileText, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
 import Link from "next/link";
@@ -51,7 +52,7 @@ export default function DocumentsPage() {
         <Link className="document-name" href={`/documents/${document.id}`}><FileText size={17} /><span><b>{document.filename}</b><small>{document.media_type} · {document.sha256.slice(0, 10)}</small></span></Link>
         <span className="document-status" data-status={document.status}><i />{statusLabels[document.status]}</span>
         <span className="document-scale">{size(document.size_bytes)}<small>{document.page_count ?? 0} 页 / 单元 · {document.chunk_count} 个片段{document.ocr_pages ? ` · OCR ${document.ocr_pages}` : ""}</small></span>
-        <time>{new Date(document.updated_at).toLocaleString("zh-CN")}</time>
+        <time>{formatBusinessTime(document.updated_at)}</time>
         <span className="document-actions">{document.status === "failed" && <button title="重试摄取" onClick={() => retry.mutate(document.id)}><RotateCcw size={14} /></button>}{document.status === "ready" && <button title="重建索引" onClick={() => reindex.mutate(document.id, { onSuccess: () => deselect(document.id) })}><RefreshCw size={14} /></button>}<a title="下载原件" href={`/api/research/documents/${document.id}/content`}><Download size={14} /></a><button title="删除" onClick={() => remove.mutate(document.id, { onSuccess: () => deselect(document.id) })}><Trash2 size={14} /></button></span>
       </div>)}
       {!documents.isLoading && !documents.data?.items.length && <div className="document-empty"><FileText size={30} /><p>还没有匹配的资料</p><span>上传 PDF、Office、CSV、文本或图片后，摄取状态会显示在这里。</span></div>}

@@ -15,6 +15,8 @@ from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from market_scout.research_time import business_time
+
 import asyncpg
 
 from .chunking import DocumentChunk
@@ -34,7 +36,7 @@ class GenerationNotFoundError(LookupError):
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
+    return business_time(value) if value else None
 
 
 def _version_view(row: dict[str, Any]) -> dict[str, Any]:
@@ -57,8 +59,8 @@ def _generation_view(row: dict[str, Any]) -> dict[str, Any]:
         "version_id": str(row["version_id"]),
         "status": row["status"],
         "revision": int(row.get("revision") or 0),
-        "created_at": _iso(row.get("create_time", row["created_at"])) or "",
-        "updated_at": _iso(row.get("update_time", row["updated_at"])) or "",
+        "created_at": _iso(row.get("create_time", row.get("created_at"))) or "",
+        "updated_at": _iso(row.get("update_time", row.get("updated_at"))) or "",
         "published_at": _iso(row["published_at"]),
         "review_note": row["review_note"],
         "is_current": bool(row.get("is_current")),
@@ -139,7 +141,7 @@ async def add_document_version(
         await connection.execute(
             """UPDATE research_documents
                SET filename=$2, media_type=$3, size_bytes=$4, sha256=$5, storage_key=$6,
-                   status='queued', failure_code=NULL, updated_at=now()
+                   status='queued', failure_code=NULL, update_time=now()
                WHERE id=$1::uuid""",
             document_id,
             staged.filename,
@@ -210,7 +212,7 @@ async def queue_reindex_generation(owner_id: str, document_id: str) -> str | Non
             version_id,
         )
         await connection.execute(
-            """UPDATE research_documents SET status='queued', failure_code=NULL, updated_at=now()
+            """UPDATE research_documents SET status='queued', failure_code=NULL, update_time=now()
                WHERE id=$1::uuid""",
             document_id,
         )
@@ -271,7 +273,7 @@ async def latest_draft_generation(document_id: str) -> dict[str, Any] | None:
         row = await connection.fetchrow(
             """SELECT * FROM research_document_generations
                 WHERE document_id=$1::uuid AND status='draft'
-                ORDER BY created_at DESC, id DESC LIMIT 1""",
+                ORDER BY create_time DESC, id DESC LIMIT 1""",
             document_id,
         )
     return dict(row) if row else None
@@ -405,7 +407,7 @@ async def complete_generation_rich(
         )
         document_id = await connection.fetchval(
             """UPDATE research_document_generations
-               SET status='pending_review', updated_at=now(),
+               SET status='pending_review', update_time=now(),
                    metadata_snapshot=$2::jsonb,
                    quality_report=quality_report || $3::jsonb,
                    index_profile=$4::jsonb
@@ -431,7 +433,7 @@ async def complete_generation_rich(
         await connection.execute(
             """UPDATE research_documents
                SET status='ready', failure_code=NULL, page_count=$2,
-                   chunk_count=$3, ocr_pages=$4, updated_at=now()
+                   chunk_count=$3, ocr_pages=$4, update_time=now()
                WHERE id=$1::uuid""",
             document_id,
             prepared.page_count,
@@ -447,11 +449,11 @@ async def fail_generation_attempt(document_id: str, failure_code: str) -> None:
         await connection.execute(
             """UPDATE research_document_generations
                SET quality_report=quality_report || jsonb_build_object('last_failure', $2::text),
-                   updated_at=now()
+                   update_time=now()
                WHERE id=(
                  SELECT id FROM research_document_generations
                   WHERE document_id=$1::uuid AND status='draft'
-                  ORDER BY created_at DESC LIMIT 1)""",
+                  ORDER BY create_time DESC LIMIT 1)""",
             document_id,
             failure_code,
         )
@@ -555,7 +557,7 @@ async def reject_generation(
             raise DocumentConflictError("generation_not_rejectable")
         await connection.execute(
             """UPDATE research_document_generations
-               SET status='rejected', review_note=$2, updated_at=now()
+               SET status='rejected', review_note=$2, update_time=now()
              WHERE id=$1::uuid""",
             generation_id,
             reason,
@@ -590,7 +592,7 @@ async def withdraw_version(
                       ON g.version_id=v.id AND g.status='published'
                  JOIN research_documents d ON d.id=v.document_id AND d.owner_id=$3::uuid
                 WHERE v.id=$1::uuid AND v.document_id=$2::uuid
-                ORDER BY g.published_at DESC NULLS LAST, g.created_at DESC
+                ORDER BY g.published_at DESC NULLS LAST, g.create_time DESC
                 LIMIT 1
                 FOR UPDATE OF d""",
             version_id,
@@ -602,7 +604,7 @@ async def withdraw_version(
         generation_id = str(state["generation_id"])
         await connection.execute(
             """UPDATE research_document_generations
-               SET status='withdrawn', review_note=coalesce(nullif($2,''), review_note), updated_at=now()
+               SET status='withdrawn', review_note=coalesce(nullif($2,''), review_note), update_time=now()
              WHERE id=$1::uuid""",
             generation_id,
             reason,
@@ -611,7 +613,7 @@ async def withdraw_version(
         if state["current_generation_id"] and str(state["current_generation_id"]) == generation_id:
             await connection.execute(
                 """UPDATE research_documents
-                   SET current_generation_id=NULL, updated_at=now()
+                   SET current_generation_id=NULL, update_time=now()
                  WHERE id=$1::uuid""",
                 document_id,
             )

@@ -380,7 +380,9 @@ async def import_archive(actor, target_kb, path, import_id):
                     created.append(dest)
             for table in TABLES:
                 columns = await c.fetch(
-                    "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1 AND is_generated='NEVER'",
+                    """SELECT attname AS column_name FROM pg_attribute
+                       WHERE attrelid=to_regclass($1) AND attnum>0
+                       AND NOT attisdropped AND attgenerated=''""",
                     table,
                 )
                 allowed = {r["column_name"] for r in columns}

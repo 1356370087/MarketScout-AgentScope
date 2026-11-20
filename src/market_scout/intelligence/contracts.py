@@ -96,6 +96,14 @@ class Activate(VersionedCommand):
     mode: Literal["observe", "auto"]
     expires_at: datetime
 
+    @field_validator("expires_at", mode="before")
+    @classmethod
+    def displayed_expiration(cls, value):
+        if isinstance(value, str) and len(value) == 19 and value[10] == " ":
+            from market_scout.research_time import parse_business_time
+            return parse_business_time(value)
+        return value
+
     @field_validator("expires_at")
     @classmethod
     def expiration(cls, value):

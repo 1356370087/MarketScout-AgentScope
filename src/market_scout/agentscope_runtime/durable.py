@@ -29,7 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 _DURABLE_DDL = """
 CREATE TABLE IF NOT EXISTS {p}commands (
-    id          BIGSERIAL PRIMARY KEY,
+    id          BIGINT PRIMARY KEY DEFAULT public.marketscout_snowflake_id(),
+    position    BIGSERIAL NOT NULL UNIQUE,
     command_key TEXT NOT NULL,
     command_id  TEXT NOT NULL UNIQUE,
     payload     JSONB NOT NULL,
@@ -37,7 +38,7 @@ CREATE TABLE IF NOT EXISTS {p}commands (
     state       TEXT NOT NULL DEFAULT 'pending',
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS {p}commands_key_state_idx ON {p}commands (command_key, state, id);
+CREATE INDEX IF NOT EXISTS {p}commands_key_state_idx ON {p}commands (command_key, state, position);
 """
 
 Applier = Callable[[str, dict], Awaitable[None]]
@@ -77,6 +78,7 @@ class DurableCommandBridge:
         return self
 
     async def create_tables(self) -> None:
+        from .row_identity import prepare_runtime_row_ids
         engine = await self._ensure_engine()
         stmts = [
             s.strip()
@@ -84,6 +86,7 @@ class DurableCommandBridge:
             if s.strip()
         ]
         async with engine.begin() as conn:
+            await conn.run_sync(prepare_runtime_row_ids, [self._prefix + 'commands'])
             for stmt in stmts:
                 await conn.execute(text(stmt))
 
@@ -230,7 +233,7 @@ class DurableCommandBridge:
                             f"FROM {self._prefix}commands "
                             "WHERE command_key = :k AND state IN ('pending', 'applying') "
                             "AND NOT (command_id = ANY(CAST(:failed AS TEXT[]))) "
-                            "ORDER BY id LIMIT :n"
+                            "ORDER BY position LIMIT :n"
                         ),
                         {"k": command_key, "n": batch, "failed": list(failed_here)},
                     )

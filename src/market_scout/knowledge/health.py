@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 from market_scout.documents.database import get_document_pool
 from market_scout.documents.identity import document_owner_id
+from market_scout.research_time import business_time, business_time_fields
 
 from . import authz
 
@@ -254,7 +255,7 @@ async def dashboard(
             pending.metadata_snapshot AS pending_metadata FROM research_documents d
             LEFT JOIN research_document_generations pg ON pg.id=d.current_generation_id AND pg.status='published'
             LEFT JOIN LATERAL (SELECT id,metadata_snapshot FROM research_document_generations
-                WHERE document_id=d.id AND status IN ('draft','pending_review') ORDER BY created_at DESC LIMIT 1) pending ON true
+                WHERE document_id=d.id AND status IN ('draft','pending_review') ORDER BY create_time DESC LIMIT 1) pending ON true
             WHERE d.home_knowledge_base_id=$1::uuid AND d.deleted_at IS NULL ORDER BY d.id""",
             kb,
         )
@@ -280,13 +281,13 @@ async def dashboard(
             kb,
         )
         queries = await c.fetch(
-            """SELECT q.id,q.query_text,q.scope,q.created_at FROM knowledge_queries q
-            WHERE q.owner_id=$2::uuid AND q.created_at >= $3 AND q.result_digest->>'hits'='0'
+            """SELECT q.id,q.query_text,q.scope,q.create_time AS created_at FROM knowledge_queries q
+            WHERE q.owner_id=$2::uuid AND q.create_time >= $3 AND q.result_digest->>'hits'='0'
               AND COALESCE(q.result_digest->>'rerank_completed','true')='true'
               AND ((q.scope->'kb_ids') ? $1 OR EXISTS(SELECT 1 FROM research_documents d
                 WHERE d.home_knowledge_base_id=$1::uuid AND d.deleted_at IS NULL
                 AND ((q.scope->'resolved_document_ids') ? d.id::text OR (q.scope->'document_ids') ? d.id::text)))
-            ORDER BY q.created_at DESC""",
+            ORDER BY q.create_time DESC""",
             kb,
             document_owner_id(actor),
             datetime.now(timezone.utc) - timedelta(days=days),
@@ -324,7 +325,7 @@ async def dashboard(
     details = [i for i in selected if not kind or i["kind"] == kind]
     return {
         "knowledge_base_id": kb,
-        "generated_at": datetime.now(timezone.utc),
+        "generated_at": business_time(datetime.now(timezone.utc)),
         "query_window_days": days,
         "query_visibility": "current_user",
         "counts": {k: counts[k] for k in KINDS},
@@ -332,7 +333,7 @@ async def dashboard(
         "companies": sorted({g[0] for g in groups}),
         "periods": sorted({g[1] for g in groups}),
         "targets": coverage,
-        "items": details[offset : offset + limit],
+        "items": [business_time_fields(item, "last_success_at", "created_at") for item in details[offset : offset + limit]],
         "total": len(details),
         "offset": offset,
         "limit": limit,

@@ -1,5 +1,6 @@
 "use client";
 
+import { formatBusinessTime } from "@/lib/business-time";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -38,7 +39,7 @@ function Frame({ title, description, children, actions }: { title: string; descr
 }
 
 function Problem({ error }: { error: unknown }) { return error ? <p role="alert" className="intelligence-error">{typeof error === "string" ? error : errorText(error)}</p> : null; }
-function DateText({ value }: { value: string | null }) { return <>{value ? new Date(value).toLocaleString("zh-CN") : "—"}</>; }
+function DateText({ value }: { value: string | null }) { return <>{value ? formatBusinessTime(value) : "—"}</>; }
 
 function WorkList({ items }: { items: Item[] }) {
   return <div className="intelligence-list">{items.map(item => <Link key={item.id} className="intelligence-card" href={`/intelligence/items/${item.id}`}>
